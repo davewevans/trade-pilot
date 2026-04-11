@@ -10,3 +10,5 @@ ta
 requests
 fredapi
 schedule
+fastapi
+uvicorn[standard]

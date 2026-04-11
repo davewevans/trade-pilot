@@ -26,7 +26,7 @@ class ClaudeAdvisor:
 
     def __init__(self):
         self.client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
-        self.model = "claude-sonnet-4-5-20251001"
+        self.model = "claude-sonnet-4-6"
         self._last_usage: dict | None = None
         self.load_prompts()
 
