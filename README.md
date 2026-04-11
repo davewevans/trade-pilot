@@ -181,6 +181,49 @@ python api/run.py
 
 ---
 
+## Strategy Architecture
+
+### Available Strategies
+
+| # | Strategy | File | IV Regime | Direction | Type |
+|---|----------|------|-----------|-----------|------|
+| 1 | Wheel (CSP + CC) | `strategies/wheel_strategy.py` | Moderate+ | Neutral/Bull | Credit |
+| 2 | Iron Condor | `strategies/iron_condor_strategy.py` | High | Neutral | Credit |
+| 3 | Bull Put Spread | `strategies/bull_put_spread_strategy.py` | Moderate+ | Neutral/Bull | Credit |
+| 4 | Bear Call Spread | `strategies/bear_call_spread_strategy.py` | Moderate+ | Bear | Credit |
+| 5 | Long Call Vertical | `strategies/long_call_vertical_strategy.py` | Low | Bull | Debit |
+
+### Strategy Activation
+
+The `StrategyRouter` selects which strategy runs each cycle based on:
+- `confirmed_market_regime` from the shared context layer
+- `iv_environment` (LOW / MODERATE / HIGH)
+- Circuit breaker status (GREEN / YELLOW / RED)
+- Current state of each strategy (IDLE vs OPEN)
+
+At most **one** spread strategy opens a new position per cycle.
+Management cycles (OPEN state) always run regardless of conditions.
+
+### Order Types
+
+- **Single-leg** (wheel): `broker.place_order()`
+- **Multi-leg** (spreads): `broker.place_mleg_order()`
+  - Credit spreads: `limit_price` is **NEGATIVE** (e.g. -1.80)
+  - Debit spreads: `limit_price` is **POSITIVE** (e.g. 1.25)
+
+### Running Integration Tests
+
+Before deploying strategy changes:
+```bash
+python scripts/test_spread_integration.py
+```
+
+To test live API calls (paper account), uncomment the mleg order
+tests in the script. Confirm all positions are closed after the
+test runs.
+
+---
+
 ## Development Workflow
 
 ```
