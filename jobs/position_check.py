@@ -19,6 +19,7 @@ def run() -> None:
     from data.context_builder import ContextBuilder
     from data.trade_journal import TradeJournal
     from main import execute_decision
+    from strategies.circuit_breaker import CircuitBreaker
     from strategies.guardrails import Guardrails
     from strategies.wheel_strategy import WheelStrategy
 
@@ -29,6 +30,20 @@ def run() -> None:
     if not clock.get("is_open"):
         logger.info("Market is closed. Exiting early.")
         return
+
+    # ── Circuit breaker check ───────────────────────────────
+    cb = CircuitBreaker()
+    if cb.is_halted():
+        logger.warning("CIRCUIT BREAKER HALTED — skipping position check")
+        return
+
+    account = broker.get_account()
+    equity = float(account.get("portfolio_value", 0))
+    cb_status = cb.update(equity)
+    logger.info(
+        "Circuit breaker: %s | Daily P&L: %.2f%% | Drawdown: %.2f%%",
+        cb_status.status, cb_status.daily_pnl_pct, cb_status.drawdown_pct,
+    )
 
     # ── Open positions ──────────────────────────────────────
     positions = broker.get_positions()

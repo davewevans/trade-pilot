@@ -16,11 +16,15 @@ def run() -> None:
     """
     logger.info("=== MARKET OPEN JOB STARTING ===")
 
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
     from ai.claude_advisor import ClaudeAdvisor
     from brokers.broker_factory import get_broker
     from data.context_builder import ContextBuilder
     from data.trade_journal import TradeJournal
     from main import execute_decision
+    from strategies.circuit_breaker import CircuitBreaker
     from strategies.guardrails import Guardrails
     from strategies.wheel_strategy import WheelStrategy
 
@@ -32,13 +36,47 @@ def run() -> None:
         logger.info("Market is closed (holiday/weekend). Exiting early.")
         return
 
+    # ── Circuit breaker ─────────────────────────────────────
+    cb = CircuitBreaker()
+    account = broker.get_account()
+    equity = float(account.get("portfolio_value", 0))
+    cb_status = cb.update(equity)
+
+    # Daily reset (always on market open)
+    cb.reset_daily()
+
+    # Weekly reset on Monday
+    et_now = datetime.now(ZoneInfo(settings.TIMEZONE))
+    if et_now.weekday() == 0:  # Monday
+        cb.reset_weekly()
+
+    if cb.is_halted():
+        logger.warning("CIRCUIT BREAKER HALTED — skipping all trading decisions")
+        append_section(
+            "Market Open Decisions (9:30 AM ET)",
+            "**HALTED** — Circuit breaker lock file active. No trades placed.",
+        )
+        logger.info("=== MARKET OPEN JOB COMPLETE (halted) ===")
+        return
+
+    logger.info(
+        "Circuit breaker: %s | Daily P&L: %.2f%% | Drawdown: %.2f%% | Multiplier: %.1f",
+        cb_status.status, cb_status.daily_pnl_pct, cb_status.drawdown_pct,
+        cb.get_position_size_multiplier(),
+    )
+
     advisor = ClaudeAdvisor()
     guardrails = Guardrails()
     strategy = WheelStrategy(broker)
     journal = TradeJournal(path=settings.JOURNAL_PATH)
     ctx_builder = ContextBuilder(broker=broker, journal=journal)
+    size_multiplier = cb.get_position_size_multiplier()
 
     report_lines: list[str] = []
+
+    if size_multiplier == 0.0:
+        logger.warning("Circuit breaker: position size multiplier is 0 — no new positions")
+        report_lines.append("**Circuit breaker RED** — no new positions allowed")
 
     for symbol in settings.WATCHLIST:
         try:
