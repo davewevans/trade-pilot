@@ -623,6 +623,55 @@ class ContextBuilder:
 
         return result
 
+    # ── Support bounce detection ───────────────────────────
+
+    @staticmethod
+    def detect_support_bounce(
+        underlying_symbol: str,
+        lookback_days: int = 10,
+    ) -> dict:
+        """Detect a CAHOLD (Close Above High Of Low Day) support bounce.
+
+        Returns a dict with ``cahold_detected``, the low-day date and high,
+        the current close, and whether the stock is above its 50-day SMA.
+        """
+        result: dict = {
+            "cahold_detected": False,
+            "low_day_date": None,
+            "low_day_high": None,
+            "current_close": None,
+            "above_50sma": False,
+        }
+
+        try:
+            import yfinance as yf
+
+            ticker = yf.Ticker(underlying_symbol)
+            hist = ticker.history(period="3mo")
+            if hist is None or len(hist) < lookback_days + 1:
+                return result
+
+            recent = hist.tail(lookback_days)
+            low_idx = recent["Low"].idxmin()
+            low_day_high = float(recent.loc[low_idx, "High"])
+            current_close = float(hist["Close"].iloc[-1])
+
+            sma_50 = float(hist["Close"].rolling(50).mean().iloc[-1])
+            above_50sma = current_close > sma_50
+
+            result["low_day_date"] = str(low_idx.date()) if hasattr(low_idx, "date") else str(low_idx)
+            result["low_day_high"] = round(low_day_high, 2)
+            result["current_close"] = round(current_close, 2)
+            result["above_50sma"] = above_50sma
+            result["cahold_detected"] = current_close > low_day_high and above_50sma
+        except Exception:
+            logger.warning(
+                "Failed to detect support bounce for %s", underlying_symbol,
+                exc_info=True,
+            )
+
+        return result
+
     # ── Private helpers ──────────────────────────────────────
 
     def _fetch_account(self) -> dict | None:

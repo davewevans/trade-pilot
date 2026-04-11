@@ -223,6 +223,72 @@ class Guardrails:
 
         return True, ""
 
+    # ── long call vertical entry ───────────────────────────
+
+    def validate_long_call_vertical_entry(
+        self,
+        decision: dict,
+        context: dict,
+        account: dict,
+        open_spreads: list | None = None,
+    ) -> tuple[bool, str]:
+        """Hard rules for long call vertical (debit spread) entry."""
+        limit_price = decision.get("limit_price")
+        if limit_price is not None and limit_price <= 0:
+            return False, f"limit_price must be positive for debit spread, got {limit_price}"
+
+        net_debit = decision.get("net_debit", 0)
+        if net_debit <= 0.20:
+            return False, f"Net debit ${net_debit} <= $0.20 minimum"
+        if net_debit >= 2.00:
+            return False, f"Net debit ${net_debit} >= $2.00 maximum"
+
+        # Max risk = debit * 100, must be < 1% of buying power
+        max_risk = net_debit * 100
+        buying_power = float(account.get("buying_power", 0))
+        if buying_power > 0 and max_risk > buying_power * 0.01:
+            return (
+                False,
+                f"Max risk ${max_risk:,.0f} exceeds 1% of buying power "
+                f"${buying_power * 0.01:,.0f}",
+            )
+
+        dte = decision.get("dte")
+        if dte is not None and (dte < 25 or dte > 65):
+            return False, f"DTE {dte} outside allowed range 25-65"
+
+        for key in ("long_call_symbol", "short_call_symbol"):
+            sym = decision.get(key, "")
+            if not _OCC_CALL_RE.match(sym):
+                return False, f"Invalid OCC call symbol for {key}: {sym!r}"
+
+        # Regime must be BULL
+        regime = context.get("confirmed_market_regime", "")
+        if regime != "BULL":
+            return False, f"Market regime must be BULL for debit spread, got {regime}"
+
+        # IV must be LOW
+        iv_env = context.get("iv_environment", "")
+        if iv_env != "LOW":
+            return False, f"IV environment must be LOW for debit spread, got {iv_env}"
+
+        # No earnings within DTE
+        fund = context.get("fundamentals") or {}
+        dte_earnings = fund.get("days_to_earnings")
+        if dte is not None and dte_earnings is not None and dte_earnings <= dte:
+            return False, f"Earnings in {dte_earnings} days within DTE {dte}"
+
+        underlying = self._extract_root(decision.get("long_call_symbol", ""))
+        if open_spreads:
+            for s in open_spreads:
+                if (
+                    s.get("underlying", "").upper() == underlying.upper()
+                    and s.get("status") == "open"
+                ):
+                    return False, f"Already have an open long call vertical on {underlying}"
+
+        return True, ""
+
     # ── bear call spread entry ─────────────────────────────
 
     def validate_bear_call_spread_entry(
