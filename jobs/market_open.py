@@ -207,5 +207,63 @@ def run() -> None:
     # Save strategy state after all symbols processed
     strategy.save_state()
 
+    # ── Iron Condor strategy (runs once, not per-symbol) ────
+    try:
+        from data.spread_tracker import SpreadTracker
+        from strategies.iron_condor_strategy import IronCondorStrategy
+
+        # Only evaluate if IV environment is conducive
+        iv_env = None
+        if settings.WATCHLIST:
+            first_ctx = ctx_builder.build(settings.WATCHLIST[0], "IDLE")
+            iv_env = first_ctx.get("iv_environment")
+            regime = first_ctx.get("confirmed_market_regime")
+
+            if iv_env in ("HIGH", "MODERATE") and regime == "NEUTRAL":
+                tracker = SpreadTracker()
+                ic_strategy = IronCondorStrategy(
+                    broker=broker, state_writer=sw, spread_tracker=tracker,
+                )
+                ic_decision = ic_strategy.run_cycle(first_ctx)
+                ic_action = ic_decision.get("action", "SKIP")
+                logger.info("Iron condor decision: %s", ic_action)
+
+                if ic_action == "OPEN":
+                    ic_valid, ic_rejection = guardrails.validate_iron_condor_entry(
+                        ic_decision, first_ctx, account,
+                        open_condors=tracker.get_open_spreads(strategy_type="iron_condor"),
+                    )
+                    if not ic_valid:
+                        logger.warning("Iron condor GUARDRAIL REJECTED: %s", ic_rejection)
+                        report_lines.append(f"**Iron Condor** -- REJECTED: {ic_rejection}")
+                    elif settings.DRY_RUN:
+                        logger.info("DRY RUN - would open iron condor: %s",
+                                    json.dumps(ic_decision, default=str))
+                        report_lines.append("**Iron Condor** -- DRY RUN: OPEN")
+                    else:
+                        ic_strategy.execute_entry({**ic_decision, "underlying": settings.WATCHLIST[0]})
+                        report_lines.append(
+                            f"**Iron Condor** -- OPENED (credit: ${ic_decision.get('total_credit', 0)})"
+                        )
+                elif ic_action == "CLOSE" and ic_decision.get("spread_id"):
+                    if settings.DRY_RUN:
+                        logger.info("DRY RUN - would close iron condor")
+                        report_lines.append("**Iron Condor** -- DRY RUN: CLOSE")
+                    else:
+                        ic_strategy.execute_exit(
+                            ic_decision["spread_id"],
+                            limit_price=ic_decision.get("limit_price"),
+                        )
+                        report_lines.append("**Iron Condor** -- CLOSED")
+                else:
+                    report_lines.append(f"**Iron Condor** -- {ic_action}")
+            else:
+                logger.debug(
+                    "Skipping iron condor: iv_env=%s regime=%s", iv_env, regime,
+                )
+    except Exception:
+        logger.exception("Iron condor evaluation failed")
+        report_lines.append("**Iron Condor** -- ERROR (see logs)")
+
     append_section("Market Open Decisions (9:30 AM ET)", "\n".join(report_lines))
     logger.info("=== MARKET OPEN JOB COMPLETE ===")

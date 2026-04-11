@@ -170,6 +170,59 @@ class Guardrails:
             return False, "Cannot roll — no open short option position found"
         return True, ""
 
+    # ── iron condor entry ──────────────────────────────────
+
+    def validate_iron_condor_entry(
+        self,
+        decision: dict,
+        context: dict,
+        account: dict,
+        open_condors: list | None = None,
+    ) -> tuple[bool, str]:
+        """Hard rules for iron condor entry that cannot be overridden."""
+        total_credit = decision.get("total_credit", 0)
+        if total_credit <= 0.50:
+            return False, f"Total credit ${total_credit} <= $0.50 minimum"
+
+        max_loss = decision.get("max_loss", 0)
+        buying_power = float(account.get("buying_power", 0))
+        if buying_power > 0 and max_loss > buying_power * 0.05:
+            return (
+                False,
+                f"Max loss ${max_loss:,.0f} exceeds 5% of buying power "
+                f"${buying_power * 0.05:,.0f}",
+            )
+
+        limit_price = decision.get("limit_price")
+        if limit_price is not None and limit_price >= 0:
+            return False, f"limit_price must be negative for credit spread, got {limit_price}"
+
+        dte = decision.get("dte")
+        if dte is not None and (dte < 20 or dte > 50):
+            return False, f"DTE {dte} outside allowed range 20-50"
+
+        # Validate all 4 OCC symbols
+        for key in ("put_short_symbol", "put_long_symbol",
+                     "call_short_symbol", "call_long_symbol"):
+            sym = decision.get(key, "")
+            if not (_OCC_PUT_RE.match(sym) or _OCC_CALL_RE.match(sym)):
+                return False, f"Invalid OCC symbol for {key}: {sym!r}"
+
+        # No duplicate condors on same underlying
+        underlying = self._extract_root(decision.get("put_short_symbol", ""))
+        if open_condors:
+            for oc in open_condors:
+                if oc.get("underlying", "").upper() == underlying.upper() and oc.get("status") == "open":
+                    return False, f"Already have an open iron condor on {underlying}"
+
+        # Earnings check
+        fund = context.get("fundamentals") or {}
+        dte_earnings = fund.get("days_to_earnings")
+        if dte_earnings is not None and dte_earnings <= 30:
+            return False, f"Earnings in {dte_earnings} days (hard block: need > 30)"
+
+        return True, ""
+
     # ── helpers ──────────────────────────────────────────────
 
     @staticmethod
