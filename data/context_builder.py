@@ -3,7 +3,7 @@
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from alpaca.data.historical.news import NewsClient
 from alpaca.data.requests import NewsRequest
@@ -148,9 +148,480 @@ class ContextBuilder:
             context["confirmed_market_regime"] = "NEUTRAL"
             context["regime_stable"] = False
 
+        # ── Spread candidates (regime-driven) ─────────────────
+        try:
+            current_price = None
+            if context["technicals"] and "current_price" in context["technicals"]:
+                current_price = context["technicals"]["current_price"]
+
+            if current_price is not None:
+                regime = context.get("confirmed_market_regime", "NEUTRAL")
+                iv_env = context.get("iv_environment", "MODERATE")
+                strategy_types = self._select_spread_strategies(regime, iv_env)
+
+                if strategy_types:
+                    all_candidates: dict[str, dict] = {}
+                    for st in strategy_types:
+                        try:
+                            candidates = self.build_spread_candidates(
+                                symbol, st, underlying_price=current_price,
+                            )
+                            all_candidates[st] = candidates
+                        except Exception:
+                            logger.warning(
+                                "Failed to build %s candidates for %s",
+                                st, symbol, exc_info=True,
+                            )
+                    if all_candidates:
+                        context["spread_candidates"] = all_candidates
+        except Exception:
+            logger.warning("Failed to build spread candidates for %s", symbol, exc_info=True)
+
         elapsed = time.monotonic() - t0
         logger.info("Context build for %s completed in %.2fs", symbol, elapsed)
         return context
+
+    # ── Spread candidate building ───────────────────────────
+
+    @staticmethod
+    def _select_spread_strategies(regime: str, iv_env: str) -> list[str]:
+        """Return strategy types appropriate for the current regime + IV."""
+        if regime == "CRASH":
+            return []
+        if regime == "BEAR":
+            return ["bear_call_spread"]
+        if regime == "EUPHORIA":
+            return ["bull_put_spread"]
+        if regime == "BULL" and iv_env == "LOW":
+            return ["long_call_vertical"]
+        if regime == "BULL":
+            return ["bull_put_spread"]
+        # NEUTRAL
+        if iv_env == "HIGH":
+            return ["iron_condor"]
+        if iv_env in ("MODERATE", "HIGH"):
+            return ["bull_put_spread", "iron_condor"]
+        return ["bull_put_spread"]
+
+    def build_spread_candidates(
+        self,
+        underlying_symbol: str,
+        strategy_type: str,
+        dte_min: int = 20,
+        dte_max: int = 50,
+        short_delta_min: float = 0.15,
+        short_delta_max: float = 0.30,
+        wing_width_strikes: int = 5,
+        underlying_price: float | None = None,
+    ) -> dict:
+        """Build spread candidates for Claude to evaluate.
+
+        Returns a dict with ``candidates``, ``best_candidate``, and
+        (for iron condors) ``iron_condor_legs``.
+        """
+        today = datetime.now().date()
+        gte = (today + timedelta(days=dte_min)).isoformat()
+        lte = (today + timedelta(days=dte_max)).isoformat()
+
+        if underlying_price is None:
+            tech = market_data.get_stock_technicals(underlying_symbol)
+            underlying_price = tech.get("current_price", 0)
+
+        result: dict = {
+            "underlying": underlying_symbol,
+            "underlying_price": underlying_price,
+            "strategy_type": strategy_type,
+            "candidates": [],
+            "best_candidate": None,
+            "iron_condor_legs": None,
+        }
+
+        if strategy_type == "iron_condor":
+            put_result = self._build_credit_spread_candidates(
+                underlying_symbol, "put", gte, lte, today,
+                short_delta_min, short_delta_max, wing_width_strikes,
+                underlying_price,
+            )
+            call_result = self._build_credit_spread_candidates(
+                underlying_symbol, "call", gte, lte, today,
+                short_delta_min, short_delta_max, wing_width_strikes,
+                underlying_price,
+            )
+            result["candidates"] = put_result + call_result
+
+            # Combine best put + call spread per expiration
+            best_put = self._pick_best(put_result)
+            best_call = self._pick_best(call_result)
+            if best_put and best_call:
+                total_credit = best_put["net_credit"] + best_call["net_credit"]
+                total_max_loss = max(best_put["max_loss"], best_call["max_loss"])
+                result["iron_condor_legs"] = {
+                    "put_spread": best_put,
+                    "call_spread": best_call,
+                    "total_credit": round(total_credit, 4),
+                    "total_max_loss": round(total_max_loss, 2),
+                }
+            result["best_candidate"] = (
+                result["iron_condor_legs"] if result["iron_condor_legs"] else None
+            )
+
+        elif strategy_type == "long_call_vertical":
+            result["candidates"] = self._build_debit_spread_candidates(
+                underlying_symbol, gte, lte, today,
+                wing_width_strikes, underlying_price,
+            )
+            result["best_candidate"] = self._pick_best_debit(result["candidates"])
+
+        else:
+            # bull_put_spread or bear_call_spread
+            option_type = "put" if strategy_type == "bull_put_spread" else "call"
+            result["candidates"] = self._build_credit_spread_candidates(
+                underlying_symbol, option_type, gte, lte, today,
+                short_delta_min, short_delta_max, wing_width_strikes,
+                underlying_price,
+            )
+            result["best_candidate"] = self._pick_best(result["candidates"])
+
+        return result
+
+    def _build_credit_spread_candidates(
+        self,
+        symbol: str,
+        option_type: str,
+        gte: str,
+        lte: str,
+        today,
+        delta_min: float,
+        delta_max: float,
+        wing_width: int,
+        underlying_price: float,
+    ) -> list[dict]:
+        """Build credit spread candidates (bull put or bear call)."""
+        contracts = self.broker.get_option_chain_with_greeks(
+            underlying_symbol=symbol,
+            expiration_date_gte=gte,
+            expiration_date_lte=lte,
+            contract_type=option_type,
+        )
+        if not contracts:
+            return []
+
+        # Fetch snapshots for all contracts
+        all_symbols = [c["symbol"] for c in contracts]
+        snapshots = self.broker.get_option_snapshots(all_symbols)
+
+        # Index contracts by (expiration, strike) for pairing
+        by_exp_strike: dict[tuple[str, float], dict] = {}
+        for c in contracts:
+            snap = snapshots.get(c["symbol"], {})
+            strike = float(c.get("strike_price", 0))
+            by_exp_strike[(c["expiration_date"], strike)] = {
+                **c,
+                **snap,
+                "strike": strike,
+            }
+
+        # Collect unique expirations and sorted strikes per expiration
+        exp_strikes: dict[str, list[float]] = {}
+        for (exp, strike) in by_exp_strike:
+            exp_strikes.setdefault(exp, []).append(strike)
+        for exp in exp_strikes:
+            exp_strikes[exp].sort()
+
+        candidates = []
+        for exp, strikes in exp_strikes.items():
+            try:
+                dte = (datetime.strptime(exp, "%Y-%m-%d").date() - today).days
+            except ValueError:
+                continue
+
+            for short_strike in strikes:
+                short_data = by_exp_strike.get((exp, short_strike), {})
+                delta = short_data.get("delta")
+                if delta is None:
+                    continue
+
+                abs_delta = abs(delta)
+                if not (delta_min <= abs_delta <= delta_max):
+                    continue
+
+                # Find the long leg
+                if option_type == "put":
+                    long_strike = short_strike - wing_width
+                else:
+                    long_strike = short_strike + wing_width
+
+                long_data = by_exp_strike.get((exp, long_strike))
+                if long_data is None:
+                    continue
+
+                short_mid = short_data.get("mid")
+                long_mid = long_data.get("mid")
+                if short_mid is None or long_mid is None or short_mid <= 0:
+                    continue
+
+                net_credit = round(short_mid - long_mid, 4)
+                if net_credit <= 0:
+                    continue
+
+                short_bid = short_data.get("bid", 0) or 0
+                short_ask = short_data.get("ask", 0) or 0
+                spread_pct = (
+                    ((short_ask - short_bid) / short_mid * 100)
+                    if short_mid > 0 else 999
+                )
+
+                short_oi = short_data.get("open_interest") or 0
+                long_oi = long_data.get("open_interest") or 0
+                liquidity_ok = short_oi >= 100 and long_oi >= 100 and spread_pct < 20
+
+                max_loss = round((wing_width * 100) - (net_credit * 100), 2)
+                max_gain = round(net_credit * 100, 2)
+
+                if option_type == "put":
+                    break_even = round(short_strike - net_credit, 4)
+                else:
+                    break_even = round(short_strike + net_credit, 4)
+
+                cw_ratio = round(net_credit / wing_width, 4) if wing_width else 0
+
+                candidates.append({
+                    "expiration": exp,
+                    "dte": dte,
+                    "short_leg": {
+                        "symbol": short_data.get("symbol", ""),
+                        "strike": short_strike,
+                        "delta": delta,
+                        "bid": short_bid,
+                        "ask": short_ask,
+                        "mid": short_mid,
+                        "open_interest": short_oi,
+                        "bid_ask_spread_pct": round(spread_pct, 2),
+                    },
+                    "long_leg": {
+                        "symbol": long_data.get("symbol", ""),
+                        "strike": long_strike,
+                        "delta": long_data.get("delta"),
+                        "bid": long_data.get("bid", 0) or 0,
+                        "ask": long_data.get("ask", 0) or 0,
+                        "mid": long_mid,
+                        "open_interest": long_oi,
+                    },
+                    "net_credit": net_credit,
+                    "max_loss": max_loss,
+                    "max_gain": max_gain,
+                    "break_even": break_even,
+                    "credit_to_width_ratio": cw_ratio,
+                    "liquidity_ok": liquidity_ok,
+                })
+
+        return candidates
+
+    def _build_debit_spread_candidates(
+        self,
+        symbol: str,
+        gte: str,
+        lte: str,
+        today,
+        wing_width: int,
+        underlying_price: float,
+    ) -> list[dict]:
+        """Build debit spread candidates (long call vertical)."""
+        contracts = self.broker.get_option_chain_with_greeks(
+            underlying_symbol=symbol,
+            expiration_date_gte=gte,
+            expiration_date_lte=lte,
+            contract_type="call",
+        )
+        if not contracts:
+            return []
+
+        all_symbols = [c["symbol"] for c in contracts]
+        snapshots = self.broker.get_option_snapshots(all_symbols)
+
+        by_exp_strike: dict[tuple[str, float], dict] = {}
+        for c in contracts:
+            snap = snapshots.get(c["symbol"], {})
+            strike = float(c.get("strike_price", 0))
+            by_exp_strike[(c["expiration_date"], strike)] = {
+                **c,
+                **snap,
+                "strike": strike,
+            }
+
+        exp_strikes: dict[str, list[float]] = {}
+        for (exp, strike) in by_exp_strike:
+            exp_strikes.setdefault(exp, []).append(strike)
+        for exp in exp_strikes:
+            exp_strikes[exp].sort()
+
+        candidates = []
+        for exp, strikes in exp_strikes.items():
+            try:
+                dte = (datetime.strptime(exp, "%Y-%m-%d").date() - today).days
+            except ValueError:
+                continue
+
+            for long_strike in strikes:
+                long_data = by_exp_strike.get((exp, long_strike), {})
+                delta = long_data.get("delta")
+                if delta is None:
+                    continue
+
+                # Long leg should be ATM/ITM (delta 0.45-0.60)
+                if not (0.45 <= delta <= 0.60):
+                    continue
+
+                short_strike = long_strike + wing_width
+                short_data = by_exp_strike.get((exp, short_strike))
+                if short_data is None:
+                    continue
+
+                short_delta = short_data.get("delta")
+                if short_delta is not None and not (0.25 <= short_delta <= 0.40):
+                    continue
+
+                long_mid = long_data.get("mid")
+                short_mid = short_data.get("mid")
+                if long_mid is None or short_mid is None or long_mid <= 0:
+                    continue
+
+                net_debit = round(long_mid - short_mid, 4)
+                if net_debit <= 0:
+                    continue
+
+                long_oi = long_data.get("open_interest") or 0
+                short_oi = short_data.get("open_interest") or 0
+
+                long_bid = long_data.get("bid", 0) or 0
+                long_ask = long_data.get("ask", 0) or 0
+                long_spread_pct = (
+                    ((long_ask - long_bid) / long_mid * 100)
+                    if long_mid > 0 else 999
+                )
+                liquidity_ok = long_oi >= 100 and short_oi >= 100 and long_spread_pct < 20
+
+                max_loss = round(net_debit * 100, 2)
+                max_gain = round((wing_width - net_debit) * 100, 2)
+                break_even = round(long_strike + net_debit, 4)
+
+                candidates.append({
+                    "expiration": exp,
+                    "dte": dte,
+                    "short_leg": {
+                        "symbol": short_data.get("symbol", ""),
+                        "strike": short_strike,
+                        "delta": short_delta,
+                        "bid": short_data.get("bid", 0) or 0,
+                        "ask": short_data.get("ask", 0) or 0,
+                        "mid": short_mid,
+                        "open_interest": short_oi,
+                        "bid_ask_spread_pct": 0,
+                    },
+                    "long_leg": {
+                        "symbol": long_data.get("symbol", ""),
+                        "strike": long_strike,
+                        "delta": delta,
+                        "bid": long_bid,
+                        "ask": long_ask,
+                        "mid": long_mid,
+                        "open_interest": long_oi,
+                    },
+                    "net_debit": net_debit,
+                    "max_loss": max_loss,
+                    "max_gain": max_gain,
+                    "break_even": break_even,
+                    "credit_to_width_ratio": round(
+                        (wing_width - net_debit) / wing_width, 4
+                    ) if wing_width else 0,
+                    "liquidity_ok": liquidity_ok,
+                })
+
+        return candidates
+
+    @staticmethod
+    def _pick_best(candidates: list[dict]) -> dict | None:
+        """Pick the credit spread candidate with highest credit_to_width_ratio and good liquidity."""
+        liquid = [c for c in candidates if c.get("liquidity_ok")]
+        if not liquid:
+            return None
+        return max(liquid, key=lambda c: c.get("credit_to_width_ratio", 0))
+
+    @staticmethod
+    def _pick_best_debit(candidates: list[dict]) -> dict | None:
+        """Pick the debit spread candidate with best risk/reward and good liquidity."""
+        liquid = [c for c in candidates if c.get("liquidity_ok")]
+        if not liquid:
+            return None
+        # Best = highest max_gain / max_loss ratio
+        return max(
+            liquid,
+            key=lambda c: c["max_gain"] / c["max_loss"] if c.get("max_loss", 0) > 0 else 0,
+        )
+
+    def calculate_current_spread_value(
+        self,
+        short_symbol: str,
+        long_symbol: str,
+    ) -> dict:
+        """Calculate current value and P&L for an open spread position."""
+        result: dict = {
+            "short_current_mid": None,
+            "long_current_mid": None,
+            "current_spread_value": None,
+            "original_credit": None,
+            "pnl_pct": None,
+            "dte_remaining": None,
+        }
+
+        try:
+            snapshots = self.broker.get_option_snapshots([short_symbol, long_symbol])
+        except Exception:
+            logger.warning("Failed to fetch spread snapshots", exc_info=True)
+            return result
+
+        short_snap = snapshots.get(short_symbol, {})
+        long_snap = snapshots.get(long_symbol, {})
+
+        short_mid = short_snap.get("mid")
+        long_mid = long_snap.get("mid")
+        result["short_current_mid"] = short_mid
+        result["long_current_mid"] = long_mid
+
+        if short_mid is not None and long_mid is not None:
+            result["current_spread_value"] = round(short_mid - long_mid, 4)
+
+        # Look up original credit from journal
+        try:
+            for sym in (short_symbol, long_symbol):
+                entries = self.journal.get_open_positions(sym)
+                for e in entries:
+                    if e.get("limit_price"):
+                        result["original_credit"] = float(e["limit_price"])
+                        break
+                if result["original_credit"]:
+                    break
+        except Exception:
+            pass
+
+        if result["original_credit"] and result["current_spread_value"] is not None:
+            captured = result["original_credit"] - result["current_spread_value"]
+            result["pnl_pct"] = round(
+                (captured / result["original_credit"]) * 100, 2,
+            )
+
+        # DTE from OCC symbol
+        try:
+            for i, ch in enumerate(short_symbol):
+                if ch.isdigit():
+                    date_part = short_symbol[i:i + 6]
+                    exp = datetime.strptime(date_part, "%y%m%d").date()
+                    result["dte_remaining"] = (exp - datetime.now().date()).days
+                    break
+        except (ValueError, IndexError):
+            pass
+
+        return result
 
     # ── Private helpers ──────────────────────────────────────
 
