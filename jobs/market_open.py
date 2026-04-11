@@ -11,9 +11,9 @@ logger = logging.getLogger(__name__)
 
 
 def run() -> None:
-    """Evaluate each watchlist symbol and execute trades via the wheel strategy.
+    """Evaluate wheel + spread strategies and execute trades.
 
-    Checks market status first; returns early on holidays.
+    Uses StrategyRouter to decide which spread strategies are active.
     """
     logger.info("=== MARKET OPEN JOB STARTING ===")
 
@@ -23,11 +23,17 @@ def run() -> None:
     from ai.claude_advisor import ClaudeAdvisor
     from brokers.broker_factory import get_broker
     from data.context_builder import ContextBuilder
+    from data.spread_tracker import SpreadTracker
     from data.state_writer import StateWriter
     from data.trade_journal import TradeJournal
     from main import execute_decision
+    from strategies.bear_call_spread_strategy import BearCallSpreadStrategy
+    from strategies.bull_put_spread_strategy import BullPutSpreadStrategy
     from strategies.circuit_breaker import CircuitBreaker
     from strategies.guardrails import Guardrails
+    from strategies.iron_condor_strategy import IronCondorStrategy
+    from strategies.long_call_vertical_strategy import LongCallVerticalStrategy
+    from strategies.strategy_router import StrategyRouter
     from strategies.wheel_strategy import WheelStrategy
 
     broker = get_broker()
@@ -45,18 +51,14 @@ def run() -> None:
     equity = float(account.get("portfolio_value", 0))
     cb_status = cb.update(equity)
 
-    # Write circuit breaker snapshot
     try:
         sw.write_circuit_breaker_status(asdict(cb_status))
     except Exception as e:
         logger.warning("Failed to write circuit breaker snapshot: %s", e)
 
-    # Daily reset (always on market open)
     cb.reset_daily()
-
-    # Weekly reset on Monday
     et_now = datetime.now(ZoneInfo(settings.TIMEZONE))
-    if et_now.weekday() == 0:  # Monday
+    if et_now.weekday() == 0:
         cb.reset_weekly()
 
     if cb.is_halted():
@@ -74,105 +76,104 @@ def run() -> None:
         cb.get_position_size_multiplier(),
     )
 
+    # ── Shared dependencies ─────────────────────────────────
     advisor = ClaudeAdvisor()
     guardrails = Guardrails()
-    strategy = WheelStrategy(broker)
+    wheel_strategy = WheelStrategy(broker)
     journal = TradeJournal(path=settings.JOURNAL_PATH)
     ctx_builder = ContextBuilder(broker=broker, journal=journal)
-    size_multiplier = cb.get_position_size_multiplier()
+    tracker = SpreadTracker()
 
-    # Write portfolio snapshot before decisions
+    # Spread strategies
+    spread_strategies = {
+        "iron_condor": IronCondorStrategy(broker=broker, state_writer=sw, spread_tracker=tracker),
+        "bull_put_spread": BullPutSpreadStrategy(broker=broker, state_writer=sw, spread_tracker=tracker),
+        "bear_call_spread": BearCallSpreadStrategy(broker=broker, state_writer=sw, spread_tracker=tracker),
+        "long_call_vertical": LongCallVerticalStrategy(broker=broker, state_writer=sw, spread_tracker=tracker),
+    }
+    router = StrategyRouter()
+
+    # Portfolio snapshot
     try:
         positions = broker.get_positions()
         wheel_states = {}
         for sym in settings.WATCHLIST:
             try:
-                wheel_states[sym] = strategy.get_current_state(sym).value
+                wheel_states[sym] = wheel_strategy.get_current_state(sym).value
             except Exception:
                 wheel_states[sym] = "UNKNOWN"
-        sw.write_portfolio_snapshot(account, positions, wheel_states)
+        strategy_states_snapshot = {
+            "wheel": {sym: wheel_states.get(sym, "UNKNOWN") for sym in settings.WATCHLIST},
+            **{name: s.get_state().value for name, s in spread_strategies.items()},
+        }
+        sw.write_portfolio_snapshot(
+            account, positions, wheel_states,
+            open_spreads=tracker.to_snapshot(),
+        )
     except Exception as e:
         logger.warning("Failed to write portfolio snapshot: %s", e)
 
     report_lines: list[str] = []
+    size_multiplier = cb.get_position_size_multiplier()
 
     if size_multiplier == 0.0:
         logger.warning("Circuit breaker: position size multiplier is 0 — no new positions")
         report_lines.append("**Circuit breaker RED** — no new positions allowed")
 
+    # ── Wheel strategy (always runs, per symbol) ────────────
     for symbol in settings.WATCHLIST:
         try:
-            # Determine wheel state
-            state = strategy.get_current_state(symbol)
+            state = wheel_strategy.get_current_state(symbol)
             logger.info("%s wheel state: %s", symbol, state.value)
 
-            # Build full context
             context = ctx_builder.build(symbol, state.value)
             logger.info(ContextBuilder.summarize_for_log(context))
 
-            # Write context snapshot
             try:
                 sw.write_context_snapshot(context)
             except Exception as e:
                 logger.warning("Failed to write context snapshot for %s: %s", symbol, e)
 
-            # Ask Claude
             decision = advisor.ask(context, state)
             logger.info(
                 "%s Claude decision: %s (confidence: %s)",
-                symbol,
-                decision.get("action"),
-                decision.get("confidence"),
+                symbol, decision.get("action"), decision.get("confidence"),
             )
 
-            # Validate via guardrails
-            account = context.get("account") or broker.get_account()
-            positions = context.get("positions") or []
-            is_valid, rejection = guardrails.validate(decision, account, positions, context)
+            acct = context.get("account") or broker.get_account()
+            pos = context.get("positions") or []
+            is_valid, rejection = guardrails.validate(decision, acct, pos, context)
 
             if not is_valid:
                 logger.warning("%s GUARDRAIL REJECTED: %s", symbol, rejection)
-
-                # Write rejected decision snapshot
                 try:
                     sw.write_decision(
-                        decision_dict=decision,
-                        reasoning=decision.get("reasoning", ""),
-                        action_taken=False,
-                        underlying=symbol,
-                        guardrail_rejection=rejection,
+                        decision_dict=decision, reasoning=decision.get("reasoning", ""),
+                        action_taken=False, underlying=symbol, guardrail_rejection=rejection,
                     )
                 except Exception as e:
-                    logger.warning("Failed to write decision snapshot for %s: %s", symbol, e)
-
+                    logger.warning("Failed to write decision snapshot: %s", e)
                 journal.append({
-                    "symbol": decision.get("symbol"),
-                    "underlying": symbol,
-                    "wheel_state": state.value,
-                    "action": "skip",
-                    "reasoning": f"Guardrail rejected: {rejection}",
-                    "status": "skipped",
+                    "symbol": decision.get("symbol"), "underlying": symbol,
+                    "wheel_state": state.value, "action": "skip",
+                    "reasoning": f"Guardrail rejected: {rejection}", "status": "skipped",
                 })
-                report_lines.append(f"**{symbol}** — SKIPPED (guardrail: {rejection})")
+                report_lines.append(f"**{symbol}** -- SKIPPED (guardrail: {rejection})")
                 continue
 
-            # Write accepted decision snapshot
             try:
                 sw.write_decision(
-                    decision_dict=decision,
-                    reasoning=decision.get("reasoning", ""),
-                    action_taken=not settings.DRY_RUN,
-                    underlying=symbol,
+                    decision_dict=decision, reasoning=decision.get("reasoning", ""),
+                    action_taken=not settings.DRY_RUN, underlying=symbol,
                 )
             except Exception as e:
-                logger.warning("Failed to write decision snapshot for %s: %s", symbol, e)
+                logger.warning("Failed to write decision snapshot: %s", e)
 
             if settings.DRY_RUN:
                 logger.info("DRY RUN - would execute: %s", json.dumps(decision, default=str))
-                report_lines.append(f"**{symbol}** — DRY RUN: {decision.get('action')}")
+                report_lines.append(f"**{symbol}** -- DRY RUN: {decision.get('action')}")
                 continue
 
-            # Execute
             result = execute_decision(broker, decision)
             order_id = result.get("id") if result else None
             if result:
@@ -180,90 +181,137 @@ def run() -> None:
             else:
                 logger.info("%s no order (action=%s)", symbol, decision.get("action"))
 
-            # Journal
             journal.append({
-                "symbol": decision.get("symbol"),
-                "underlying": symbol,
-                "wheel_state": state.value,
-                "action": decision.get("action"),
-                "contract_symbol": decision.get("symbol"),
-                "qty": decision.get("qty"),
+                "symbol": decision.get("symbol"), "underlying": symbol,
+                "wheel_state": state.value, "action": decision.get("action"),
+                "contract_symbol": decision.get("symbol"), "qty": decision.get("qty"),
                 "limit_price": decision.get("limit_price"),
                 "confidence": decision.get("confidence"),
-                "reasoning": decision.get("reasoning"),
-                "order_id": order_id,
+                "reasoning": decision.get("reasoning"), "order_id": order_id,
                 "status": "submitted" if result else decision.get("action"),
             })
-
             report_lines.append(
-                f"**{symbol}** — {decision.get('action')} "
+                f"**{symbol}** -- {decision.get('action')} "
                 f"(confidence: {decision.get('confidence')})"
             )
 
         except Exception:
             logger.exception("Market open failed for %s — continuing", symbol)
-            report_lines.append(f"**{symbol}** — ERROR (see logs)")
+            report_lines.append(f"**{symbol}** -- ERROR (see logs)")
 
-    # Save strategy state after all symbols processed
-    strategy.save_state()
+    wheel_strategy.save_state()
 
-    # ── Iron Condor strategy (runs once, not per-symbol) ────
-    try:
-        from data.spread_tracker import SpreadTracker
-        from strategies.iron_condor_strategy import IronCondorStrategy
+    # ── Spread strategies (router-driven) ───────────────────
+    # Build context once for routing (use first watchlist symbol)
+    shared_context = None
+    if settings.WATCHLIST:
+        try:
+            shared_context = ctx_builder.build(settings.WATCHLIST[0], "IDLE")
+        except Exception:
+            logger.exception("Failed to build shared context for spread routing")
 
-        # Only evaluate if IV environment is conducive
-        iv_env = None
-        if settings.WATCHLIST:
-            first_ctx = ctx_builder.build(settings.WATCHLIST[0], "IDLE")
-            iv_env = first_ctx.get("iv_environment")
-            regime = first_ctx.get("confirmed_market_regime")
+    if shared_context:
+        strat_states = {name: s.get_state().value for name, s in spread_strategies.items()}
+        active = router.get_active_strategies(
+            shared_context, strat_states, circuit_breaker_status=cb_status.status,
+        )
+        active_spreads = [a for a in active if a != "wheel"]
 
-            if iv_env in ("HIGH", "MODERATE") and regime == "NEUTRAL":
-                tracker = SpreadTracker()
-                ic_strategy = IronCondorStrategy(
-                    broker=broker, state_writer=sw, spread_tracker=tracker,
-                )
-                ic_decision = ic_strategy.run_cycle(first_ctx)
-                ic_action = ic_decision.get("action", "SKIP")
-                logger.info("Iron condor decision: %s", ic_action)
+        logger.info(
+            "Strategy router: active=%s (states: %s)",
+            active, strat_states,
+        )
 
-                if ic_action == "OPEN":
-                    ic_valid, ic_rejection = guardrails.validate_iron_condor_entry(
-                        ic_decision, first_ctx, account,
-                        open_condors=tracker.get_open_spreads(strategy_type="iron_condor"),
+        for strategy_name in active_spreads:
+            strat = spread_strategies[strategy_name]
+            try:
+                decision = strat.run_cycle(shared_context)
+                action = decision.get("action", "SKIP")
+                logger.info("%s decision: %s", strategy_name, action)
+
+                try:
+                    sw.write_decision(
+                        decision_dict=decision,
+                        reasoning=decision.get("reasoning", ""),
+                        action_taken=action in ("OPEN", "CLOSE"),
+                        underlying=strategy_name,
                     )
-                    if not ic_valid:
-                        logger.warning("Iron condor GUARDRAIL REJECTED: %s", ic_rejection)
-                        report_lines.append(f"**Iron Condor** -- REJECTED: {ic_rejection}")
-                    elif settings.DRY_RUN:
-                        logger.info("DRY RUN - would open iron condor: %s",
-                                    json.dumps(ic_decision, default=str))
-                        report_lines.append("**Iron Condor** -- DRY RUN: OPEN")
-                    else:
-                        ic_strategy.execute_entry({**ic_decision, "underlying": settings.WATCHLIST[0]})
-                        report_lines.append(
-                            f"**Iron Condor** -- OPENED (credit: ${ic_decision.get('total_credit', 0)})"
-                        )
-                elif ic_action == "CLOSE" and ic_decision.get("spread_id"):
-                    if settings.DRY_RUN:
-                        logger.info("DRY RUN - would close iron condor")
-                        report_lines.append("**Iron Condor** -- DRY RUN: CLOSE")
-                    else:
-                        ic_strategy.execute_exit(
-                            ic_decision["spread_id"],
-                            limit_price=ic_decision.get("limit_price"),
-                        )
-                        report_lines.append("**Iron Condor** -- CLOSED")
+                except Exception as e:
+                    logger.warning("Failed to write %s decision: %s", strategy_name, e)
+
+                if action == "OPEN":
+                    _handle_spread_open(
+                        strategy_name, strat, decision, guardrails,
+                        shared_context, account, tracker, settings, report_lines,
+                    )
+                elif action == "CLOSE" and decision.get("spread_id"):
+                    _handle_spread_close(
+                        strategy_name, strat, decision, settings, report_lines,
+                    )
                 else:
-                    report_lines.append(f"**Iron Condor** -- {ic_action}")
-            else:
-                logger.debug(
-                    "Skipping iron condor: iv_env=%s regime=%s", iv_env, regime,
-                )
-    except Exception:
-        logger.exception("Iron condor evaluation failed")
-        report_lines.append("**Iron Condor** -- ERROR (see logs)")
+                    report_lines.append(f"**{strategy_name}** -- {action}")
+
+            except Exception:
+                logger.exception("%s strategy failed — continuing", strategy_name)
+                report_lines.append(f"**{strategy_name}** -- ERROR (see logs)")
 
     append_section("Market Open Decisions (9:30 AM ET)", "\n".join(report_lines))
     logger.info("=== MARKET OPEN JOB COMPLETE ===")
+
+
+# ── Spread helpers ──────────────────────────────────────────
+
+_GUARDRAIL_MAP = {
+    "iron_condor": "validate_iron_condor_entry",
+    "bull_put_spread": "validate_bull_put_spread_entry",
+    "bear_call_spread": "validate_bear_call_spread_entry",
+    "long_call_vertical": "validate_long_call_vertical_entry",
+}
+
+
+def _handle_spread_open(
+    name, strat, decision, guardrails, context, account, tracker, settings, report_lines,
+):
+    """Validate and execute a spread OPEN decision."""
+    validator_name = _GUARDRAIL_MAP.get(name)
+    if validator_name:
+        validator = getattr(guardrails, validator_name)
+        open_spreads = tracker.get_open_spreads(strategy_type=name)
+        if name == "iron_condor":
+            is_valid, rejection = validator(decision, context, account, open_condors=open_spreads)
+        else:
+            is_valid, rejection = validator(decision, context, account, open_spreads=open_spreads)
+
+        if not is_valid:
+            logger.warning("%s GUARDRAIL REJECTED: %s", name, rejection)
+            report_lines.append(f"**{name}** -- REJECTED: {rejection}")
+            return
+
+    underlying = decision.get("underlying", settings.WATCHLIST[0] if settings.WATCHLIST else "")
+
+    if settings.DRY_RUN:
+        logger.info("DRY RUN - would open %s: %s", name, json.dumps(decision, default=str))
+        report_lines.append(f"**{name}** -- DRY RUN: OPEN")
+        return
+
+    success = strat.execute_entry({**decision, "underlying": underlying})
+    if success:
+        report_lines.append(
+            f"**{name}** -- OPENED (credit/debit: "
+            f"${decision.get('total_credit') or decision.get('net_credit') or decision.get('net_debit', 0)})"
+        )
+    else:
+        report_lines.append(f"**{name}** -- OPEN FAILED")
+
+
+def _handle_spread_close(name, strat, decision, settings, report_lines):
+    """Execute a spread CLOSE decision."""
+    if settings.DRY_RUN:
+        logger.info("DRY RUN - would close %s", name)
+        report_lines.append(f"**{name}** -- DRY RUN: CLOSE")
+        return
+
+    success = strat.execute_exit(
+        decision["spread_id"], limit_price=decision.get("limit_price"),
+    )
+    report_lines.append(f"**{name}** -- {'CLOSED' if success else 'CLOSE FAILED'}")

@@ -275,6 +275,57 @@ def performance():
     }
 
 
+@app.get("/api/strategy-states")
+def strategy_states():
+    portfolio = _read_json(SNAPSHOTS / "portfolio.json")
+
+    # Read individual strategy state files
+    _STRATEGY_FILES = {
+        "iron_condor": "iron_condor_state.json",
+        "bull_put_spread": "bull_put_spread_state.json",
+        "bear_call_spread": "bear_call_spread_state.json",
+        "long_call_vertical": "long_call_vertical_state.json",
+    }
+
+    states: dict = {}
+    for name, filename in _STRATEGY_FILES.items():
+        data = _read_json(SNAPSHOTS / filename)
+        if data:
+            states[name] = {
+                "state": data.get("state", "IDLE"),
+                "spread_id": data.get("open_spread_id"),
+            }
+        else:
+            states[name] = {"state": "IDLE", "spread_id": None}
+
+    # Wheel state from portfolio snapshot
+    wheel_states = {}
+    if portfolio:
+        wheel_states = portfolio.get("wheel_states", {})
+    states["wheel"] = {"state": wheel_states or "IDLE", "underlying": None}
+
+    # Active strategies from last context (if router info is available)
+    context = _read_json(SNAPSHOTS / "context.json")
+    regime = (context or {}).get("confirmed_market_regime", "NEUTRAL")
+    cb = _read_json(SNAPSHOTS / "circuit_breakers.json") or {}
+    cb_status = cb.get("status", "GREEN")
+
+    router_blocked = cb_status in ("RED", "YELLOW") or regime == "CRASH"
+    block_reason = None
+    if cb_status == "RED":
+        block_reason = "Circuit breaker RED"
+    elif cb_status == "YELLOW":
+        block_reason = "Circuit breaker YELLOW — management only"
+    elif regime == "CRASH":
+        block_reason = "CRASH regime — wheel only"
+
+    return {
+        **states,
+        "router_blocked": router_blocked,
+        "block_reason": block_reason,
+    }
+
+
 @app.get("/api/regime-history")
 def regime_history():
     data = _read_json(SNAPSHOTS / "regime_history.json")
