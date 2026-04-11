@@ -11,6 +11,7 @@ from alpaca.data.requests import NewsRequest
 from brokers.base import BaseBroker
 from config import settings
 from data import market_data
+from data.market_regime import RegimeStabilityFilter, derive_market_regime
 from data.trade_journal import TradeJournal
 
 logger = logging.getLogger(__name__)
@@ -44,6 +45,7 @@ class ContextBuilder:
         self.broker = broker
         self.data_client = data_client
         self.journal = journal or TradeJournal()
+        self._regime_filter = RegimeStabilityFilter()
 
     def build(self, symbol: str, wheel_state: str) -> dict:
         """Assemble the full context for Claude's decision-making.
@@ -120,6 +122,31 @@ class ContextBuilder:
             context["recent_trades"] = journal_text or None
         except Exception:
             logger.warning("Failed to fetch trade journal for %s", symbol, exc_info=True)
+
+        # ── SPX technicals (for regime derivation) ─────────
+        if symbol.upper() != "SPY":
+            try:
+                context["spx_technicals"] = market_data.get_stock_technicals("SPY")
+            except Exception:
+                logger.warning("Failed to fetch SPX technicals for regime", exc_info=True)
+
+        # ── Market regime ──────────────────────────────────
+        try:
+            derive_market_regime(context)
+            raw_regime = context.get("market_regime", "NEUTRAL")
+            changed = self._regime_filter.record_reading(raw_regime)
+            confirmed = self._regime_filter.get_confirmed_regime()
+            stable = self._regime_filter.is_stable()
+
+            context["raw_market_regime"] = raw_regime
+            context["confirmed_market_regime"] = confirmed
+            context["regime_stable"] = stable
+            if not stable:
+                context["regime_unstable"] = True
+        except Exception:
+            logger.warning("Failed to derive market regime", exc_info=True)
+            context["confirmed_market_regime"] = "NEUTRAL"
+            context["regime_stable"] = False
 
         elapsed = time.monotonic() - t0
         logger.info("Context build for %s completed in %.2fs", symbol, elapsed)
