@@ -21,7 +21,7 @@ def run() -> None:
     from zoneinfo import ZoneInfo
 
     from ai.claude_advisor import ClaudeAdvisor
-    from brokers.broker_factory import get_broker
+    from brokers.broker_factory import get_broker, make_broker
     from data.context_builder import ContextBuilder
     from data.spread_tracker import SpreadTracker
     from data.state_writer import StateWriter
@@ -36,6 +36,7 @@ def run() -> None:
     from strategies.strategy_router import StrategyRouter
     from strategies.wheel_strategy import WheelStrategy
 
+    # Default broker for market-open check and circuit breaker
     broker = get_broker()
     sw = StateWriter()
 
@@ -79,19 +80,34 @@ def run() -> None:
     # ── Shared dependencies ─────────────────────────────────
     advisor = ClaudeAdvisor()
     guardrails = Guardrails()
-    wheel_strategy = WheelStrategy(broker)
     journal = TradeJournal(path=settings.JOURNAL_PATH)
     ctx_builder = ContextBuilder(broker=broker, journal=journal)
     tracker = SpreadTracker()
-
-    # Spread strategies
-    spread_strategies = {
-        "iron_condor": IronCondorStrategy(broker=broker, state_writer=sw, spread_tracker=tracker),
-        "bull_put_spread": BullPutSpreadStrategy(broker=broker, state_writer=sw, spread_tracker=tracker),
-        "bear_call_spread": BearCallSpreadStrategy(broker=broker, state_writer=sw, spread_tracker=tracker),
-        "long_call_vertical": LongCallVerticalStrategy(broker=broker, state_writer=sw, spread_tracker=tracker),
-    }
     router = StrategyRouter()
+
+    # Each strategy gets a broker pointed at its designated account
+    try:
+        wheel_broker = make_broker("wheel")
+    except ValueError:
+        logger.warning("Wheel account credentials not set — using default")
+        wheel_broker = broker
+    wheel_strategy = WheelStrategy(wheel_broker)
+
+    try:
+        ic_broker = make_broker("iron_condor")
+    except ValueError:
+        logger.warning("Iron condor account credentials not set — using default")
+        ic_broker = broker
+
+    # Bull put, bear call, long call vertical share the default account
+    default_broker = broker
+
+    spread_strategies = {
+        "iron_condor": IronCondorStrategy(broker=ic_broker, state_writer=sw, spread_tracker=tracker),
+        "bull_put_spread": BullPutSpreadStrategy(broker=default_broker, state_writer=sw, spread_tracker=tracker),
+        "bear_call_spread": BearCallSpreadStrategy(broker=default_broker, state_writer=sw, spread_tracker=tracker),
+        "long_call_vertical": LongCallVerticalStrategy(broker=default_broker, state_writer=sw, spread_tracker=tracker),
+    }
 
     # Portfolio snapshot
     try:

@@ -6,6 +6,67 @@ from datetime import date
 
 logger = logging.getLogger(__name__)
 
+# ── Shared-account capital guard ───────────────────────────────
+# The default Alpaca account is shared by three strategies:
+# bull_put_spread, bear_call_spread, and long_call_vertical.
+# These helpers prevent the three from collectively over-allocating
+# even though each individually passes its own per-trade size check.
+
+SHARED_ACCOUNT_STRATEGIES = frozenset({
+    "bull_put_spread",
+    "bear_call_spread",
+    "long_call_vertical",
+})
+
+
+def get_committed_capital_on_shared_account(spread_tracker) -> float:
+    """Return total max_loss committed to open spreads on the shared account."""
+    open_spreads = spread_tracker.get_open_spreads()
+    return sum(
+        float(s.get("max_loss", 0))
+        for s in open_spreads
+        if s.get("strategy_type") in SHARED_ACCOUNT_STRATEGIES
+    )
+
+
+def check_shared_account_buying_power(
+    new_trade_max_loss: float,
+    account_buying_power: float,
+    spread_tracker,
+    max_allocation_pct: float = 0.10,
+) -> tuple[bool, str]:
+    """Hard check for any new position on the shared (default) account.
+
+    Rules:
+    - Individual trade max_loss must not exceed 2% of buying_power.
+    - Total committed capital (existing + new) must not exceed
+      *max_allocation_pct* of buying_power.
+    """
+    if account_buying_power <= 0:
+        return False, "Account buying power is zero or negative"
+
+    individual_pct = new_trade_max_loss / account_buying_power
+    if individual_pct > 0.02:
+        return False, (
+            f"Trade max_loss ${new_trade_max_loss:.2f} exceeds 2% of "
+            f"buying power ${account_buying_power:.2f} "
+            f"({individual_pct * 100:.1f}%)"
+        )
+
+    committed = get_committed_capital_on_shared_account(spread_tracker)
+    total_after = committed + new_trade_max_loss
+    total_pct = total_after / account_buying_power
+    if total_pct > max_allocation_pct:
+        return False, (
+            f"Opening this trade would commit ${total_after:.2f} "
+            f"({total_pct * 100:.1f}%) of the shared account's buying "
+            f"power ${account_buying_power:.2f}. "
+            f"Max allowed: {max_allocation_pct * 100:.0f}%. "
+            f"Already committed: ${committed:.2f}"
+        )
+
+    return True, ""
+
 _OCC_PUT_RE = re.compile(r"^[A-Z]+\d{6}P\d{8}$")
 _OCC_CALL_RE = re.compile(r"^[A-Z]+\d{6}C\d{8}$")
 _OCC_ROOT_RE = re.compile(r"^([A-Z]+)\d{6}[CP]\d{8}$")

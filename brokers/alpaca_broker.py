@@ -53,15 +53,27 @@ _REVERSE_SIDE = {"buy": "sell", "sell": "buy"}
 class AlpacaBroker(BaseBroker):
     """Broker implementation backed by the Alpaca Trading API."""
 
-    def __init__(self):
+    def __init__(
+        self,
+        api_key: str | None = None,
+        secret_key: str | None = None,
+        paper: bool | None = None,
+    ):
+        _api_key = api_key or settings.ALPACA_API_KEY
+        _secret_key = secret_key or settings.ALPACA_SECRET_KEY
+        _paper = paper if paper is not None else settings.ALPACA_PAPER
+
+        self._api_key = _api_key
+        self._secret_key = _secret_key
+
         self.client = TradingClient(
-            api_key=settings.ALPACA_API_KEY,
-            secret_key=settings.ALPACA_SECRET_KEY,
-            paper=settings.ALPACA_PAPER,
+            api_key=_api_key,
+            secret_key=_secret_key,
+            paper=_paper,
         )
         self.data_client = OptionHistoricalDataClient(
-            api_key=settings.ALPACA_API_KEY,
-            secret_key=settings.ALPACA_SECRET_KEY,
+            api_key=_api_key,
+            secret_key=_secret_key,
         )
 
     # ── account ──────────────────────────────────────────────
@@ -435,8 +447,8 @@ class AlpacaBroker(BaseBroker):
         so this falls back to a direct HTTP GET.
         """
         headers = {
-            "APCA-API-KEY-ID": settings.ALPACA_API_KEY,
-            "APCA-API-SECRET-KEY": settings.ALPACA_SECRET_KEY,
+            "APCA-API-KEY-ID": self._api_key,
+            "APCA-API-SECRET-KEY": self._secret_key,
         }
 
         url = f"{settings.ALPACA_TRADE_URL}/v2/account/activities"
