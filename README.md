@@ -133,6 +133,25 @@ python main.py
 
 ---
 
+## API Dashboard
+
+The API server runs **separately** from the scheduler and serves snapshot
+data to the React dashboard.
+
+```bash
+# Start the API server (default: localhost:8000)
+python api/run.py
+
+# Custom port
+python api/run.py --port 3001
+```
+
+Endpoints: `/api/health`, `/api/portfolio`, `/api/context`,
+`/api/circuit-breakers`, `/api/decisions`, `/api/decisions/stats`,
+`/api/performance`, `/api/regime-history`.
+
+---
+
 ## Development Workflow
 
 ```
