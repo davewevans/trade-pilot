@@ -1,0 +1,37 @@
+# Sensitive env vars (API keys) must be set manually in the
+# Render dashboard under Environment. Never commit API keys to
+# this file or any file in the repo.
+
+services:
+  - type: worker
+    name: trade-pilot
+    runtime: python
+    region: ohio          # US East — closest to US markets
+    plan: starter         # $7/mo — required for background workers
+    buildCommand: pip install -r requirements.txt
+    startCommand: python main.py
+
+    # Persistent disk for journal, reports, and logs
+    disk:
+      name: trade-pilot-data
+      mountPath: /data
+      sizeGB: 1           # 1GB is plenty for text files
+
+    envVars:
+      - key: RENDER
+        value: true
+      - key: DATA_DIR
+        value: /data
+      - key: PYTHON_VERSION
+        value: 3.11.0
+      - key: TZ
+        value: UTC         # Render server runs UTC, scheduler adjusts
+
+      # These are set manually in Render dashboard (not in this file):
+      # ALPACA_API_KEY
+      # ALPACA_SECRET_KEY
+      # ALPACA_PAPER
+      # ANTHROPIC_API_KEY
+      # FRED_API_KEY
+      # WATCHLIST
+      # DRY_RUN

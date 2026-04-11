@@ -1,0 +1,328 @@
+"""Wheel strategy implementation: CSP → assignment → CC → called away → repeat."""
+
+import json
+import logging
+import os
+from datetime import date, datetime, timedelta
+from enum import Enum
+
+from brokers.base import BaseBroker
+from data import market_data
+
+logger = logging.getLogger(__name__)
+
+STATE_FILE = os.path.join(os.path.dirname(__file__), "..", "data", "wheel_state.json")
+
+# OCC symbols encode type at a fixed position: C = call, P = put.
+# Format: ROOT(6) + YYMMDD(6) + C/P(1) + strike*1000(8)
+_OCC_TYPE_OFFSET = 6 + 6  # 12th character (0-indexed)
+
+
+class WheelState(str, Enum):
+    """Possible states in the wheel strategy lifecycle."""
+
+    IDLE = "IDLE"              # No position — ready to sell a CSP
+    SHORT_PUT = "SHORT_PUT"    # Cash-secured put is open
+    LONG_STOCK = "LONG_STOCK"  # Put was assigned — holding 100 shares
+    SHORT_CALL = "SHORT_CALL"  # Covered call is open against the shares
+
+
+class WheelStrategy:
+    """Manages the wheel strategy lifecycle for a single underlying symbol.
+
+    The wheel cycles through four states:
+        IDLE → SHORT_PUT → (assignment) → LONG_STOCK → SHORT_CALL → (called away) → IDLE
+
+    State is persisted to a local JSON file so the bot can resume after restart.
+    Actual broker positions always take precedence over the saved state.
+    """
+
+    def __init__(self, broker: BaseBroker):
+        """Initialise the strategy with a broker and optional data client.
+
+        Args:
+            broker: A concrete BaseBroker implementation (e.g. AlpacaBroker).
+        """
+        self.broker = broker
+        self.symbol: str | None = None
+        self.state: WheelState = WheelState.IDLE
+        self.open_position: dict | None = None
+
+        self._load_state()
+
+    # ── state persistence ────────────────────────────────────
+
+    def _load_state(self) -> None:
+        """Load persisted state from wheel_state.json if it exists."""
+        if not os.path.exists(STATE_FILE):
+            logger.info("No state file found at %s — starting fresh", STATE_FILE)
+            return
+
+        try:
+            with open(STATE_FILE, "r") as f:
+                data = json.load(f)
+            self.symbol = data.get("symbol")
+            self.state = WheelState(data.get("state", "IDLE"))
+            self.open_position = data.get("open_position")
+            logger.info(
+                "Loaded state: symbol=%s state=%s", self.symbol, self.state.value
+            )
+        except (json.JSONDecodeError, ValueError):
+            logger.exception("Corrupt state file — resetting to IDLE")
+            self.state = WheelState.IDLE
+
+    def save_state(self) -> None:
+        """Persist current state to wheel_state.json."""
+        data = {
+            "symbol": self.symbol,
+            "state": self.state.value,
+            "open_position": self.open_position,
+            "updated_at": datetime.now().isoformat(),
+        }
+        os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
+        with open(STATE_FILE, "w") as f:
+            json.dump(data, f, indent=2, default=str)
+        logger.info("State saved: symbol=%s state=%s", self.symbol, self.state.value)
+
+    # ── state reconciliation ─────────────────────────────────
+
+    def get_current_state(self, symbol: str) -> WheelState:
+        """Determine the real wheel state by inspecting broker positions and orders.
+
+        Actual positions always win over the persisted state file.
+
+        Logic:
+            1. If there are open option orders for this symbol → check type
+            2. If there is an open put position → SHORT_PUT
+            3. If there is an open call position → SHORT_CALL
+            4. If there is an equity/stock position of ≥100 shares → LONG_STOCK
+            5. Otherwise → IDLE
+
+        Args:
+            symbol: The underlying ticker (e.g. "SPY").
+
+        Returns:
+            The reconciled WheelState.
+        """
+        self.symbol = symbol
+        root = symbol.upper()
+
+        # Check option positions
+        option_positions = self.broker.get_positions()
+        for pos in option_positions:
+            pos_symbol = (pos.get("symbol") or "").upper()
+            if not pos_symbol.startswith(root):
+                continue
+
+            qty = float(pos.get("qty") or 0)
+            occ_type = self._occ_option_type(pos_symbol)
+
+            if occ_type == "P" and qty < 0:
+                self.state = WheelState.SHORT_PUT
+                self.open_position = pos
+                self.save_state()
+                logger.info("Reconciled state → SHORT_PUT (short put position found)")
+                return self.state
+
+            if occ_type == "C" and qty < 0:
+                self.state = WheelState.SHORT_CALL
+                self.open_position = pos
+                self.save_state()
+                logger.info("Reconciled state → SHORT_CALL (short call position found)")
+                return self.state
+
+        # Check for stock position (assignment would create equity holding)
+        try:
+            stock_pos = self.broker.get_position(root)
+            qty = float(stock_pos.get("qty") or 0)
+            if qty >= 100:
+                self.state = WheelState.LONG_STOCK
+                self.open_position = stock_pos
+                self.save_state()
+                logger.info("Reconciled state → LONG_STOCK (%s shares)", qty)
+                return self.state
+        except Exception:
+            pass  # No stock position — that's fine
+
+        # No relevant positions found
+        self.state = WheelState.IDLE
+        self.open_position = None
+        self.save_state()
+        logger.info("Reconciled state → IDLE (no positions for %s)", symbol)
+        return self.state
+
+    # ── context building ─────────────────────────────────────
+
+    def build_context(self, symbol: str) -> dict:
+        """Assemble the full context dict for Claude to make a decision.
+
+        Gathers account info, current positions, technicals, the relevant
+        option chain slice, earnings date, and IV rank. Each section is
+        clearly labelled so it can be used as a structured prompt body.
+
+        Args:
+            symbol: The underlying ticker (e.g. "SPY").
+
+        Returns:
+            Dict with sections: account, wheel_state, positions, technicals,
+            option_chain_puts, option_chain_calls, earnings, iv_rank.
+        """
+        self.symbol = symbol
+        today = date.today()
+        min_dte = today + timedelta(days=14)
+        max_dte = today + timedelta(days=35)
+
+        # ── account ──────────────────────────────────────────
+        account = self.broker.get_account()
+
+        # ── current state ────────────────────────────────────
+        current_state = self.get_current_state(symbol)
+
+        # ── open positions & orders ──────────────────────────
+        positions = self.broker.get_positions()
+        open_orders = self.broker.get_orders(status="open")
+
+        # ── technicals ───────────────────────────────────────
+        try:
+            technicals = market_data.get_stock_technicals(symbol)
+        except Exception:
+            logger.exception("Failed to fetch technicals for %s", symbol)
+            technicals = {}
+
+        current_price = technicals.get("current_price", 0)
+
+        # ── option chain: filter to 14-35 DTE, ±5% strike ───
+        strike_low = current_price * 0.95
+        strike_high = current_price * 1.05
+
+        put_chain = self._filter_chain(
+            symbol, "put", min_dte, max_dte, strike_low, strike_high
+        )
+        call_chain = self._filter_chain(
+            symbol, "call", min_dte, max_dte, strike_low, strike_high
+        )
+
+        # ── earnings ─────────────────────────────────────────
+        earnings_date = market_data.get_earnings_date(symbol)
+
+        # ── IV rank ──────────────────────────────────────────
+        try:
+            iv_rank = market_data.get_iv_rank(symbol)
+        except Exception:
+            logger.exception("Failed to compute IV rank for %s", symbol)
+            iv_rank = None
+
+        return {
+            "account": {
+                "buying_power": account.get("buying_power"),
+                "cash": account.get("cash"),
+                "options_trading_level": account.get("options_trading_level"),
+            },
+            "wheel_state": {
+                "symbol": symbol,
+                "state": current_state.value,
+                "open_position": self.open_position,
+            },
+            "positions": positions,
+            "open_orders": open_orders,
+            "technicals": technicals,
+            "option_chain_puts": put_chain,
+            "option_chain_calls": call_chain,
+            "earnings": {
+                "next_earnings_date": earnings_date,
+                "days_until_earnings": (
+                    (date.fromisoformat(earnings_date) - today).days
+                    if earnings_date
+                    else None
+                ),
+            },
+            "iv_rank": iv_rank,
+            "metadata": {
+                "symbol": symbol,
+                "timestamp": datetime.now().isoformat(),
+                "dte_range": f"{min_dte} to {max_dte}",
+                "strike_range": f"{strike_low:.2f} to {strike_high:.2f}",
+            },
+        }
+
+    # ── helpers ──────────────────────────────────────────────
+
+    def _filter_chain(
+        self,
+        symbol: str,
+        option_type: str,
+        min_exp: date,
+        max_exp: date,
+        strike_low: float,
+        strike_high: float,
+    ) -> list[dict]:
+        """Fetch option contracts and enrich with snapshot data.
+
+        Args:
+            symbol: Underlying ticker.
+            option_type: "call" or "put".
+            min_exp: Earliest acceptable expiration date.
+            max_exp: Latest acceptable expiration date.
+            strike_low: Minimum strike price.
+            strike_high: Maximum strike price.
+
+        Returns:
+            List of contract dicts with snapshot data merged in.
+        """
+        contracts = self.broker.get_option_contracts(
+            underlying_symbol=symbol, option_type=option_type
+        )
+
+        # Filter to DTE window and strike range
+        filtered = []
+        for c in contracts:
+            exp = c.get("expiration_date", "")
+            try:
+                exp_date = date.fromisoformat(exp)
+            except ValueError:
+                continue
+
+            strike = c.get("strike_price", 0)
+            if min_exp <= exp_date <= max_exp and strike_low <= strike <= strike_high:
+                filtered.append(c)
+
+        if not filtered:
+            return []
+
+        # Enrich with snapshot data (bid/ask, greeks, IV)
+        occ_symbols = [c["symbol"] for c in filtered]
+        try:
+            snapshots = market_data.get_option_snapshot(occ_symbols)
+        except Exception:
+            logger.exception("Failed to fetch snapshots for %s chain", option_type)
+            return filtered  # return contracts without snapshot data
+
+        for c in filtered:
+            snap = snapshots.get(c["symbol"], {})
+            c["snapshot"] = snap
+
+        return filtered
+
+    @staticmethod
+    def _occ_option_type(occ_symbol: str) -> str | None:
+        """Extract 'C' or 'P' from an OCC option symbol.
+
+        OCC format: ROOT(padded to 6) + YYMMDD(6) + C/P(1) + strike*1000(8)
+        Example: SPY   260417P00540000
+
+        Args:
+            occ_symbol: The OCC-format option symbol.
+
+        Returns:
+            'C' for call, 'P' for put, or None if unrecognised.
+        """
+        # Walk backwards from position 12 to handle variable-length roots
+        for i, ch in enumerate(occ_symbol):
+            if ch.isdigit():
+                # Found start of YYMMDD — type char is 6 positions later
+                type_idx = i + 6
+                if type_idx < len(occ_symbol):
+                    t = occ_symbol[type_idx].upper()
+                    return t if t in ("C", "P") else None
+                break
+        return None

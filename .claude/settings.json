@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash",
+      "Edit",
+      "Write",
+      "Glob",
+      "Grep",
+      "Read",
+      "mcp__alpaca-main",
+      "mcp__alpaca-wheel"
+    ]
+  }
+}

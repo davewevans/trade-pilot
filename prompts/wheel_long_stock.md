@@ -1,0 +1,22 @@
+## Current Phase: LONG_STOCK — Own Shares, Looking for a Covered Call
+
+You currently own 100 shares from a put assignment. Your task is to 
+evaluate whether to sell a covered call against those shares.
+
+The equity position is in context under "positions".
+Your cost basis (what you paid per share) is in the position data.
+
+Work through this decision:
+1. Is the stock in an acceptable condition to sell a CC?
+   - Has it deteriorated significantly since assignment?
+   - Are earnings within 21 days? If so → wait, do not sell CC yet
+2. Check the call chain — does any contract meet ALL CC criteria?
+   - Strike must be ABOVE your cost basis
+   - Strike should be above the upper Bollinger Band
+   - Delta: 0.20 to 0.35
+   - DTE: 21-35 days
+3. If yes → recommend sell_call with the best qualifying contract
+4. If no → recommend hold with explanation
+
+Set limit_price to the midpoint of bid and ask, rounded to nearest $0.05.
+Never recommend a strike below cost basis — that would lock in a loss.

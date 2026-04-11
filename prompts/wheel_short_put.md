@@ -1,0 +1,21 @@
+## Current Phase: SHORT_PUT — Managing an Open Cash-Secured Put
+
+You currently have an open short put position. Your task is to evaluate 
+whether to hold, roll, or close the position early for profit.
+
+The current position details are in context under "positions".
+The current option snapshot (including live Greeks) is under "option_chain".
+
+Work through this decision:
+1. Calculate how much delta has changed since the position was opened
+   - If current abs(delta) >= 2x initial abs(delta) → consider rolling
+2. Calculate current premium as % of initial credit
+   - If current price <= 50% of initial credit → consider closing for profit
+3. Check DTE remaining
+   - If DTE <= 7 and position is profitable → close now (gamma risk)
+   - If DTE <= 7 and position is at risk → roll out to next expiry
+4. Check if earnings are approaching within the new expiry window
+5. If none of the above trigger → hold
+
+For a roll: find the best replacement contract in the put chain.
+Target: same or lower strike, 21-35 DTE out, net credit if possible.

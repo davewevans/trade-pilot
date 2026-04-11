@@ -1,0 +1,12 @@
+alpaca-py
+anthropic
+schwab-py
+python-dotenv
+pandas
+pytz
+numpy
+yfinance
+ta
+requests
+fredapi
+schedule
