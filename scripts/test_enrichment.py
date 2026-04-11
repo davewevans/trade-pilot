@@ -17,7 +17,7 @@ logger = logging.getLogger("test-enrichment")
 
 SYMBOL = "AAPL"
 PASS_COUNT = 0
-TOTAL = 6
+TOTAL = 10
 
 
 def section(num: int, title: str) -> None:
@@ -149,6 +149,81 @@ def main() -> None:
             failed("ContextBuilder.build", "technicals or macro is None")
     except Exception as e:
         failed("ContextBuilder.build", str(e))
+        logger.exception("  Details:")
+
+    # ── 7. ORATS Summary ────────────────────────────────────
+    section(7, f"get_orats_summary('{SYMBOL}')")
+    try:
+        from data.market_data import get_orats_summary
+        summary = get_orats_summary(SYMBOL)
+        if summary is not None:
+            logger.info("  IV Rank (1y):       %.1f", summary.get("iv_rank_1y") or 0)
+            logger.info("  IV Percentile (1y): %.1f", summary.get("iv_pct_1y") or 0)
+            from data.orats_client import ORATSClient
+            logger.info("  IV Environment:     %s",
+                        ORATSClient.classify_iv_environment(summary.get("iv_rank_1y")))
+            logger.info("  ATM IV M1:          %.3f", summary.get("atm_iv_m1") or 0)
+            logger.info("  ATM IV M2:          %.3f", summary.get("atm_iv_m2") or 0)
+            logger.info("  Term slope M1-M2:   %.4f", summary.get("term_structure_slope") or 0)
+            logger.info("  Skew M1:            %.4f", summary.get("skew_m1") or 0)
+            logger.info("  Implied move:       %.2f%%", summary.get("implied_move_pct") or 0)
+            if summary.get("iv_rank_1y") is not None:
+                passed("get_orats_summary")
+            else:
+                failed("get_orats_summary", "iv_rank_1y is None")
+        else:
+            failed("get_orats_summary", "returned None -- check ORATS_API_KEY in .env")
+    except Exception as e:
+        failed("get_orats_summary", str(e))
+        logger.exception("  Details:")
+
+    # ── 8. Finnhub Earnings ──────────────────────────────────
+    section(8, f"get_earnings_calendar('{SYMBOL}')")
+    try:
+        from data.market_data import get_earnings_calendar
+        ec = get_earnings_calendar(SYMBOL)
+        logger.info("  Source:          %s", ec.get("source"))
+        logger.info("  Earnings date:   %s", ec.get("next_earnings_date"))
+        logger.info("  Days to earn:    %s", ec.get("days_to_earnings"))
+        logger.info("  EPS estimate:    %s", ec.get("eps_estimate"))
+        if ec.get("source") != "unavailable":
+            passed("get_earnings_calendar")
+        else:
+            failed("get_earnings_calendar", "both Finnhub and yfinance returned nothing")
+    except Exception as e:
+        failed("get_earnings_calendar", str(e))
+        logger.exception("  Details:")
+
+    # ── 9. VIX Term Structure ────────────────────────────────
+    section(9, "get_vix_term_structure()")
+    try:
+        from data.market_data import get_vix_term_structure
+        ts = get_vix_term_structure()
+        logger.info("  VIX9D:    %s", ts.get("vix9d"))
+        logger.info("  VIX:      %s", ts.get("vix_spot"))
+        logger.info("  VIX3M:    %s", ts.get("vix3m"))
+        logger.info("  VIX6M:    %s", ts.get("vix6m"))
+        logger.info("  Contango: %s", ts.get("contango"))
+        logger.info("  Term slope (spot->3m): %s", ts.get("term_slope_m1_m3"))
+        if ts.get("vix_spot") is not None:
+            passed("get_vix_term_structure")
+        else:
+            failed("get_vix_term_structure", "vix_spot is None")
+    except Exception as e:
+        failed("get_vix_term_structure", str(e))
+        logger.exception("  Details:")
+
+    # ── 10. Ex-Dividend Date ─────────────────────────────────
+    section(10, f"get_ex_dividend_date('{SYMBOL}')")
+    try:
+        from data.market_data import get_ex_dividend_date
+        exdiv = get_ex_dividend_date(SYMBOL)
+        logger.info("  Ex-div date:  %s", exdiv.get("next_ex_dividend_date"))
+        logger.info("  Days to ex:   %s", exdiv.get("days_to_ex_dividend"))
+        logger.info("  Div yield:    %s", exdiv.get("annual_dividend_yield"))
+        passed("get_ex_dividend_date")
+    except Exception as e:
+        failed("get_ex_dividend_date", str(e))
         logger.exception("  Details:")
 
     # ── Summary ─────────────────────────────────────────────

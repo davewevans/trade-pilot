@@ -175,24 +175,18 @@ def start_option_stream(symbols: list[str], on_quote, on_trade) -> None:
 
 
 def get_vix() -> float | None:
-    """Return the latest VIXY close price as a VIX proxy.
+    """Return the current VIX index value via yfinance.
 
-    Tries the latest bar first, then falls back to the latest trade price.
-    Returns None on failure.
+    Uses the actual ^VIX index, not VIXY (which drifts due to
+    futures roll decay). Returns None on failure.
     """
     try:
-        request = StockLatestBarRequest(symbol_or_symbols="VIXY")
-        bars = _stock_client.get_stock_latest_bar(request)
-        return float(bars["VIXY"].close)
+        vix_data = yf.Ticker("^VIX").fast_info
+        vix = float(vix_data["last_price"])
+        logger.info("Fetched ^VIX: %.2f", vix)
+        return vix
     except Exception:
-        logger.debug("Latest bar failed for VIXY, trying latest trade", exc_info=True)
-
-    try:
-        request = StockLatestTradeRequest(symbol_or_symbols="VIXY")
-        trades = _stock_client.get_stock_latest_trade(request)
-        return float(trades["VIXY"].price)
-    except Exception:
-        logger.warning("Failed to fetch VIXY price", exc_info=True)
+        logger.warning("Failed to fetch ^VIX via yfinance", exc_info=True)
         return None
 
 
@@ -205,6 +199,155 @@ def interpret_vix(vix: float) -> str:
     if vix < 35:
         return "elevated"
     return "extreme"
+
+
+# ── VIX term structure ──────────────────────────────────────
+
+_vix_term_cache: dict | None = None
+_vix_term_timestamp: float = 0.0
+_VIX_TERM_TTL = 15 * 60
+
+
+def get_vix_term_structure() -> dict:
+    """Return the VIX term structure across multiple timeframes."""
+    global _vix_term_cache, _vix_term_timestamp
+
+    if _vix_term_cache is not None and time.monotonic() - _vix_term_timestamp < _VIX_TERM_TTL:
+        return _vix_term_cache
+
+    symbols = {"vix9d": "^VIX9D", "vix_spot": "^VIX", "vix3m": "^VIX3M", "vix6m": "^VIX6M"}
+    values: dict = {}
+    for key, ticker_sym in symbols.items():
+        try:
+            values[key] = float(yf.Ticker(ticker_sym).fast_info["last_price"])
+        except Exception:
+            logger.debug("Could not fetch %s", ticker_sym)
+            values[key] = None
+
+    vix_spot = values.get("vix_spot")
+    vix3m = values.get("vix3m")
+    vix9d = values.get("vix9d")
+
+    contango = (vix_spot < vix3m) if vix_spot is not None and vix3m is not None else None
+    vix9d_vs_spot = round(vix9d - vix_spot, 2) if vix9d is not None and vix_spot is not None else None
+    term_slope_m1_m3 = round(vix3m - vix_spot, 2) if vix_spot is not None and vix3m is not None else None
+
+    result = {
+        **values,
+        "contango": contango,
+        "vix9d_vs_spot": vix9d_vs_spot,
+        "term_slope_m1_m3": term_slope_m1_m3,
+    }
+    _vix_term_cache = result
+    _vix_term_timestamp = time.monotonic()
+    logger.info("VIX term structure: %s", result)
+    return result
+
+
+# ── Ex-dividend ────────────────────────────────────────────
+
+_exdiv_cache: dict[str, tuple[float, dict]] = {}
+_EXDIV_TTL = 12 * 3600
+
+
+def get_ex_dividend_date(symbol: str) -> dict:
+    """Return the next ex-dividend date for a symbol via yfinance."""
+    cached = _exdiv_cache.get(symbol)
+    if cached:
+        ts, data = cached
+        if time.monotonic() - ts < _EXDIV_TTL:
+            return data
+
+    try:
+        from datetime import date as date_type
+
+        ticker = yf.Ticker(symbol)
+        info = ticker.info or {}
+
+        ex_date_ts = info.get("exDividendDate")
+        next_ex_div = None
+        days_to_ex_div = None
+        if ex_date_ts:
+            try:
+                ex_date = pd.Timestamp(ex_date_ts, unit="s").date()
+                today = date_type.today()
+                if ex_date >= today:
+                    next_ex_div = str(ex_date)
+                    days_to_ex_div = (ex_date - today).days
+            except Exception:
+                logger.debug("Could not parse ex_dividend_date for %s", symbol)
+
+        div_yield = None
+        raw_yield = info.get("dividendYield")
+        if raw_yield is not None:
+            try:
+                div_yield = round(float(raw_yield), 4)
+            except (TypeError, ValueError):
+                pass
+
+        result = {
+            "next_ex_dividend_date": next_ex_div,
+            "days_to_ex_dividend": days_to_ex_div,
+            "annual_dividend_yield": div_yield,
+        }
+        _exdiv_cache[symbol] = (time.monotonic(), result)
+        return result
+
+    except Exception:
+        logger.warning("Failed to fetch ex-dividend info for %s", symbol, exc_info=True)
+        return {"next_ex_dividend_date": None, "days_to_ex_dividend": None, "annual_dividend_yield": None}
+
+
+# ── ORATS + Finnhub integration ────────────────────────────
+
+
+def get_orats_summary(symbol: str) -> dict | None:
+    """Return the full ORATS analytics summary for a symbol."""
+    if not settings.ORATS_API_KEY:
+        logger.warning("ORATS_API_KEY not set — IV analytics unavailable")
+        return None
+    try:
+        from data.orats_client import ORATSClient
+
+        return ORATSClient().get_summary(symbol)
+    except Exception:
+        logger.warning("ORATS summary failed for %s", symbol, exc_info=True)
+        return None
+
+
+def get_earnings_calendar(symbol: str) -> dict:
+    """Return upcoming earnings from Finnhub (yfinance fallback)."""
+    if settings.FINNHUB_API_KEY:
+        try:
+            from data.finnhub_client import FinnhubClient
+
+            result = FinnhubClient().get_next_earnings(symbol)
+            if result and result.get("next_earnings_date"):
+                return {**result, "source": "finnhub"}
+        except Exception:
+            logger.warning("Finnhub earnings failed for %s, trying yfinance", symbol, exc_info=True)
+
+    try:
+        from datetime import date
+
+        earnings_date = get_earnings_date(symbol)
+        if earnings_date:
+            ed = date.fromisoformat(earnings_date)
+            days = (ed - date.today()).days
+            return {
+                "next_earnings_date": earnings_date,
+                "days_to_earnings": days,
+                "eps_estimate": None,
+                "revenue_estimate": None,
+                "source": "yfinance",
+            }
+    except Exception:
+        logger.warning("yfinance earnings fallback failed for %s", symbol, exc_info=True)
+
+    return {
+        "next_earnings_date": None, "days_to_earnings": None,
+        "eps_estimate": None, "revenue_estimate": None, "source": "unavailable",
+    }
 
 
 # ── Earnings & technicals ────────────────────────────────────
@@ -516,46 +659,13 @@ def get_risk_free_rate() -> float:
 
 
 def get_iv_rank(symbol: str) -> float | None:
-    """Calculate a simple IV rank proxy using the option chain over 52 weeks.
+    """Return the 1-year IV rank for a symbol.
 
-    Fetches the current ATM implied volatility from the option chain snapshot
-    and compares it against the 52-week high/low IV from yfinance option history.
-    Returns a 0-100 value, or None if insufficient data.
+    Delegates to ORATS (professional-grade, true 52-week ATM IV rank).
+    Falls back to None if ORATS is unavailable.
     """
-    try:
-        ticker = yf.Ticker(symbol)
-        expirations = ticker.options
-        if not expirations:
-            logger.warning("No option expirations found for %s", symbol)
-            return None
-
-        # Gather IV values across all available expirations
-        iv_values = []
-        for exp in expirations:
-            try:
-                chain = ticker.option_chain(exp)
-                calls_iv = chain.calls["impliedVolatility"].dropna()
-                puts_iv = chain.puts["impliedVolatility"].dropna()
-                iv_values.extend(calls_iv.tolist())
-                iv_values.extend(puts_iv.tolist())
-            except Exception:
-                continue
-
-        if len(iv_values) < 10:
-            logger.warning("Insufficient IV data for %s: %d values", symbol, len(iv_values))
-            return None
-
-        iv_array = np.array(iv_values)
-        current_iv = float(np.median(iv_array))
-        iv_low = float(np.percentile(iv_array, 5))
-        iv_high = float(np.percentile(iv_array, 95))
-
-        if iv_high == iv_low:
-            return 50.0
-
-        iv_rank = ((current_iv - iv_low) / (iv_high - iv_low)) * 100
-        return round(max(0.0, min(100.0, iv_rank)), 2)
-
-    except Exception:
-        logger.exception("Failed to compute IV rank for %s", symbol)
-        return None
+    summary = get_orats_summary(symbol)
+    if summary is not None:
+        return summary.get("iv_rank_1y")
+    logger.warning("IV rank unavailable for %s (ORATS returned None)", symbol)
+    return None

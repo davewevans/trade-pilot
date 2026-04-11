@@ -40,6 +40,12 @@ class Settings:
 
         self.FRED_API_KEY: str = self._require("FRED_API_KEY")
 
+        # ORATS — IV rank, skew, term structure, expected move
+        self.ORATS_API_KEY: str = os.getenv("ORATS_API_KEY", "")
+
+        # Finnhub — earnings calendar (free tier: 60 req/min)
+        self.FINNHUB_API_KEY: str = os.getenv("FINNHUB_API_KEY", "")
+
         # --- Environment / deployment mode ---
         self.RENDER: bool = os.getenv("RENDER", "false").lower() == "true"
 

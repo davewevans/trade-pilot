@@ -68,17 +68,24 @@ class ContextBuilder:
             "option_chain": None,
             "news": None,
             "recent_trades": None,
+            "volatility": None,
+            "earnings": None,
+            "ex_dividend": None,
         }
 
         # ── Parallel fetches ────────────────────────────────
         futures: dict = {}
-        with ThreadPoolExecutor(max_workers=5) as pool:
+        with ThreadPoolExecutor(max_workers=8) as pool:
             futures["technicals"] = pool.submit(market_data.get_stock_technicals, symbol)
             futures["fundamentals"] = pool.submit(market_data.get_fundamentals, symbol)
             futures["vix"] = pool.submit(market_data.get_vix)
             futures["fear_greed"] = pool.submit(market_data.get_fear_greed_index)
             futures["risk_free_rate"] = pool.submit(market_data.get_risk_free_rate)
             futures["news"] = pool.submit(_fetch_news, symbol)
+            futures["orats_summary"] = pool.submit(market_data.get_orats_summary, symbol)
+            futures["earnings"] = pool.submit(market_data.get_earnings_calendar, symbol)
+            futures["vix_term"] = pool.submit(market_data.get_vix_term_structure)
+            futures["ex_dividend"] = pool.submit(market_data.get_ex_dividend_date, symbol)
 
         results: dict = {}
         for key, future in futures.items():
@@ -92,15 +99,69 @@ class ContextBuilder:
         context["fundamentals"] = results["fundamentals"]
         context["news"] = results["news"]
 
+        # ── ORATS volatility analytics ──────────────────────
+        orats = results.get("orats_summary")
+        if orats:
+            from data.orats_client import ORATSClient
+            iv_env = ORATSClient.classify_iv_environment(orats.get("iv_rank_1y"))
+        else:
+            iv_env = "UNKNOWN"
+
+        context["volatility"] = {
+            "iv_rank_1y": orats.get("iv_rank_1y") if orats else None,
+            "iv_rank_1m": orats.get("iv_rank_1m") if orats else None,
+            "iv_pct_1y": orats.get("iv_pct_1y") if orats else None,
+            "iv_pct_1m": orats.get("iv_pct_1m") if orats else None,
+            "iv_environment": iv_env,
+            "atm_iv_m1": orats.get("atm_iv_m1") if orats else None,
+            "atm_iv_m2": orats.get("atm_iv_m2") if orats else None,
+            "atm_iv_m3": orats.get("atm_iv_m3") if orats else None,
+            "atm_iv_m4": orats.get("atm_iv_m4") if orats else None,
+            "term_structure_slope": orats.get("term_structure_slope") if orats else None,
+            "skew_m1": orats.get("skew_m1") if orats else None,
+            "skew_m2": orats.get("skew_m2") if orats else None,
+            "implied_move_pct": orats.get("implied_move_pct") if orats else None,
+            "forecast_move_pct": orats.get("forecast_move_pct") if orats else None,
+            "orats_available": orats is not None,
+        }
+        # Backward compat: iv_rank at top level for existing prompts
+        context["iv_rank"] = context["volatility"]["iv_rank_1y"]
+        context["iv_environment"] = iv_env
+
+        # ── Earnings (Finnhub primary, yfinance fallback) ───
+        earnings_data = results.get("earnings") or {}
+        context["earnings"] = {
+            "next_earnings_date": earnings_data.get("next_earnings_date"),
+            "days_to_earnings": earnings_data.get("days_to_earnings"),
+            "eps_estimate": earnings_data.get("eps_estimate"),
+            "revenue_estimate": earnings_data.get("revenue_estimate"),
+            "source": earnings_data.get("source", "unavailable"),
+        }
+
+        # ── Ex-dividend (for bear call spread assignment risk) ──
+        ex_div = results.get("ex_dividend") or {}
+        context["ex_dividend"] = {
+            "next_ex_dividend_date": ex_div.get("next_ex_dividend_date"),
+            "days_to_ex_dividend": ex_div.get("days_to_ex_dividend"),
+            "annual_dividend_yield": ex_div.get("annual_dividend_yield"),
+        }
+
         # ── Macro ───────────────────────────────────────────
         vix = results["vix"]
         fg = results["fear_greed"] or {}
+        vix_term = results.get("vix_term") or {}
         context["macro"] = {
             "vix": vix,
             "vix_regime": market_data.interpret_vix(vix) if vix is not None else None,
             "fear_greed_score": fg.get("score"),
             "fear_greed_rating": fg.get("rating"),
             "risk_free_rate": results["risk_free_rate"],
+            "vix9d": vix_term.get("vix9d"),
+            "vix3m": vix_term.get("vix3m"),
+            "vix6m": vix_term.get("vix6m"),
+            "vix_contango": vix_term.get("contango"),
+            "vix9d_vs_spot": vix_term.get("vix9d_vs_spot"),
+            "vix_term_slope": vix_term.get("term_slope_m1_m3"),
         }
 
         # ── Broker data (sequential — same client) ─────────
