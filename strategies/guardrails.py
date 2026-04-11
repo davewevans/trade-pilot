@@ -223,6 +223,63 @@ class Guardrails:
 
         return True, ""
 
+    # ── bear call spread entry ─────────────────────────────
+
+    def validate_bear_call_spread_entry(
+        self,
+        decision: dict,
+        context: dict,
+        account: dict,
+        open_spreads: list | None = None,
+    ) -> tuple[bool, str]:
+        """Hard rules for bear call spread entry."""
+        limit_price = decision.get("limit_price")
+        if limit_price is not None and limit_price >= 0:
+            return False, f"limit_price must be negative for credit spread, got {limit_price}"
+
+        net_credit = decision.get("net_credit", 0)
+        if net_credit <= 0.25:
+            return False, f"Net credit ${net_credit} <= $0.25 minimum"
+
+        max_loss = decision.get("max_loss", 0)
+        buying_power = float(account.get("buying_power", 0))
+        if buying_power > 0 and max_loss > buying_power * 0.02:
+            return (
+                False,
+                f"Max loss ${max_loss:,.0f} exceeds 2% of buying power "
+                f"${buying_power * 0.02:,.0f}",
+            )
+
+        dte = decision.get("dte")
+        if dte is not None and (dte < 20 or dte > 45):
+            return False, f"DTE {dte} outside allowed range 20-45"
+
+        for key in ("short_call_symbol", "long_call_symbol"):
+            sym = decision.get(key, "")
+            if not _OCC_CALL_RE.match(sym):
+                return False, f"Invalid OCC call symbol for {key}: {sym!r}"
+
+        underlying = self._extract_root(decision.get("short_call_symbol", ""))
+        if open_spreads:
+            for s in open_spreads:
+                if (
+                    s.get("underlying", "").upper() == underlying.upper()
+                    and s.get("status") == "open"
+                ):
+                    return False, f"Already have an open bear call spread on {underlying}"
+
+        fund = context.get("fundamentals") or {}
+        dte_earnings = fund.get("days_to_earnings")
+        if dte_earnings is not None and dte_earnings <= 21:
+            return False, f"Earnings in {dte_earnings} days (hard block: need > 21)"
+
+        # Ex-dividend within DTE window
+        days_ex = fund.get("days_to_ex_dividend")
+        if days_ex is not None and dte is not None and days_ex <= dte:
+            return False, f"Ex-dividend in {days_ex} days within DTE {dte} — early assignment risk"
+
+        return True, ""
+
     # ── bull put spread entry ──────────────────────────────
 
     def validate_bull_put_spread_entry(

@@ -213,6 +213,7 @@ _FUNDAMENTALS_KEYS = [
     "next_earnings_date", "days_to_earnings", "pe_ratio", "market_cap",
     "sector", "industry", "avg_volume", "fifty_two_week_high",
     "fifty_two_week_low", "analyst_rating",
+    "next_ex_dividend_date", "days_to_ex_dividend",
 ]
 
 
@@ -251,6 +252,19 @@ def get_fundamentals(symbol: str) -> dict:
         except Exception:
             logger.debug("Could not parse earnings date for %s", symbol, exc_info=True)
 
+        # ── Ex-dividend date ────────────────────────────────
+        next_ex_dividend_date: str | None = None
+        days_to_ex_dividend: int | None = None
+        try:
+            ex_date_raw = info.get("exDividendDate")
+            if ex_date_raw:
+                ex_date = pd.Timestamp(ex_date_raw, unit="s").date()
+                if ex_date >= datetime.now().date():
+                    next_ex_dividend_date = str(ex_date)
+                    days_to_ex_dividend = (ex_date - datetime.now().date()).days
+        except Exception:
+            logger.debug("Could not parse ex-dividend date for %s", symbol, exc_info=True)
+
         # ── Analyst rating ──────────────────────────────────
         analyst_rating: str | None = None
         try:
@@ -272,6 +286,8 @@ def get_fundamentals(symbol: str) -> dict:
             "fifty_two_week_high": info.get("fiftyTwoWeekHigh"),
             "fifty_two_week_low": info.get("fiftyTwoWeekLow"),
             "analyst_rating": analyst_rating,
+            "next_ex_dividend_date": next_ex_dividend_date,
+            "days_to_ex_dividend": days_to_ex_dividend,
         }
 
         _fundamentals_cache[symbol] = (time.monotonic(), result)
