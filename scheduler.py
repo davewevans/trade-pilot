@@ -23,6 +23,7 @@ import schedule
 from jobs import (
     market_close,
     market_open,
+    portfolio_refresh,
     position_check,
     post_market,
     pre_close,
@@ -92,6 +93,11 @@ def register_jobs() -> None:
         schedule.every().day.at(time_str, tz=ET).do(
             _weekday_run, job_fn=fn, job_name=name,
         )
+
+    # Portfolio refresh — every 5 minutes during market hours
+    schedule.every(5).minutes.do(
+        _weekday_run, job_fn=portfolio_refresh.run, job_name="portfolio_refresh",
+    )
 
     # Weekly report — Sunday 6:00 PM ET
     schedule.every().sunday.at("18:00", tz=ET).do(

@@ -2,6 +2,7 @@
 
 import json
 import logging
+from dataclasses import asdict
 from datetime import datetime
 
 from config import settings
@@ -17,6 +18,7 @@ def run() -> None:
     from ai.claude_advisor import ClaudeAdvisor
     from brokers.broker_factory import get_broker
     from data.context_builder import ContextBuilder
+    from data.state_writer import StateWriter
     from data.trade_journal import TradeJournal
     from main import execute_decision
     from strategies.circuit_breaker import CircuitBreaker
@@ -24,6 +26,7 @@ def run() -> None:
     from strategies.wheel_strategy import WheelStrategy
 
     broker = get_broker()
+    sw = StateWriter()
 
     # ── Market-open check ───────────────────────────────────
     clock = broker.get_clock()
@@ -44,6 +47,18 @@ def run() -> None:
         "Circuit breaker: %s | Daily P&L: %.2f%% | Drawdown: %.2f%%",
         cb_status.status, cb_status.daily_pnl_pct, cb_status.drawdown_pct,
     )
+
+    # Write circuit breaker + portfolio snapshots
+    try:
+        sw.write_circuit_breaker_status(asdict(cb_status))
+    except Exception as e:
+        logger.warning("Failed to write circuit breaker snapshot: %s", e)
+
+    try:
+        positions_all = broker.get_positions()
+        sw.write_portfolio_snapshot(account, positions_all, {})
+    except Exception as e:
+        logger.warning("Failed to write portfolio snapshot: %s", e)
 
     # ── Open positions ──────────────────────────────────────
     positions = broker.get_positions()
@@ -76,6 +91,12 @@ def run() -> None:
             context = ctx_builder.build(underlying, state.value)
             logger.info(ContextBuilder.summarize_for_log(context))
 
+            # Write context snapshot
+            try:
+                sw.write_context_snapshot(context)
+            except Exception as e:
+                logger.warning("Failed to write context snapshot for %s: %s", underlying, e)
+
             decision = advisor.ask(context, state)
             action = decision.get("action", "hold")
             logger.info(
@@ -90,8 +111,31 @@ def run() -> None:
                 )
                 if not is_valid:
                     logger.warning("%s GUARDRAIL REJECTED: %s", underlying, rejection)
+
+                    try:
+                        sw.write_decision(
+                            decision_dict=decision,
+                            reasoning=decision.get("reasoning", ""),
+                            action_taken=False,
+                            underlying=underlying,
+                            guardrail_rejection=rejection,
+                        )
+                    except Exception as e:
+                        logger.warning("Failed to write decision snapshot for %s: %s", underlying, e)
+
                     report_lines.append(f"**{underlying}** — {action} REJECTED: {rejection}")
                     continue
+
+                # Write accepted decision snapshot
+                try:
+                    sw.write_decision(
+                        decision_dict=decision,
+                        reasoning=decision.get("reasoning", ""),
+                        action_taken=not settings.DRY_RUN,
+                        underlying=underlying,
+                    )
+                except Exception as e:
+                    logger.warning("Failed to write decision snapshot for %s: %s", underlying, e)
 
                 if settings.DRY_RUN:
                     logger.info("DRY RUN - would execute: %s", json.dumps(decision, default=str))
@@ -108,6 +152,17 @@ def run() -> None:
                     logger.info("%s %s executed: %s", underlying, action, order_id)
                 report_lines.append(f"**{underlying}** — {action} executed")
             else:
+                # Write hold decision snapshot
+                try:
+                    sw.write_decision(
+                        decision_dict=decision,
+                        reasoning=decision.get("reasoning", ""),
+                        action_taken=False,
+                        underlying=underlying,
+                    )
+                except Exception as e:
+                    logger.warning("Failed to write decision snapshot for %s: %s", underlying, e)
+
                 report_lines.append(f"**{underlying}** — hold")
 
         except Exception:

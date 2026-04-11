@@ -2,6 +2,7 @@
 
 import json
 import logging
+from dataclasses import asdict
 
 from config import settings
 from jobs._report import append_section
@@ -22,6 +23,7 @@ def run() -> None:
     from ai.claude_advisor import ClaudeAdvisor
     from brokers.broker_factory import get_broker
     from data.context_builder import ContextBuilder
+    from data.state_writer import StateWriter
     from data.trade_journal import TradeJournal
     from main import execute_decision
     from strategies.circuit_breaker import CircuitBreaker
@@ -29,6 +31,7 @@ def run() -> None:
     from strategies.wheel_strategy import WheelStrategy
 
     broker = get_broker()
+    sw = StateWriter()
 
     # ── Market-open check ───────────────────────────────────
     clock = broker.get_clock()
@@ -41,6 +44,12 @@ def run() -> None:
     account = broker.get_account()
     equity = float(account.get("portfolio_value", 0))
     cb_status = cb.update(equity)
+
+    # Write circuit breaker snapshot
+    try:
+        sw.write_circuit_breaker_status(asdict(cb_status))
+    except Exception as e:
+        logger.warning("Failed to write circuit breaker snapshot: %s", e)
 
     # Daily reset (always on market open)
     cb.reset_daily()
@@ -72,6 +81,19 @@ def run() -> None:
     ctx_builder = ContextBuilder(broker=broker, journal=journal)
     size_multiplier = cb.get_position_size_multiplier()
 
+    # Write portfolio snapshot before decisions
+    try:
+        positions = broker.get_positions()
+        wheel_states = {}
+        for sym in settings.WATCHLIST:
+            try:
+                wheel_states[sym] = strategy.get_current_state(sym).value
+            except Exception:
+                wheel_states[sym] = "UNKNOWN"
+        sw.write_portfolio_snapshot(account, positions, wheel_states)
+    except Exception as e:
+        logger.warning("Failed to write portfolio snapshot: %s", e)
+
     report_lines: list[str] = []
 
     if size_multiplier == 0.0:
@@ -87,6 +109,12 @@ def run() -> None:
             # Build full context
             context = ctx_builder.build(symbol, state.value)
             logger.info(ContextBuilder.summarize_for_log(context))
+
+            # Write context snapshot
+            try:
+                sw.write_context_snapshot(context)
+            except Exception as e:
+                logger.warning("Failed to write context snapshot for %s: %s", symbol, e)
 
             # Ask Claude
             decision = advisor.ask(context, state)
@@ -104,6 +132,19 @@ def run() -> None:
 
             if not is_valid:
                 logger.warning("%s GUARDRAIL REJECTED: %s", symbol, rejection)
+
+                # Write rejected decision snapshot
+                try:
+                    sw.write_decision(
+                        decision_dict=decision,
+                        reasoning=decision.get("reasoning", ""),
+                        action_taken=False,
+                        underlying=symbol,
+                        guardrail_rejection=rejection,
+                    )
+                except Exception as e:
+                    logger.warning("Failed to write decision snapshot for %s: %s", symbol, e)
+
                 journal.append({
                     "symbol": decision.get("symbol"),
                     "underlying": symbol,
@@ -114,6 +155,17 @@ def run() -> None:
                 })
                 report_lines.append(f"**{symbol}** — SKIPPED (guardrail: {rejection})")
                 continue
+
+            # Write accepted decision snapshot
+            try:
+                sw.write_decision(
+                    decision_dict=decision,
+                    reasoning=decision.get("reasoning", ""),
+                    action_taken=not settings.DRY_RUN,
+                    underlying=symbol,
+                )
+            except Exception as e:
+                logger.warning("Failed to write decision snapshot for %s: %s", symbol, e)
 
             if settings.DRY_RUN:
                 logger.info("DRY RUN - would execute: %s", json.dumps(decision, default=str))
