@@ -1,7 +1,7 @@
-"""Portfolio refresh job — runs every 5 minutes during market hours.
+"""Portfolio refresh job -- runs every 5 minutes during market hours.
 
 Keeps the dashboard data fresh between decision cycles by updating
-portfolio and circuit breaker snapshots.
+portfolio, circuit breaker, and spread reconciliation snapshots.
 """
 
 import logging
@@ -15,6 +15,7 @@ def run() -> None:
     logger.debug("=== PORTFOLIO REFRESH ===")
 
     from brokers.broker_factory import get_broker
+    from data.spread_tracker import SpreadTracker
     from data.state_writer import StateWriter
     from strategies.circuit_breaker import CircuitBreaker
 
@@ -39,8 +40,23 @@ def run() -> None:
     except Exception as e:
         logger.warning("Failed to write circuit breaker snapshot: %s", e)
 
+    # ── Spread reconciliation ───────────────────────────────
+    open_spreads: list[dict] = []
     try:
-        sw.write_portfolio_snapshot(account, positions, {})
+        tracker = SpreadTracker()
+        closed_ids = tracker.reconcile_with_alpaca(positions)
+        for sid in closed_ids:
+            tracker.close_spread(sid)
+        open_spreads = tracker.to_snapshot()
+    except Exception as e:
+        logger.warning("Failed to reconcile spreads: %s", e)
+
+    # ── Portfolio snapshot (includes spreads) ────────────────
+    try:
+        sw.write_portfolio_snapshot(
+            account, positions, {},
+            open_spreads=open_spreads,
+        )
     except Exception as e:
         logger.warning("Failed to write portfolio snapshot: %s", e)
 

@@ -20,6 +20,7 @@ JOB_MODULES = {
     "pre_market": "jobs.pre_market",
     "market_open": "jobs.market_open",
     "position_check": "jobs.position_check",
+    "expiry_guard": "jobs.expiry_guard",
     "pre_close": "jobs.pre_close",
     "market_close": "jobs.market_close",
     "post_market": "jobs.post_market",

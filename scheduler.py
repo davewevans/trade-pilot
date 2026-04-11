@@ -21,6 +21,7 @@ from zoneinfo import ZoneInfo
 import schedule
 
 from jobs import (
+    expiry_guard,
     market_close,
     market_open,
     portfolio_refresh,
@@ -84,6 +85,7 @@ def register_jobs() -> None:
         ("10:00", position_check.run, "position_check"),
         ("12:00", position_check.run, "position_check"),
         ("14:00", position_check.run, "position_check"),
+        ("15:00", expiry_guard.run, "expiry_guard"),
         ("15:15", pre_close.run, "pre_close"),
         ("16:00", market_close.run, "market_close"),
         ("16:30", post_market.run, "post_market"),

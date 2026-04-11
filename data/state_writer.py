@@ -69,6 +69,7 @@ class StateWriter:
         account_data: dict,
         positions: list[dict],
         wheel_states: dict[str, str],
+        open_spreads: list[dict] | None = None,
     ) -> None:
         """Write ``snapshots/portfolio.json``."""
         try:
@@ -106,6 +107,7 @@ class StateWriter:
                 },
                 "positions": pos_list,
                 "wheel_states": wheel_states,
+                "open_spreads": open_spreads or [],
             }
 
             path = self.dir / "portfolio.json"
