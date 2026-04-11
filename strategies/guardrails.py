@@ -223,6 +223,59 @@ class Guardrails:
 
         return True, ""
 
+    # ── bull put spread entry ──────────────────────────────
+
+    def validate_bull_put_spread_entry(
+        self,
+        decision: dict,
+        context: dict,
+        account: dict,
+        open_spreads: list | None = None,
+    ) -> tuple[bool, str]:
+        """Hard rules for bull put spread entry."""
+        limit_price = decision.get("limit_price")
+        if limit_price is not None and limit_price >= 0:
+            return False, f"limit_price must be negative for credit spread, got {limit_price}"
+
+        net_credit = decision.get("net_credit", 0)
+        if net_credit <= 0.25:
+            return False, f"Net credit ${net_credit} <= $0.25 minimum"
+
+        max_loss = decision.get("max_loss", 0)
+        buying_power = float(account.get("buying_power", 0))
+        if buying_power > 0 and max_loss > buying_power * 0.02:
+            return (
+                False,
+                f"Max loss ${max_loss:,.0f} exceeds 2% of buying power "
+                f"${buying_power * 0.02:,.0f}",
+            )
+
+        dte = decision.get("dte")
+        if dte is not None and (dte < 20 or dte > 45):
+            return False, f"DTE {dte} outside allowed range 20-45"
+
+        for key in ("short_put_symbol", "long_put_symbol"):
+            sym = decision.get(key, "")
+            if not _OCC_PUT_RE.match(sym):
+                return False, f"Invalid OCC put symbol for {key}: {sym!r}"
+
+        # No duplicate on same underlying
+        underlying = self._extract_root(decision.get("short_put_symbol", ""))
+        if open_spreads:
+            for s in open_spreads:
+                if (
+                    s.get("underlying", "").upper() == underlying.upper()
+                    and s.get("status") == "open"
+                ):
+                    return False, f"Already have an open bull put spread on {underlying}"
+
+        fund = context.get("fundamentals") or {}
+        dte_earnings = fund.get("days_to_earnings")
+        if dte_earnings is not None and dte_earnings <= 21:
+            return False, f"Earnings in {dte_earnings} days (hard block: need > 21)"
+
+        return True, ""
+
     # ── helpers ──────────────────────────────────────────────
 
     @staticmethod
