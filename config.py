@@ -44,6 +44,8 @@ class Settings:
         self.JOURNAL_PATH: Path = self.DATA_DIR / "journal.jsonl"
         self.LOG_DIR: Path = self.DATA_DIR / "logs"
 
+        self.SNAPSHOTS_DIR: Path = self.DATA_DIR / "snapshots"
+
         self.TIMEZONE: str = "America/New_York"
 
         watchlist_env = os.getenv("WATCHLIST", "")
@@ -58,6 +60,7 @@ class Settings:
         # Create required directories
         self.DATA_DIR.mkdir(parents=True, exist_ok=True)
         self.LOG_DIR.mkdir(parents=True, exist_ok=True)
+        self.SNAPSHOTS_DIR.mkdir(parents=True, exist_ok=True)
         for sub in ("daily", "weekly", "positions", "strategies"):
             (self.REPORTS_DIR / sub).mkdir(parents=True, exist_ok=True)
 
