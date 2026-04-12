@@ -785,50 +785,80 @@ class ContextBuilder:
                 return None
 
             if current_price is None:
-                return None
-
-            if wheel_state == "LONG_STOCK":
-                option_type = "call"
-                strike_price = current_price
-            else:  # IDLE
-                option_type = "put"
-                strike_price = current_price
-
-            contracts = self.broker.get_option_contracts(
-                underlying_symbol=symbol,
-                option_type=option_type,
-                strike_price=strike_price,
-            )
-            if not contracts:
-                return None
-
-            # Filter to 14-35 DTE
-            today = datetime.now().date()
-            filtered = []
-            for c in contracts:
-                try:
-                    exp = datetime.strptime(c["expiration_date"], "%Y-%m-%d").date()
-                    dte = (exp - today).days
-                    if 14 <= dte <= 35:
-                        c["dte"] = dte
-                        filtered.append(c)
-                except (KeyError, ValueError):
-                    continue
-
-            if not filtered:
                 return {"contracts": [], "snapshots": {}}
 
-            # Get snapshots for the first 10 contracts
-            snap_symbols = [c["symbol"] for c in filtered[:10]]
-            snapshots = market_data.get_option_snapshot(snap_symbols)
-            return {"contracts": filtered, "snapshots": snapshots}
+            if wheel_state == "LONG_STOCK":
+                contract_type = "call"
+                strike_gte = current_price * 1.01
+                strike_lte = current_price * 1.20
+                target_delta = 0.25
+            else:  # IDLE
+                contract_type = "put"
+                strike_gte = current_price * 0.75
+                strike_lte = current_price * 0.98
+                target_delta = -0.25
+
+            today = datetime.now().date()
+            exp_gte = (today + timedelta(days=21)).isoformat()
+            exp_lte = (today + timedelta(days=35)).isoformat()
+
+            try:
+                contracts = self.broker.get_option_chain_with_greeks(
+                    underlying_symbol=symbol,
+                    expiration_date_gte=exp_gte,
+                    expiration_date_lte=exp_lte,
+                    contract_type=contract_type,
+                    strike_price_gte=f"{strike_gte:.2f}",
+                    strike_price_lte=f"{strike_lte:.2f}",
+                )
+            except Exception:
+                logger.warning(
+                    "get_option_chain_with_greeks failed for %s (state=%s)",
+                    symbol, wheel_state, exc_info=True,
+                )
+                return {"contracts": [], "snapshots": {}}
+
+            if not contracts:
+                return {"contracts": [], "snapshots": {}}
+
+            snap_symbols = [c["symbol"] for c in contracts if c.get("symbol")]
+            snapshots = self.broker.get_option_snapshots(snap_symbols)
+
+            enriched = []
+            for c in contracts:
+                snap = snapshots.get(c.get("symbol", ""), {})
+                delta = snap.get("delta")
+                if delta is None:
+                    continue
+                oi = c.get("open_interest") or snap.get("open_interest") or 0
+                try:
+                    if int(oi) < 100:
+                        continue
+                except (TypeError, ValueError):
+                    continue
+                try:
+                    exp = datetime.strptime(
+                        c["expiration_date"], "%Y-%m-%d",
+                    ).date()
+                    c["dte"] = (exp - today).days
+                except (KeyError, ValueError):
+                    pass
+                c["delta"] = delta
+                enriched.append(c)
+
+            enriched.sort(key=lambda x: abs(x["delta"] - target_delta))
+            top = enriched[:15]
+            top_snapshots = {
+                c["symbol"]: snapshots.get(c["symbol"], {}) for c in top
+            }
+            return {"contracts": top, "snapshots": top_snapshots}
 
         except Exception:
             logger.warning(
                 "Failed to fetch option chain for %s (state=%s)",
                 symbol, wheel_state, exc_info=True,
             )
-            return None
+            return {"contracts": [], "snapshots": {}}
 
     # ── Logging ──────────────────────────────────────────────
 
