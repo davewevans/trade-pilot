@@ -62,7 +62,13 @@ export function TopBar() {
         )}
         {health?.timestamp && (
           <span className="font-mono tabular">
-            {new Date(health.timestamp).toLocaleTimeString()}
+            {new Date(health.timestamp).toLocaleDateString(undefined, {
+              month: 'short', day: 'numeric', year: 'numeric',
+            })}
+            {' · '}
+            {new Date(health.timestamp).toLocaleTimeString(undefined, {
+              hour: 'numeric', minute: '2-digit',
+            })}
           </span>
         )}
       </div>
