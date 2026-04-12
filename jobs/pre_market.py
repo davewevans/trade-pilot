@@ -25,8 +25,30 @@ def run() -> None:
     journal = TradeJournal(path=settings.JOURNAL_PATH)
     ctx_builder = ContextBuilder(broker=broker, journal=journal)
 
-    # ── Per-symbol fundamentals & news ──────────────────────
+    # ── Batch IV rank screen (one ORATS call) ───────────────
     briefing_lines: list[str] = []
+    iv_ranks: dict[str, dict] = {}
+    try:
+        iv_ranks = market_data.get_orats_iv_rank_batch(list(settings.WATCHLIST))
+    except Exception:
+        logger.exception("Batch IV rank screen failed")
+
+    if iv_ranks:
+        briefing_lines.append("**IV Rank screen (ORATS):**")
+        for sym in settings.WATCHLIST:
+            entry = iv_ranks.get(sym.upper(), {})
+            ivr1y = entry.get("ivRank1y")
+            ivr1m = entry.get("ivRank1m")
+            qual = "qualifies" if (ivr1y is not None and ivr1y >= 25) else "below threshold"
+            line = (
+                f"- {sym}: ivRank1y={ivr1y if ivr1y is not None else 'N/A'} "
+                f"ivRank1m={ivr1m if ivr1m is not None else 'N/A'} ({qual})"
+            )
+            logger.info(line)
+            briefing_lines.append(line)
+        briefing_lines.append("")
+
+    # ── Per-symbol fundamentals & news ──────────────────────
 
     for symbol in settings.WATCHLIST:
         try:

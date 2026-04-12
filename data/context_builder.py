@@ -83,6 +83,7 @@ class ContextBuilder:
             futures["risk_free_rate"] = pool.submit(market_data.get_risk_free_rate)
             futures["news"] = pool.submit(_fetch_news, symbol)
             futures["orats_summary"] = pool.submit(market_data.get_orats_summary, symbol)
+            futures["orats_cores"] = pool.submit(market_data.get_orats_cores, symbol)
             futures["earnings"] = pool.submit(market_data.get_earnings_calendar, symbol)
             futures["vix_term"] = pool.submit(market_data.get_vix_term_structure)
             futures["ex_dividend"] = pool.submit(market_data.get_ex_dividend_date, symbol)
@@ -107,6 +108,7 @@ class ContextBuilder:
         else:
             iv_env = "UNKNOWN"
 
+        cores = results.get("orats_cores") or {}
         context["volatility"] = {
             "iv_rank_1y": orats.get("iv_rank_1y") if orats else None,
             "iv_rank_1m": orats.get("iv_rank_1m") if orats else None,
@@ -122,6 +124,18 @@ class ContextBuilder:
             "skew_m2": orats.get("skew_m2") if orats else None,
             "implied_move_pct": orats.get("implied_move_pct") if orats else None,
             "forecast_move_pct": orats.get("forecast_move_pct") if orats else None,
+            # Expanded summary fields
+            "ex_ern_iv_30d": orats.get("ex_ern_iv_30d") if orats else None,
+            "contango": orats.get("contango") if orats else None,
+            "skewing": orats.get("skewing") if orats else None,
+            # /cores enrichment
+            "iv_hv_ratio": cores.get("iv_hv_ratio"),
+            "iv_hv_ratio_1y_avg": cores.get("iv_hv_ratio_1y_avg"),
+            "vol_of_vol": cores.get("vol_of_vol"),
+            "skew_percentile": cores.get("skew_percentile"),
+            "hv_20d": cores.get("hv_20d"),
+            "hv_ex_earnings_20d": cores.get("hv_ex_earnings_20d"),
+            "rip": cores.get("rip"),
             "orats_available": orats is not None,
         }
         # Backward compat: iv_rank at top level for existing prompts
@@ -137,6 +151,20 @@ class ContextBuilder:
             "revenue_estimate": earnings_data.get("revenue_estimate"),
             "source": earnings_data.get("source", "unavailable"),
         }
+        # ORATS /cores secondary earnings source (if available)
+        cores_ern = cores.get("next_earnings_date") if cores else None
+        if cores_ern and cores_ern != "0000-00-00":
+            context["earnings"]["orats_next_earnings_date"] = cores_ern
+            context["earnings"]["orats_days_to_next_earnings"] = cores.get(
+                "days_to_next_earnings",
+            )
+            context["earnings"]["orats_implied_earnings_move"] = cores.get(
+                "implied_earnings_move",
+            )
+            context["earnings"]["orats_abs_avg_earnings_move"] = cores.get(
+                "abs_avg_earnings_move",
+            )
+            context["earnings"]["orats_source"] = "orats"
 
         # ── Ex-dividend (for bear call spread assignment risk) ──
         ex_div = results.get("ex_dividend") or {}

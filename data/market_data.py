@@ -315,6 +315,32 @@ def get_orats_summary(symbol: str) -> dict | None:
         return None
 
 
+def get_orats_cores(symbol: str) -> dict | None:
+    """Return extracted ORATS /cores analytics for a symbol."""
+    if not settings.ORATS_API_KEY:
+        return None
+    try:
+        from data.orats_client import ORATSClient
+
+        return ORATSClient().get_cores(symbol)
+    except Exception:
+        logger.warning("ORATS cores failed for %s", symbol, exc_info=True)
+        return None
+
+
+def get_orats_iv_rank_batch(symbols: list[str]) -> dict[str, dict]:
+    """Return ORATS IV rank/percentile for a batch of tickers."""
+    if not settings.ORATS_API_KEY or not symbols:
+        return {}
+    try:
+        from data.orats_client import ORATSClient
+
+        return ORATSClient().get_iv_rank_batch(symbols)
+    except Exception:
+        logger.warning("ORATS iv_rank batch failed", exc_info=True)
+        return {}
+
+
 def get_earnings_calendar(symbol: str) -> dict:
     """Return upcoming earnings from Finnhub (yfinance fallback)."""
     if settings.FINNHUB_API_KEY:
