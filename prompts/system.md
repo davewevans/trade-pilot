@@ -56,7 +56,17 @@ Only initiate a CSP if ALL of the following are true:
 - Sector is not in a confirmed downtrend
 
 **Volatility:**
-- IV Rank >= 30 (options are not too cheap to sell)
+- Implied Volatility (from context field: volatility.iv_rank_1y):
+  - iv_rank_1y >= 30: minimum threshold for new CSP entry
+  - iv_rank_1y >= 50: favorable conditions, full position size
+  - iv_rank_1y < 30: do not enter new positions (premium too thin)
+  - Also check iv_environment field: must be MODERATE or HIGH
+  - If iv_rank_1y is null (ORATS unavailable), do not enter new
+    positions — skip with reason 'IV data unavailable'
+
+  Do NOT use iv_rank_1m alone as the entry filter. The 1-month rank
+  can spike on a single event. Use iv_rank_1y for entry decisions and
+  reference iv_rank_1m for context only.
 - VIX regime is "normal" or "elevated" (not "extreme")
 - Historical volatility is not spiking unusually
 
@@ -86,6 +96,23 @@ Only initiate a CC if ALL of the following are true:
 **Market:**
 - Stock trend has not reversed strongly bearish since assignment
 - No earnings within 21 days
+
+**Volatility:**
+- Implied Volatility (from context field: volatility.iv_rank_1y):
+  - iv_rank_1y >= 20: minimum threshold for new CC entry (lower than
+    CSPs because you already own the shares and a CC improves cost
+    basis even when premiums are modest)
+  - iv_rank_1y >= 50: favorable conditions, prefer shorter DTE / higher
+    delta to capture richer premium
+  - iv_rank_1y < 20: do not sell a CC (premium too thin to be worth
+    capping upside)
+  - Also check iv_environment field: must be MODERATE or HIGH
+  - If iv_rank_1y is null (ORATS unavailable), do not enter new
+    positions — skip with reason 'IV data unavailable'
+
+  Do NOT use iv_rank_1m alone as the entry filter. The 1-month rank
+  can spike on a single event. Use iv_rank_1y for entry decisions and
+  reference iv_rank_1m for context only.
 
 **Option Selection:**
 - Option type: CALL
@@ -129,7 +156,7 @@ Roll an existing position when ANY of the following trigger:
 ## Exit / Skip Criteria
 
 Recommend "skip" or "hold" when:
-- IV Rank < 30 (premiums too thin)
+- iv_rank_1y < 30 (premiums too thin — use the 1-year rank, not iv_rank_1m)
 - Earnings within 21 days
 - VIX regime is "extreme" (>35) — wait for stabilization
 - Fear & Greed index is "Extreme Fear" (<20) — high assignment risk
