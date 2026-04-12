@@ -19,11 +19,68 @@ def run() -> None:
 
     from brokers.broker_factory import get_broker
     from data.context_builder import ContextBuilder
+    from data.state_writer import StateWriter
     from data.trade_journal import TradeJournal
 
     broker = get_broker()
     journal = TradeJournal(path=settings.JOURNAL_PATH)
     ctx_builder = ContextBuilder(broker=broker, journal=journal)
+    sw = StateWriter()
+
+    # ── Check for overnight option events ──────────────────
+    try:
+        option_events = broker.get_account_activities(
+            ["OPASN", "OPEXP", "OPEXC", "OPTRD"]
+        )
+    except Exception:
+        logger.exception("Failed to fetch overnight option events")
+        option_events = []
+
+    if option_events:
+        logger.info("=== OVERNIGHT OPTION EVENTS ===")
+        for evt in option_events:
+            logger.info(
+                "  %s | %s | qty=%s | net=%s",
+                evt.get("activity_type"),
+                evt.get("symbol"),
+                evt.get("qty"),
+                evt.get("net_amount"),
+            )
+        try:
+            sw.write_option_events(option_events)
+        except Exception as e:
+            logger.warning("Failed to write option events: %s", e)
+    else:
+        logger.info("No overnight option events found")
+
+    # ── Cancel any open option orders from prior sessions ──
+    try:
+        open_orders = broker.get_orders(status="open")
+        option_orders = [
+            o for o in open_orders
+            if o.get("asset_class") == "us_option"
+        ]
+        if option_orders:
+            logger.info(
+                "Found %d stale open option orders — canceling",
+                len(option_orders),
+            )
+            for order in option_orders:
+                try:
+                    broker.cancel_order(order["id"])
+                    logger.info(
+                        "Canceled stale order %s (%s)",
+                        order["id"], order.get("symbol"),
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "Failed to cancel order %s: %s",
+                        order.get("id"), e,
+                    )
+        else:
+            logger.info("No stale open option orders found")
+    except Exception:
+        logger.warning("Failed to check/cancel stale orders", exc_info=True)
 
     # ── Batch IV rank screen (one ORATS call) ───────────────
     briefing_lines: list[str] = []

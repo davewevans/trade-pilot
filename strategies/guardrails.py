@@ -155,7 +155,13 @@ class Guardrails:
 
         # Cost check: strike * 100 must be <= 10% of buying power
         strike = self._extract_strike(symbol)
-        buying_power = float(account.get("buying_power") or 0)
+        # Prefer options_buying_power when surfaced by the broker; fall
+        # back to plain buying_power for compatibility.
+        buying_power = float(
+            account.get("options_buying_power")
+            or account.get("buying_power")
+            or 0
+        )
         cost = strike * 100
         max_allowed = buying_power * 0.10
         if cost > max_allowed:

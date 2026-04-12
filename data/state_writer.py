@@ -165,6 +165,26 @@ class StateWriter:
         except Exception:
             logger.exception("Failed to write decision for %s", underlying)
 
+    def write_option_events(self, events: list[dict]) -> None:
+        """Write ``snapshots/option_events.json`` for the dashboard.
+
+        Overwrites with the latest batch (typically overnight events
+        polled at pre-market). A no-op for an empty list.
+        """
+        if not events:
+            return
+        try:
+            payload = {
+                "timestamp": self._now_iso(),
+                "count": len(events),
+                "events": events,
+            }
+            path = self.dir / "option_events.json"
+            self._atomic_write(path, json.dumps(payload, indent=2, default=str))
+            logger.debug("Wrote %d option events to %s", len(events), path)
+        except Exception:
+            logger.exception("Failed to write option events")
+
     def write_circuit_breaker_status(self, status_dict: dict) -> None:
         """Write ``snapshots/circuit_breakers.json``."""
         try:

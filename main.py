@@ -72,15 +72,18 @@ def execute_decision(broker, decision: dict) -> dict | None:
         decision: Validated recommendation dict.
 
     Returns:
-        The order result dict, or None for hold/skip.
+        The order result dict (with fill_price/fill_status attached
+        when available), or None for hold/skip.
     """
     action = decision["action"]
 
     if action in ("hold", "skip"):
         return None
 
+    result: dict | None = None
+
     if action in ("sell_put", "sell_call"):
-        return broker.place_order(
+        result = broker.place_order(
             symbol=decision["symbol"],
             qty=decision["qty"],
             side="sell",
@@ -89,7 +92,7 @@ def execute_decision(broker, decision: dict) -> dict | None:
             limit_price=decision.get("limit_price"),
         )
 
-    if action == "roll":
+    elif action == "roll":
         # Roll = cancel existing + open new position
         open_orders = broker.get_orders(status="open")
         for order in open_orders:
@@ -100,7 +103,7 @@ def execute_decision(broker, decision: dict) -> dict | None:
                 logger.info("Cancelled order %s for roll", order["id"])
                 break
 
-        return broker.place_order(
+        result = broker.place_order(
             symbol=decision["symbol"],
             qty=decision["qty"],
             side="sell",
@@ -109,8 +112,38 @@ def execute_decision(broker, decision: dict) -> dict | None:
             limit_price=decision.get("limit_price"),
         )
 
-    logger.warning("Unhandled action: %s", action)
-    return None
+    else:
+        logger.warning("Unhandled action: %s", action)
+        return None
+
+    # ── Fill confirmation ──────────────────────────────────
+    if result:
+        import time as _time
+        order_id = result.get("id")
+        if order_id:
+            _time.sleep(30)
+            try:
+                filled = broker.get_order(order_id)
+                fill_price = filled.get("filled_avg_price")
+                status = filled.get("status")
+                logger.info(
+                    "Order %s status=%s fill_price=%s",
+                    order_id, status, fill_price,
+                )
+                if status not in ("filled", "partially_filled"):
+                    logger.warning(
+                        "Order %s not filled after 30s — status=%s. "
+                        "It will expire at market close if not filled.",
+                        order_id, status,
+                    )
+                result["fill_price"] = fill_price
+                result["fill_status"] = status
+            except Exception:
+                logger.warning(
+                    "Could not confirm fill for order %s", order_id, exc_info=True,
+                )
+
+    return result
 
 
 # ── startup validation ──────────────────────────────────────

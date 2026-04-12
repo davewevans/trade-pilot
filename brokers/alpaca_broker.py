@@ -198,6 +198,11 @@ class AlpacaBroker(BaseBroker):
         """Cancel an open order by ID."""
         self.client.cancel_order_by_id(order_id)
 
+    def get_order(self, order_id: str) -> dict:
+        """Fetch a single order by ID. Used to confirm fills."""
+        order = self.client.get_order_by_id(order_id)
+        return order.model_dump()
+
     # ── positions ────────────────────────────────────────────
 
     def get_positions(self) -> list[dict]:
@@ -364,9 +369,36 @@ class AlpacaBroker(BaseBroker):
         if strike_price_lte is not None:
             params["strike_price_lte"] = strike_price_lte
 
-        request = GetOptionContractsRequest(**params)
-        response = self.client.get_option_contracts(request)
-        contracts = response.option_contracts or []
+        logger.debug(
+            "Using option data feed: indicative "
+            "(15-min delayed quotes for paper trading)"
+        )
+
+        # Paginate through the contract list. Alpaca caps each
+        # response; we walk next_page_token until exhausted or until
+        # we hit a hard safety cap.
+        all_contracts: list = []
+        next_page_token = None
+        while True:
+            if next_page_token:
+                params["page_token"] = next_page_token
+            request = GetOptionContractsRequest(**params)
+            response = self.client.get_option_contracts(request)
+            batch = response.option_contracts or []
+            all_contracts.extend(batch)
+
+            next_page_token = getattr(response, "next_page_token", None)
+            if not next_page_token or len(batch) == 0:
+                break
+            if len(all_contracts) >= 500:
+                logger.warning(
+                    "Option chain for %s hit 500 contract cap — "
+                    "consider narrowing strike range",
+                    underlying_symbol,
+                )
+                break
+
+        contracts = all_contracts
 
         return [
             {
@@ -391,6 +423,11 @@ class AlpacaBroker(BaseBroker):
         result: dict[str, dict] = {}
         if not symbols:
             return result
+
+        logger.debug(
+            "Using option data feed: indicative "
+            "(15-min delayed quotes for paper trading)"
+        )
 
         try:
             request = OptionSnapshotRequest(symbol_or_symbols=symbols)
@@ -439,26 +476,46 @@ class AlpacaBroker(BaseBroker):
     # ── account activities ───────────────────────────────────
 
     def get_account_activities(
-        self, activity_type: str | None = None
+        self,
+        activity_types: list[str],
+        after: str | None = None,
     ) -> list[dict]:
-        """Return account activities via the Alpaca REST API.
+        """Fetch recent account activities filtered by type.
 
-        The alpaca-py TradingClient does not expose account activities,
-        so this falls back to a direct HTTP GET.
+        Args:
+            activity_types: Activity codes (e.g. ["OPASN", "OPEXP",
+                "OPEXC", "OPTRD"]).
+            after: ISO timestamp; only activities after this time are
+                returned. Defaults to 48 hours ago.
+
+        Returns:
+            Combined list of activity dicts (newest first per type).
+            Per-type failures are logged but do not raise.
         """
+        from datetime import datetime, timedelta, timezone
+
+        if after is None:
+            cutoff = datetime.now(timezone.utc) - timedelta(hours=48)
+            after = cutoff.isoformat()
+
         headers = {
             "APCA-API-KEY-ID": self._api_key,
             "APCA-API-SECRET-KEY": self._secret_key,
         }
 
-        url = f"{settings.ALPACA_TRADE_URL}/v2/account/activities"
-
-        params: dict = {}
-        if activity_type is not None:
-            params["activity_type"] = activity_type
-        else:
-            params["activity_type"] = "OEXP,OASGN,OEXC"
-
-        resp = http_requests.get(url, headers=headers, params=params)
-        resp.raise_for_status()
-        return resp.json()
+        all_activities: list[dict] = []
+        for act_type in activity_types:
+            try:
+                resp = http_requests.get(
+                    f"{settings.ALPACA_TRADE_URL}/v2/account/activities/{act_type}",
+                    headers=headers,
+                    params={"after": after, "direction": "desc", "page_size": 20},
+                    timeout=10,
+                )
+                resp.raise_for_status()
+                all_activities.extend(resp.json() or [])
+            except Exception:
+                logger.warning(
+                    "Failed to fetch activities type=%s", act_type, exc_info=True,
+                )
+        return all_activities

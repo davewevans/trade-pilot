@@ -107,11 +107,17 @@ class BaseBroker(ABC):
 
     @abstractmethod
     def get_account_activities(
-        self, activity_type: str | None = None
+        self,
+        activity_types: list[str],
+        after: str | None = None,
     ) -> list[dict]:
-        """Return account activities.
+        """Return account activities filtered by type.
 
         Args:
-            activity_type: Filter by activity type. Options-relevant types:
-                OEXP (expiration), OASGN (assignment), OEXC (exercise).
+            activity_types: Activity codes (e.g. OPASN, OPEXP, OPEXC, OPTRD).
+            after: ISO timestamp; defaults to 48 hours ago.
         """
+
+    def get_order(self, order_id: str) -> dict:
+        """Fetch a single order by ID. Optional — used to confirm fills."""
+        raise NotImplementedError

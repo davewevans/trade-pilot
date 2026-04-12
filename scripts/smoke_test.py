@@ -112,7 +112,7 @@ def main() -> None:
     # ── 8. get_account_activities ────────────────────────────
     section("8. get_account_activities()")
     try:
-        activities = broker.get_account_activities()
+        activities = broker.get_account_activities(["OPASN", "OPEXP", "OPEXC", "OPTRD"])
         logger.info("Activities returned: %d", len(activities))
         for a in activities[:5]:
             logger.info("  %s", a)

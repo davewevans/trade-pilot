@@ -787,6 +787,8 @@ class ContextBuilder:
             acct = self.broker.get_account()
             return {
                 "buying_power": float(acct.get("buying_power", 0)),
+                "options_buying_power": float(acct.get("options_buying_power", 0)),
+                "options_approved_level": acct.get("options_approved_level"),
                 "options_trading_level": acct.get("options_trading_level"),
                 "portfolio_value": float(acct.get("portfolio_value", 0)),
             }

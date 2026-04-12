@@ -27,7 +27,7 @@ def run() -> None:
     # ── Poll for non-trade activities ───────────────────────
     for activity_type in ("OEXP", "OASGN", "OEXC"):
         try:
-            activities = broker.get_account_activities(activity_type=activity_type)
+            activities = broker.get_account_activities([activity_type])
         except Exception:
             logger.exception("Failed to fetch %s activities", activity_type)
             continue
