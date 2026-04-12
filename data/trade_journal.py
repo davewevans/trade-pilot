@@ -233,35 +233,77 @@ class TradeJournal:
         body = "\n".join(lines)
         return f"<skip_history>\n{body}\n</skip_history>"
 
-    def format_for_prompt(self, symbol: str, n: int = 5) -> str:
-        """Format recent trades as a string suitable for Claude's context.
+    def get_recent_by_days(self, symbol: str, days: int = 30) -> list[dict]:
+        """Return all trade entries for a symbol within the past N days.
 
-        Returns an empty string if no trades exist for the symbol.
+        Unlike get_recent() which is count-bounded, this is time-bounded.
+        Returns entries in chronological order (oldest first), excluding
+        skips and holds — trades only.
         """
-        recent = self.get_recent(symbol, n)
+        from datetime import date, timedelta
+        cutoff = (date.today() - timedelta(days=days)).isoformat()
+
+        entries = self._read_all()
+        return [
+            e for e in entries
+            if (
+                (
+                    e.get("underlying", "").upper() == symbol.upper()
+                    or e.get("symbol", "").upper() == symbol.upper()
+                )
+                and e.get("timestamp", "") >= cutoff
+                and e.get("action") not in ("skip", "hold")
+                and e.get("status") != "skipped"
+            )
+        ]
+
+    def format_for_prompt(self, symbol: str, days: int = 30) -> str:
+        """Format recent trade history as a string for Claude's context.
+
+        Uses a time-bounded window (default: last 30 days) rather than
+        a fixed count. Returns an empty string if no trades exist.
+        """
+        recent = self.get_recent_by_days(symbol, days)
         if not recent:
             return ""
 
-        lines = [f"Last {len(recent)} trades on {symbol.upper()}:"]
+        lines = [f"Trade history on {symbol.upper()} (last {days} days, {len(recent)} trades):"]
         for e in recent:
-            date = e.get("timestamp", "?")[:10]
+            date_str = e.get("timestamp", "?")[:10]
             contract = e.get("contract_symbol") or e.get("symbol") or "?"
             action = e.get("action", "?")
-            price = e.get("limit_price")
+            fill = e.get("fill_price")
+            limit = e.get("limit_price")
+            price = fill or limit
             price_str = f"${price}" if price is not None else "?"
-            confidence = e.get("confidence", "?")
             status = e.get("status", "?")
 
-            # Build PnL suffix
+            # Include entry conditions if available (from Prompt 1)
+            conditions = []
+            iv = e.get("iv_rank")
+            delta = e.get("delta")
+            dte = e.get("dte")
+            regime = e.get("market_regime")
+            if iv is not None:
+                conditions.append(f"IVR={iv}")
+            if delta is not None:
+                conditions.append(f"\u03b4={delta}")
+            if dte is not None:
+                conditions.append(f"DTE={dte}")
+            if regime:
+                conditions.append(f"regime={regime}")
+            conditions_str = f" [{', '.join(conditions)}]" if conditions else ""
+
+            # P&L
             pnl = e.get("pnl")
             pnl_str = ""
             if pnl is not None:
-                sign = "+" if pnl >= 0 else ""
-                pnl_str = f" -> PnL: {sign}${pnl}"
+                sign = "+" if float(pnl) >= 0 else ""
+                pnl_str = f" \u2192 P&L: {sign}${pnl}"
 
             lines.append(
-                f"- {date}: {action} {contract} @ {price_str} "
-                f"(confidence: {confidence}) -> {status}{pnl_str}"
+                f"  {date_str}: {action} {contract} @ {price_str}"
+                f"{conditions_str} ({status}){pnl_str}"
             )
 
         body = "\n".join(lines)

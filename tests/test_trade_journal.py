@@ -132,6 +132,56 @@ def test_format_stats_for_prompt_empty(journal):
     assert journal.format_stats_for_prompt("SPY") == ""
 
 
+def test_get_recent_by_days_excludes_old_and_skips(journal):
+    import json
+    # In-window trade
+    journal.append({
+        "underlying": "SPY", "action": "sell_put", "status": "filled",
+        "limit_price": 1.5, "iv_rank": 40, "delta": -0.30, "dte": 30,
+        "market_regime": "BULL_LOW_VOL",
+    })
+    # In-window skip — should be excluded
+    journal.append({
+        "underlying": "SPY", "action": "skip", "status": "skipped",
+        "skip_reason": "IV low",
+    })
+    # In-window hold — should be excluded
+    journal.append({
+        "underlying": "SPY", "action": "hold", "status": "hold",
+    })
+    # Other symbol
+    journal.append({
+        "underlying": "AAPL", "action": "sell_put", "status": "filled",
+    })
+    # Out-of-window (60 days ago)
+    old_iso = (date.today() - timedelta(days=60)).isoformat() + "T10:00:00"
+    with open(journal.path, "a", encoding="utf-8") as f:
+        f.write(json.dumps({
+            "timestamp": old_iso, "underlying": "SPY",
+            "action": "sell_put", "status": "filled",
+        }) + "\n")
+
+    recent = journal.get_recent_by_days("SPY", days=30)
+    assert len(recent) == 1
+    assert recent[0]["action"] == "sell_put"
+
+
+def test_format_for_prompt_time_bounded(journal):
+    journal.append({
+        "underlying": "SPY", "action": "sell_put", "status": "filled",
+        "contract_symbol": "SPY250620P450", "limit_price": 1.50,
+        "iv_rank": 45, "delta": -0.30, "dte": 30,
+        "market_regime": "BULL_LOW_VOL", "pnl": 75,
+    })
+    out = journal.format_for_prompt("SPY", days=30)
+    assert "<recent_trades>" in out
+    assert "Trade history on SPY (last 30 days, 1 trades)" in out
+    assert "IVR=45" in out
+    assert "DTE=30" in out
+    assert "regime=BULL_LOW_VOL" in out
+    assert "+$75" in out
+
+
 def test_format_stats_for_prompt_renders(journal):
     journal.append({
         "underlying": "SPY", "action": "sell_put", "status": "filled",
