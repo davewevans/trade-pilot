@@ -61,35 +61,73 @@ class ClaudeAdvisor:
         """
         context_json = json.dumps(context, indent=2, default=str)
         user_content = (
-            f"{self.phase_prompts[phase]}\n\n"
+            f"<instructions>\n{self.phase_prompts[phase]}\n</instructions>\n\n"
             f"<market_context>\n{context_json}\n</market_context>\n\n"
-            f"Make your decision."
+            f"Make your decision now. Respond with raw JSON only."
         )
 
         logger.info("Asking Claude for advice (state=%s)", phase.value)
 
-        try:
-            response = self.client.messages.create(
-                model=self.model,
-                max_tokens=1024,
-                system=[
-                    {
-                        "type": "text",
-                        "text": self.system_prompt,
-                        "cache_control": {"type": "ephemeral"},
-                    }
-                ],
-                messages=[{"role": "user", "content": user_content}],
-            )
-        except Exception:
-            logger.exception("Anthropic API call failed")
-            raise
+        retry_suffix = (
+            "\n\nYour previous response was not valid JSON or was missing "
+            "required fields. Respond ONLY with raw JSON matching the schema "
+            "exactly. No prose, no markdown, no code blocks."
+        )
 
-        # Store usage for cache monitoring
-        self._last_usage = response.usage.model_dump() if response.usage else None
+        raw_text = ""
+        for attempt in range(2):
+            content = user_content if attempt == 0 else user_content + retry_suffix
+            try:
+                response = self.client.messages.create(
+                    model=self.model,
+                    max_tokens=2048,
+                    system=[
+                        {
+                            "type": "text",
+                            "text": self.system_prompt,
+                            "cache_control": {"type": "ephemeral"},
+                        }
+                    ],
+                    messages=[{"role": "user", "content": content}],
+                )
+            except Exception:
+                logger.exception("Anthropic API call failed")
+                raise
 
-        raw_text = response.content[0].text.strip()
-        recommendation = self._parse_response(raw_text)
+            self._last_usage = response.usage.model_dump() if response.usage else None
+            raw_text = response.content[0].text.strip()
+
+            try:
+                recommendation = self._parse_response(raw_text)
+                break
+            except ValueError:
+                if attempt == 0:
+                    logger.warning(
+                        "Claude response failed to parse on attempt 1; retrying. "
+                        "Raw text:\n%s", raw_text,
+                    )
+                    continue
+                logger.warning(
+                    "Claude returned unparseable response after retry. "
+                    "Falling back to safe skip. Raw text:\n%s", raw_text,
+                )
+                return {
+                    "action": "skip",
+                    "symbol": None,
+                    "qty": 1,
+                    "order_type": "limit",
+                    "limit_price": None,
+                    "reasoning": {
+                        "macro": "Claude response parse error",
+                        "fundamental": "—",
+                        "technical": "—",
+                        "volatility": "—",
+                        "selection": "—",
+                        "risk": "—",
+                    },
+                    "confidence": "low",
+                    "skip_reason": "Claude returned unparseable response after retry",
+                }
 
         logger.info(
             "Claude recommendation: action=%s confidence=%s",
