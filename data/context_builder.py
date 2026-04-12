@@ -68,6 +68,7 @@ class ContextBuilder:
             "option_chain": None,
             "news": None,
             "recent_trades": None,
+            "performance_stats": None,
             "volatility": None,
             "earnings": None,
             "ex_dividend": None,
@@ -230,6 +231,14 @@ class ContextBuilder:
             context["recent_trades"] = journal_text or None
         except Exception:
             logger.warning("Failed to fetch trade journal for %s", symbol, exc_info=True)
+
+        # Performance stats for Claude's self-awareness
+        try:
+            stats_str = self.journal.format_stats_for_prompt(symbol, days=30)
+            context["performance_stats"] = stats_str if stats_str else None
+        except Exception:
+            logger.warning("Failed to build performance stats for %s", symbol, exc_info=True)
+            context["performance_stats"] = None
 
         # ── SPX technicals (for regime derivation) ─────────
         if symbol.upper() != "SPY":

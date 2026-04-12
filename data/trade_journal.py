@@ -102,6 +102,93 @@ class TradeJournal:
                 f.write(json.dumps(entry, default=str) + "\n")
         logger.info("Journal update: order_id %s updated with %s", order_id, list(updates.keys()))
 
+    def get_symbol_stats(self, symbol: str, days: int = 30) -> dict:
+        """Return aggregate performance stats for a symbol over the past N days.
+
+        Used to give Claude feedback on its own recent decision quality.
+        Returns a dict suitable for inclusion in the Claude context.
+        """
+        from datetime import date, timedelta
+        cutoff = (date.today() - timedelta(days=days)).isoformat()
+
+        entries = self._read_all()
+        relevant = [
+            e for e in entries
+            if (
+                e.get("underlying", "").upper() == symbol.upper()
+                and e.get("timestamp", "") >= cutoff
+            )
+        ]
+
+        if not relevant:
+            return {
+                "symbol": symbol.upper(),
+                "lookback_days": days,
+                "total_decisions": 0,
+                "trades": 0,
+                "skips": 0,
+                "wins": 0,
+                "losses": 0,
+                "win_rate": None,
+                "avg_iv_rank_at_entry": None,
+                "avg_delta_at_entry": None,
+                "total_pnl": 0.0,
+                "note": "No history in lookback window",
+            }
+
+        trades = [e for e in relevant if e.get("action") not in ("skip", "hold")]
+        skips = [e for e in relevant if e.get("action") in ("skip", "hold")
+                 or e.get("status") == "skipped"]
+        closed = [e for e in trades if e.get("closed_at") and e.get("pnl") is not None]
+        wins = [e for e in closed if float(e.get("pnl", 0)) > 0]
+        losses = [e for e in closed if float(e.get("pnl", 0)) <= 0]
+
+        iv_ranks = [float(e["iv_rank"]) for e in trades if e.get("iv_rank") is not None]
+        deltas = [float(e["delta"]) for e in trades if e.get("delta") is not None]
+        total_pnl = sum(float(e.get("pnl", 0)) for e in closed)
+
+        win_rate = round(len(wins) / len(closed) * 100, 1) if closed else None
+        avg_ivr = round(sum(iv_ranks) / len(iv_ranks), 1) if iv_ranks else None
+        avg_delta = round(sum(deltas) / len(deltas), 3) if deltas else None
+
+        return {
+            "symbol": symbol.upper(),
+            "lookback_days": days,
+            "total_decisions": len(relevant),
+            "trades": len(trades),
+            "skips": len(skips),
+            "wins": len(wins),
+            "losses": len(losses),
+            "win_rate": win_rate,
+            "avg_iv_rank_at_entry": avg_ivr,
+            "avg_delta_at_entry": avg_delta,
+            "total_pnl": round(total_pnl, 2),
+        }
+
+    def format_stats_for_prompt(self, symbol: str, days: int = 30) -> str:
+        """Format symbol performance stats as a string for Claude's context."""
+        stats = self.get_symbol_stats(symbol, days)
+
+        if stats["total_decisions"] == 0:
+            return ""
+
+        win_str = f"{stats['win_rate']}%" if stats['win_rate'] is not None else "n/a"
+        ivr_str = str(stats['avg_iv_rank_at_entry']) if stats['avg_iv_rank_at_entry'] else "n/a"
+        delta_str = str(stats['avg_delta_at_entry']) if stats['avg_delta_at_entry'] else "n/a"
+        pnl_sign = "+" if stats['total_pnl'] >= 0 else ""
+
+        lines = [
+            f"Performance on {symbol.upper()} (last {days} days):",
+            f"  Decisions: {stats['total_decisions']} "
+            f"({stats['trades']} trades, {stats['skips']} skips)",
+            f"  Win rate: {win_str} ({stats['wins']}W / {stats['losses']}L)",
+            f"  Avg IV rank at entry: {ivr_str}",
+            f"  Avg delta at entry: {delta_str}",
+            f"  Total P&L: {pnl_sign}${stats['total_pnl']}",
+        ]
+        body = "\n".join(lines)
+        return f"<performance_stats>\n{body}\n</performance_stats>"
+
     def format_for_prompt(self, symbol: str, n: int = 5) -> str:
         """Format recent trades as a string suitable for Claude's context.
 
