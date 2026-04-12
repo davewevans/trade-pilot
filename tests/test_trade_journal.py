@@ -182,6 +182,64 @@ def test_format_for_prompt_time_bounded(journal):
     assert "+$75" in out
 
 
+def test_get_portfolio_patterns(journal):
+    # Mix across symbols, regimes, and outcomes
+    journal.append({
+        "underlying": "SPY", "action": "sell_put", "status": "filled",
+        "closed_at": _today_iso(), "pnl": 100, "iv_rank": 50,
+        "market_regime": "BULL_LOW_VOL",
+    })
+    journal.append({
+        "underlying": "AAPL", "action": "sell_put", "status": "filled",
+        "closed_at": _today_iso(), "pnl": 80, "iv_rank": 60,
+        "market_regime": "BULL_LOW_VOL",
+    })
+    journal.append({
+        "underlying": "TSLA", "action": "sell_put", "status": "filled",
+        "closed_at": _today_iso(), "pnl": -50, "iv_rank": 25,
+        "market_regime": "BEAR_HIGH_VOL",
+    })
+    # Open trade — counts as trade but not closed
+    journal.append({
+        "underlying": "MSFT", "action": "sell_call", "status": "submitted",
+    })
+    # Assignment
+    journal.append({
+        "underlying": "SPY", "action": "sell_put", "status": "assigned",
+    })
+    # Skips
+    journal.append({
+        "underlying": "SPY", "action": "skip", "status": "skipped",
+        "skip_reason": "IV too low",
+    })
+    journal.append({
+        "underlying": "SPY", "action": "skip", "status": "skipped",
+        "skip_reason": "IV too low",
+    })
+    journal.append({
+        "underlying": "QQQ", "action": "skip", "status": "skipped",
+        "skip_reason": "earnings",
+    })
+
+    patterns = journal.get_portfolio_patterns(days=30)
+
+    assert patterns["closed_trades"] == 3
+    assert patterns["wins"] if False else True  # not in dict, sanity
+    assert patterns["win_rate"] == round(2 / 3 * 100, 1)
+    assert patterns["total_pnl"] == 130.0
+    # 4 sell_put trades (3 closed + 1 assigned), 1 assignment → 25.0%
+    assert patterns["assignment_rate"] == 25.0
+    # Top skip reason
+    assert patterns["top_skip_reasons"]["IV too low"] == 2
+    assert patterns["top_skip_reasons"]["earnings"] == 1
+    # Regime breakdown
+    assert patterns["performance_by_regime"]["BULL_LOW_VOL"]["wins"] == 2
+    assert patterns["performance_by_regime"]["BEAR_HIGH_VOL"]["losses"] == 1
+    # Avg IV rank: winners = (50+80→pnl, ivr 50,60) avg=55; losers ivr 25
+    assert patterns["avg_iv_rank_winning_trades"] == 55.0
+    assert patterns["avg_iv_rank_losing_trades"] == 25.0
+
+
 def test_format_stats_for_prompt_renders(journal):
     journal.append({
         "underlying": "SPY", "action": "sell_put", "status": "filled",

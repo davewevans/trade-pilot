@@ -70,6 +70,7 @@ class ContextBuilder:
             "recent_trades": None,
             "performance_stats": None,
             "skip_history": None,
+            "portfolio_patterns": None,
             "volatility": None,
             "earnings": None,
             "ex_dividend": None,
@@ -248,6 +249,14 @@ class ContextBuilder:
         except Exception:
             logger.warning("Failed to build skip history for %s", symbol, exc_info=True)
             context["skip_history"] = None
+
+        # Portfolio-level pattern summary (written weekly)
+        try:
+            patterns = self._load_portfolio_patterns()
+            context["portfolio_patterns"] = patterns if patterns else None
+        except Exception:
+            logger.warning("Failed to load portfolio patterns", exc_info=True)
+            context["portfolio_patterns"] = None
 
         # ── SPX technicals (for regime derivation) ─────────
         if symbol.upper() != "SPY":
@@ -926,6 +935,72 @@ class ContextBuilder:
                 symbol, wheel_state, exc_info=True,
             )
             return {"contracts": [], "snapshots": {}}
+
+    @staticmethod
+    def _load_portfolio_patterns() -> str:
+        """Load the portfolio pattern summary written by the weekly job.
+
+        Returns a formatted string for Claude, or empty string if not yet
+        available (first week of operation).
+        """
+        import json
+        from config import settings
+
+        path = settings.SNAPSHOTS_DIR / "portfolio_patterns.json"
+        if not path.exists():
+            return ""
+
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return ""
+
+        days = data.get("lookback_days", 30)
+        win_rate = data.get("win_rate")
+        total_pnl = data.get("total_pnl", 0)
+        assignment_rate = data.get("assignment_rate")
+        win_ivr = data.get("avg_iv_rank_winning_trades")
+        loss_ivr = data.get("avg_iv_rank_losing_trades")
+        top_skips = data.get("top_skip_reasons", {})
+        by_regime = data.get("performance_by_regime", {})
+
+        lines = [f"Portfolio patterns (last {days} days, as of {data.get('generated_at', '?')}):"]
+
+        if win_rate is not None:
+            sign = "+" if total_pnl >= 0 else ""
+            lines.append(
+                f"  Overall: {win_rate}% win rate | "
+                f"P&L: {sign}${total_pnl} | "
+                f"{data.get('total_trades', 0)} trades, "
+                f"{data.get('total_skips', 0)} skips"
+            )
+
+        if assignment_rate is not None:
+            lines.append(f"  Assignment rate on CSPs: {assignment_rate}%")
+
+        if win_ivr is not None and loss_ivr is not None:
+            lines.append(
+                f"  Avg IV rank: winning trades={win_ivr}, losing trades={loss_ivr}"
+            )
+
+        if top_skips:
+            top = list(top_skips.items())[:3]
+            skip_str = " | ".join(f"{r} (x{c})" for r, c in top)
+            lines.append(f"  Top skip reasons: {skip_str}")
+
+        if by_regime:
+            regime_parts = []
+            for regime, counts in by_regime.items():
+                w = counts.get("wins", 0)
+                l = counts.get("losses", 0)
+                total = w + l
+                if total > 0:
+                    regime_parts.append(f"{regime}: {w}W/{l}L")
+            if regime_parts:
+                lines.append(f"  By regime: {' | '.join(regime_parts)}")
+
+        body = "\n".join(lines)
+        return f"<portfolio_patterns>\n{body}\n</portfolio_patterns>"
 
     # ── Logging ──────────────────────────────────────────────
 

@@ -127,4 +127,17 @@ def run() -> None:
         with open(comparison_path, "a", encoding="utf-8") as f:
             f.write(comparison_entry)
 
+    # ── Portfolio pattern analysis ──────────────────────────
+    try:
+        patterns = journal.get_portfolio_patterns(days=30)
+
+        patterns_path = settings.SNAPSHOTS_DIR / "portfolio_patterns.json"
+        patterns_path.parent.mkdir(parents=True, exist_ok=True)
+        patterns_path.write_text(
+            json.dumps(patterns, indent=2), encoding="utf-8"
+        )
+        logger.info("Portfolio patterns written to %s", patterns_path)
+    except Exception:
+        logger.exception("Failed to generate portfolio patterns")
+
     logger.info("=== WEEKLY REPORT JOB COMPLETE ===")

@@ -233,6 +233,81 @@ class TradeJournal:
         body = "\n".join(lines)
         return f"<skip_history>\n{body}\n</skip_history>"
 
+    def get_portfolio_patterns(self, days: int = 30) -> dict:
+        """Analyze the full journal for portfolio-level patterns.
+
+        Returns a dict summarizing cross-symbol patterns suitable for
+        inclusion in Claude's context. Covers the past N days.
+        """
+        from datetime import date, timedelta
+        from collections import Counter, defaultdict
+
+        cutoff = (date.today() - timedelta(days=days)).isoformat()
+        entries = self._read_all()
+        recent = [e for e in entries if e.get("timestamp", "") >= cutoff]
+
+        trades = [e for e in recent if e.get("action") not in ("skip", "hold")
+                  and e.get("status") != "skipped"]
+        closed = [e for e in trades if e.get("closed_at") and e.get("pnl") is not None]
+        skips = [e for e in recent if e.get("action") in ("skip", "hold")
+                 or e.get("status") == "skipped"]
+
+        # Overall win rate
+        wins = [e for e in closed if float(e.get("pnl", 0)) > 0]
+        win_rate = round(len(wins) / len(closed) * 100, 1) if closed else None
+        total_pnl = round(sum(float(e.get("pnl", 0)) for e in closed), 2)
+
+        # Assignment rate (puts that became LONG_STOCK)
+        assignments = [e for e in recent if e.get("status") == "assigned"]
+        put_trades = [e for e in trades if e.get("action") == "sell_put"]
+        assignment_rate = (
+            round(len(assignments) / len(put_trades) * 100, 1)
+            if put_trades else None
+        )
+
+        # Most common skip reasons
+        skip_reasons = Counter(
+            e.get("skip_reason") or "unknown" for e in skips
+        )
+
+        # Win/loss by regime
+        by_regime: dict = defaultdict(lambda: {"wins": 0, "losses": 0})
+        for e in closed:
+            regime = e.get("market_regime", "UNKNOWN")
+            if float(e.get("pnl", 0)) > 0:
+                by_regime[regime]["wins"] += 1
+            else:
+                by_regime[regime]["losses"] += 1
+
+        # Average IV rank at entry for winning vs losing trades
+        win_ivrs = [float(e["iv_rank"]) for e in wins if e.get("iv_rank") is not None]
+        loss_ivrs = [
+            float(e["iv_rank"]) for e in closed
+            if float(e.get("pnl", 0)) <= 0 and e.get("iv_rank") is not None
+        ]
+        avg_win_ivr = round(sum(win_ivrs) / len(win_ivrs), 1) if win_ivrs else None
+        avg_loss_ivr = round(sum(loss_ivrs) / len(loss_ivrs), 1) if loss_ivrs else None
+
+        # Most active underlyings
+        symbol_counts = Counter(e.get("underlying", "?") for e in trades)
+
+        return {
+            "lookback_days": days,
+            "generated_at": date.today().isoformat(),
+            "total_decisions": len(recent),
+            "total_trades": len(trades),
+            "total_skips": len(skips),
+            "closed_trades": len(closed),
+            "win_rate": win_rate,
+            "total_pnl": total_pnl,
+            "assignment_rate": assignment_rate,
+            "top_skip_reasons": dict(skip_reasons.most_common(5)),
+            "performance_by_regime": dict(by_regime),
+            "avg_iv_rank_winning_trades": avg_win_ivr,
+            "avg_iv_rank_losing_trades": avg_loss_ivr,
+            "most_active_symbols": dict(symbol_counts.most_common(5)),
+        }
+
     def get_recent_by_days(self, symbol: str, days: int = 30) -> list[dict]:
         """Return all trade entries for a symbol within the past N days.
 
