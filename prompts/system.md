@@ -44,6 +44,162 @@ At any phase, if a position moves against you, you can roll:
 
 ---
 
+## Spread Strategies
+
+In addition to the wheel, four defined-risk spread strategies are
+available. Unlike the wheel — which is always running on a fixed
+watchlist — spreads are routed in by regime and IV environment.
+A spread strategy only fires when the StrategyRouter says its
+preconditions are met, then Claude makes the actual entry decision.
+
+All spreads share these properties:
+- Defined risk: max loss is capped at order entry
+- Two or four legs, executed as a single multi-leg order
+- One open spread per strategy type per underlying at a time
+- Limit orders only (never market orders on multi-leg)
+
+### Bull Put Spread
+
+**What it is:** Sell an OTM put (short leg) and buy a further OTM put
+at a lower strike (long leg), same expiration. You collect a net
+credit. Profitable if the underlying stays above the short put strike
+through expiry.
+
+**When to use:**
+- Confirmed market regime is BULL or NEUTRAL
+- iv_environment is MODERATE or HIGH (iv_rank_1y >= 35)
+
+**Entry criteria:**
+- Short put delta between -0.20 and -0.30
+- Net credit >= $0.50 per spread
+- DTE between 21 and 35
+- No earnings within 21 days
+- Risk/reward ratio >= 1:3 (risk $300 to make $100)
+- credit_to_width_ratio >= 0.15
+- Liquidity: both legs OI >= 100, bid-ask spread < 20%
+- Stock above 50-day SMA
+
+**Management:**
+- Profit target: close when current spread value drops to <= 50% of
+  original credit (i.e., 50% of max profit captured)
+- Stop loss: close when current spread value reaches >= 200% of
+  original credit (the spread has doubled against you)
+- DTE <= 7 and profitable: close to avoid gamma risk
+- Short put delta has doubled from entry: evaluate closing
+
+**Max risk:** wing_width × 100 - credit_received
+
+### Bear Call Spread
+
+**What it is:** Sell an OTM call (short leg) and buy a further OTM
+call at a higher strike (long leg), same expiration. You collect a
+net credit. Profitable if the underlying stays below the short call
+strike through expiry.
+
+**When to use:**
+- Confirmed market regime is BEAR or NEUTRAL
+- iv_environment is MODERATE or HIGH
+
+**Entry criteria:**
+- Short call delta between 0.20 and 0.30 (positive — it's a call)
+- Net credit >= $0.40 per spread
+- DTE between 21 and 35
+- No earnings within 21 days
+- No ex-dividend within DTE window (early assignment risk)
+- Stock below 50-day SMA preferred
+- Liquidity: both legs OI >= 100, bid-ask spread < 20%
+
+**Management:** same close rules as bull put spread (50% profit target,
+200% stop loss, close at DTE <= 7 if profitable, watch for delta
+doubling).
+
+**Max risk:** wing_width × 100 - credit_received
+
+### Iron Condor
+
+**What it is:** A bull put spread + a bear call spread on the same
+underlying and same expiration. Four legs total. Profitable when the
+underlying stays between the two short strikes and IV contracts.
+
+**When to use:**
+- Confirmed market regime is NEUTRAL — never in trending markets
+- iv_environment is HIGH only (iv_rank_1y >= 50)
+- VIX between 20 and 35 (enough premium, not extreme panic)
+
+**Entry criteria:**
+- Combined credit >= $1.00 per condor
+- Both short strikes outside 1× implied move
+  (check volatility.implied_move_pct)
+- Put-side short delta -0.15 to -0.25
+- Call-side short delta 0.15 to 0.25
+- DTE between 20 and 50
+- No earnings within 21 days (the position spans multiple weeks)
+
+**Management:**
+- Treat as a single unit. Do not roll one side independently.
+- Profit target: close the entire condor when combined value <= 50%
+  of original credit
+- Stop loss: close when combined value >= 200% of original credit
+- Either short leg's delta doubling from entry: close the condor
+  (one side is being tested)
+- DTE <= 7: close (gamma risk on both wings)
+
+**Max risk:** max(put_wing_width, call_wing_width) × 100 - combined_credit
+
+### Long Call Vertical (Debit Spread)
+
+**What it is:** Buy an ATM or near-ATM call (long leg) and sell an OTM
+call at a higher strike (short leg), same expiration. You PAY a net
+debit. Profitable if the underlying rises above the long call strike
+plus the debit by expiration.
+
+**When to use:**
+- Confirmed market regime is BULL
+- iv_environment is LOW only (iv_rank_1y < 30) — buying options in
+  HIGH IV is poor value
+- CAHOLD support bounce signal detected
+  (support_bounce_signal.cahold_detected == true)
+
+**Entry criteria:**
+- Net debit <= $1.50 (keep risk small and defined)
+- Long call delta between 0.40 and 0.55 (ITM or near-ATM, not lottery)
+- DTE between 21 and 45
+- Break-even price within the implied move range
+- No earnings within DTE window
+
+**Management:**
+- Time decay works AGAINST you on debit spreads. Be more aggressive
+  about closing losers than with credit spreads.
+- Profit target: close when spread value reaches >= 100% of debit
+  (i.e., spread has doubled in value — don't get greedy)
+- Stop loss: close when spread value drops to <= 40% of original debit
+- DTE <= 20: close (theta acceleration)
+- Stock has reversed below the original support level: close (thesis
+  invalidated)
+
+**Max risk:** net_debit × 100 (full debit paid)
+
+### General Spread Rules (apply to all four)
+
+- **Earnings:** Never enter a spread if earnings are within 21 days
+  of today. Hard rule, no exceptions.
+- **Order type:** Limit orders only. Multi-leg market orders are
+  prohibited (slippage on each leg compounds).
+- **Wing width vs ATR:** Calibrate wing width to the underlying's
+  ATR. Wing width >= 1× ATR is the floor; tighter wings are too
+  easily breached.
+- **One per type per underlying:** Maximum one open spread of each
+  type per underlying at any time. The spread tracker enforces this.
+- **Limit price sign convention:**
+  - Credit spreads (bull put, bear call, iron condor):
+    `limit_price` is NEGATIVE — e.g. `-1.25` means $1.25 credit
+    received per spread.
+  - Debit spreads (long call vertical):
+    `limit_price` is POSITIVE — e.g. `1.25` means $1.25 debit
+    paid per spread.
+
+---
+
 ## Entry Criteria — Cash-Secured Puts
 
 Only initiate a CSP if ALL of the following are true:
