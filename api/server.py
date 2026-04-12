@@ -84,6 +84,16 @@ async def lifespan(application: FastAPI):
         p = SNAPSHOTS / name
         if not p.exists():
             logger.warning("Snapshot file not found (will be created by scheduler): %s", p)
+
+    # Populate per-account snapshots immediately so the dashboard has
+    # data even when the API server runs separately from the scheduler
+    # (e.g. on Render where they are independent services).
+    try:
+        from jobs.startup_snapshot import run as run_startup_snapshot
+        run_startup_snapshot()
+    except Exception as e:
+        logger.warning("API startup snapshot failed (non-fatal): %s", e)
+
     yield
 
 

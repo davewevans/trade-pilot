@@ -27,27 +27,17 @@ export function TopBar() {
     }
   }, [])
 
-  const dotColor = !health
-    ? 'var(--text-muted)'
-    : health.halted
-      ? 'var(--red)'
-      : 'var(--green)'
-
   return (
     <header
       className="flex items-center justify-between px-6 h-14 border-b"
       style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border)' }}
     >
       <div className="flex items-center gap-3">
-        <span
-          className="inline-block w-2.5 h-2.5 rounded-full"
-          style={{ backgroundColor: dotColor }}
-        />
         <img
           src="/favicon.svg"
           alt=""
-          width={22}
-          height={22}
+          width={36}
+          height={36}
           aria-hidden="true"
         />
         <span className="font-semibold tracking-wide">trade-pilot</span>

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { ACCOUNTS, api, type ContextResponse } from '../api/client'
+import { useAccount } from '../hooks/useAccount'
 import { useDecisions } from '../hooks/useDecisions'
 import { Badge } from '../components/shared/Badge'
 import { EmptyState } from '../components/shared/EmptyState'
@@ -29,6 +30,7 @@ function AccountCard({
   snapshot: Portfolio | null
 }) {
   const accent = ACCOUNT_ACCENT[account] ?? 'var(--accent)'
+  const { stats } = useAccount(account)
 
   const equity = snapshot?.account?.total_equity
   const bp = snapshot?.account?.buying_power
@@ -68,11 +70,17 @@ function AccountCard({
       <div className="text-xs mb-4" style={{ color: 'var(--text-muted)' }}>
         Buying power: <span className="font-mono tabular">{fmtMoney(bp)}</span>
       </div>
-      <div className="grid grid-cols-2 gap-3 text-xs">
+      <div className="grid grid-cols-3 gap-3 text-xs">
         <div>
           <div style={{ color: 'var(--text-muted)' }}>Open</div>
           <div className="font-mono tabular text-sm" style={{ color: 'var(--text-primary)' }}>
             {positionsCount}
+          </div>
+        </div>
+        <div>
+          <div style={{ color: 'var(--text-muted)' }}>Win rate</div>
+          <div className="font-mono tabular text-sm" style={{ color: 'var(--text-primary)' }}>
+            {stats?.win_rate != null ? `${stats.win_rate.toFixed(1)}%` : '—'}
           </div>
         </div>
         <div>
