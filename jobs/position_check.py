@@ -147,6 +147,7 @@ def run() -> None:
                 if order_id:
                     journal.update(pos.get("order_id", ""), {
                         "status": "rolled" if action == "roll" else "closed",
+                        "fill_status": "pending",
                         "closed_at": datetime.now().isoformat(timespec="seconds"),
                     })
                     logger.info("%s %s executed: %s", underlying, action, order_id)

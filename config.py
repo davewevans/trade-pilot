@@ -59,6 +59,9 @@ class Settings:
         self.LOG_DIR: Path = self.DATA_DIR / "logs"
 
         self.SNAPSHOTS_DIR: Path = self.DATA_DIR / "snapshots"
+        self.DATABASE_PATH: Path = Path(
+            os.getenv("DATABASE_PATH", str(self.DATA_DIR / "trade_pilot.db"))
+        )
 
         self.TIMEZONE: str = "America/New_York"
 

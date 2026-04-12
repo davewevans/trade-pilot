@@ -205,6 +205,7 @@ def run() -> None:
                 "confidence": decision.get("confidence"),
                 "reasoning": decision.get("reasoning"), "order_id": order_id,
                 "status": "submitted" if result else decision.get("action"),
+                "fill_status": "pending" if result else None,
             })
             report_lines.append(
                 f"**{symbol}** -- {decision.get('action')} "

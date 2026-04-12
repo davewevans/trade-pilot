@@ -72,8 +72,9 @@ def execute_decision(broker, decision: dict) -> dict | None:
         decision: Validated recommendation dict.
 
     Returns:
-        The order result dict (with fill_price/fill_status attached
-        when available), or None for hold/skip.
+        The order result dict, or None for hold/skip. Fill data is
+        not captured here — pending orders are reconciled in a
+        separate pass (see jobs/reconcile_orders.py).
     """
     action = decision["action"]
 
@@ -115,33 +116,6 @@ def execute_decision(broker, decision: dict) -> dict | None:
     else:
         logger.warning("Unhandled action: %s", action)
         return None
-
-    # ── Fill confirmation ──────────────────────────────────
-    if result:
-        import time as _time
-        order_id = result.get("id")
-        if order_id:
-            _time.sleep(30)
-            try:
-                filled = broker.get_order(order_id)
-                fill_price = filled.get("filled_avg_price")
-                status = filled.get("status")
-                logger.info(
-                    "Order %s status=%s fill_price=%s",
-                    order_id, status, fill_price,
-                )
-                if status not in ("filled", "partially_filled"):
-                    logger.warning(
-                        "Order %s not filled after 30s — status=%s. "
-                        "It will expire at market close if not filled.",
-                        order_id, status,
-                    )
-                result["fill_price"] = fill_price
-                result["fill_status"] = status
-            except Exception:
-                logger.warning(
-                    "Could not confirm fill for order %s", order_id, exc_info=True,
-                )
 
     return result
 
