@@ -185,6 +185,11 @@ def run() -> None:
                         "status": "rolled" if action == "roll" else "closed",
                         "fill_status": "pending",
                         "closed_at": datetime.now().isoformat(timespec="seconds"),
+                        "close_iv_rank": context.get("iv_rank"),
+                        "close_vix": (context.get("macro") or {}).get("vix"),
+                        "close_regime": context.get("confirmed_market_regime"),
+                        "close_delta": decision.get("delta"),
+                        "close_dte": decision.get("dte"),
                     })
                     logger.info("%s %s executed: %s", underlying, action, order_id)
 

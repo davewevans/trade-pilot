@@ -196,6 +196,14 @@ def run() -> None:
                     "symbol": decision.get("symbol"), "underlying": symbol,
                     "wheel_state": state.value, "action": "skip",
                     "reasoning": f"Guardrail rejected: {rejection}", "status": "skipped",
+                    "skip_reason": rejection,
+                    "strategy_type": "wheel_csp" if state.value == "IDLE" else "wheel_cc",
+                    "iv_rank": context.get("iv_rank"),
+                    "iv_environment": context.get("iv_environment"),
+                    "vix": (context.get("macro") or {}).get("vix"),
+                    "market_regime": context.get("confirmed_market_regime"),
+                    "delta": decision.get("delta"),
+                    "dte": decision.get("dte"),
                 })
                 report_lines.append(f"**{symbol}** -- SKIPPED (guardrail: {rejection})")
                 continue
@@ -254,6 +262,14 @@ def run() -> None:
                 "reasoning": decision.get("reasoning"), "order_id": order_id,
                 "status": "submitted" if result else decision.get("action"),
                 "fill_status": "pending" if result else None,
+                "strategy_type": "wheel_csp" if state.value == "IDLE" else "wheel_cc",
+                "iv_rank": context.get("iv_rank"),
+                "iv_environment": context.get("iv_environment"),
+                "vix": (context.get("macro") or {}).get("vix"),
+                "market_regime": context.get("confirmed_market_regime"),
+                "delta": decision.get("delta"),
+                "dte": decision.get("dte"),
+                "skip_reason": decision.get("skip_reason"),
             })
             report_lines.append(
                 f"**{symbol}** -- {decision.get('action')} "

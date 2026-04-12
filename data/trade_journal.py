@@ -24,6 +24,19 @@ class TradeJournal:
         Expected entry keys: symbol, underlying, wheel_state, action,
         contract_symbol, qty, limit_price, confidence, reasoning,
         order_id, status, fill_price, pnl, closed_at.
+
+        Optional context/decision fields (log what is available):
+            iv_rank: IV rank at time of decision (float, 0-100)
+            iv_environment: LOW / MODERATE / HIGH
+            delta: delta of the selected contract (float)
+            dte: days to expiration of the selected contract (int)
+            vix: VIX value at time of decision (float)
+            market_regime: confirmed regime at time of decision (str)
+            strategy_type: which strategy made this decision —
+                "wheel_csp", "wheel_cc", "iron_condor",
+                "bull_put_spread", "bear_call_spread",
+                "long_call_vertical"
+            skip_reason: if action is skip, the reason string
         """
         record = {"timestamp": datetime.now().isoformat(timespec="seconds")}
         record.update(entry)
