@@ -170,6 +170,30 @@ def run() -> None:
                 symbol, decision.get("action"), decision.get("confidence"),
             )
 
+            # Claude-initiated skip/hold — log before guardrails so we capture
+            # the decision and its reason even though no order will be placed.
+            if decision.get("action") in ("skip", "hold"):
+                journal.append({
+                    "symbol": None,
+                    "underlying": symbol,
+                    "wheel_state": state.value,
+                    "action": decision.get("action"),
+                    "skip_reason": decision.get("skip_reason") or decision.get("reasoning", ""),
+                    "reasoning": decision.get("reasoning", ""),
+                    "confidence": decision.get("confidence"),
+                    "status": "skipped",
+                    "strategy_type": "wheel_csp" if state.value == "IDLE" else "wheel_cc",
+                    "iv_rank": context.get("iv_rank"),
+                    "iv_environment": context.get("iv_environment"),
+                    "vix": (context.get("macro") or {}).get("vix"),
+                    "market_regime": context.get("confirmed_market_regime"),
+                })
+                report_lines.append(
+                    f"**{symbol}** -- {decision.get('action').upper()} "
+                    f"(Claude: {(decision.get('skip_reason') or decision.get('reasoning', ''))[:60]})"
+                )
+                continue
+
             acct = context.get("account") or broker.get_account()
             pos = context.get("positions") or []
             is_valid, rejection = guardrails.validate(decision, acct, pos, context)
@@ -334,11 +358,12 @@ def run() -> None:
                 # DB dual-write — spread trades themselves (multi-leg orders)
                 # are not yet inserted into the trades table. That requires
                 # per-leg expansion and is deferred to a follow-up task.
+                spread_underlying = (
+                    decision.get("underlying")
+                    or (settings.WATCHLIST[0] if settings.WATCHLIST else strategy_name)
+                )
+
                 if recorder is not None:
-                    spread_underlying = (
-                        decision.get("underlying")
-                        or (settings.WATCHLIST[0] if settings.WATCHLIST else strategy_name)
-                    )
                     recorder.record_decision(
                         strategy_type=strategy_name,
                         underlying=spread_underlying,
@@ -347,6 +372,24 @@ def run() -> None:
                         confidence=decision.get("confidence"),
                         context=spread_ctx,
                     )
+
+                # Journal SKIPs from spread strategies so Claude sees them
+                # in skip_history and the journal aggregates are accurate.
+                if action == "SKIP":
+                    journal.append({
+                        "symbol": None,
+                        "underlying": spread_underlying,
+                        "action": "skip",
+                        "skip_reason": decision.get("skip_reason") or decision.get("reasoning", ""),
+                        "reasoning": decision.get("reasoning", ""),
+                        "confidence": decision.get("confidence"),
+                        "status": "skipped",
+                        "strategy_type": strategy_name,
+                        "iv_rank": spread_ctx.get("iv_rank"),
+                        "iv_environment": spread_ctx.get("iv_environment"),
+                        "vix": (spread_ctx.get("macro") or {}).get("vix"),
+                        "market_regime": spread_ctx.get("confirmed_market_regime"),
+                    })
 
                 if action == "OPEN":
                     _handle_spread_open(

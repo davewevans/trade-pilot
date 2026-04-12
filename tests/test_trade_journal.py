@@ -77,6 +77,57 @@ def test_get_symbol_stats_counts_and_win_rate(journal):
     assert stats["avg_delta_at_entry"] == round((-0.30 + 0.20 - 0.25 - 0.20) / 4, 3)
 
 
+def test_format_skip_history_top_reasons(journal):
+    # 3x IV too low, 2x earnings, 1x other reason
+    for _ in range(3):
+        journal.append({
+            "underlying": "SPY", "action": "skip", "status": "skipped",
+            "skip_reason": "IV rank too low",
+        })
+    for _ in range(2):
+        journal.append({
+            "underlying": "SPY", "action": "skip", "status": "skipped",
+            "skip_reason": "earnings within 7 days",
+        })
+    journal.append({
+        "underlying": "SPY", "action": "hold", "status": "hold",
+        "skip_reason": "delta within band",
+    })
+    # Different symbol — should not appear
+    journal.append({
+        "underlying": "AAPL", "action": "skip", "status": "skipped",
+        "skip_reason": "guardrail",
+    })
+
+    out = journal.format_skip_history_for_prompt("SPY", days=30)
+    assert "<skip_history>" in out
+    assert "Recent skips on SPY (last 30 days): 6 total" in out
+    # Most-common first
+    spy_section = out.split("\n")
+    assert "  x3: IV rank too low" in spy_section
+    assert "  x2: earnings within 7 days" in spy_section
+    assert "  x1: delta within band" in spy_section
+    assert "AAPL" not in out
+    assert "guardrail" not in out
+
+    # Order: x3 line should come before x2 line
+    assert out.index("x3:") < out.index("x2:")
+
+
+def test_format_skip_history_empty(journal):
+    assert journal.format_skip_history_for_prompt("SPY") == ""
+
+
+def test_get_recent_skips_filters_by_symbol_and_window(journal):
+    journal.append({"underlying": "SPY", "action": "skip", "status": "skipped"})
+    journal.append({"underlying": "SPY", "action": "sell_put", "status": "filled"})
+    journal.append({"underlying": "AAPL", "action": "skip", "status": "skipped"})
+
+    skips = journal.get_recent_skips("SPY")
+    assert len(skips) == 1
+    assert skips[0]["underlying"] == "SPY"
+
+
 def test_format_stats_for_prompt_empty(journal):
     assert journal.format_stats_for_prompt("SPY") == ""
 

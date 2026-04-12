@@ -69,6 +69,7 @@ class ContextBuilder:
             "news": None,
             "recent_trades": None,
             "performance_stats": None,
+            "skip_history": None,
             "volatility": None,
             "earnings": None,
             "ex_dividend": None,
@@ -239,6 +240,14 @@ class ContextBuilder:
         except Exception:
             logger.warning("Failed to build performance stats for %s", symbol, exc_info=True)
             context["performance_stats"] = None
+
+        # Skip history for Claude's pattern awareness
+        try:
+            skip_history = self.journal.format_skip_history_for_prompt(symbol, days=30)
+            context["skip_history"] = skip_history if skip_history else None
+        except Exception:
+            logger.warning("Failed to build skip history for %s", symbol, exc_info=True)
+            context["skip_history"] = None
 
         # ── SPX technicals (for regime derivation) ─────────
         if symbol.upper() != "SPY":

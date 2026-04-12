@@ -189,6 +189,50 @@ class TradeJournal:
         body = "\n".join(lines)
         return f"<performance_stats>\n{body}\n</performance_stats>"
 
+    def get_recent_skips(self, symbol: str, days: int = 30) -> list[dict]:
+        """Return recent skip entries for a symbol within the past N days."""
+        from datetime import date, timedelta
+        cutoff = (date.today() - timedelta(days=days)).isoformat()
+
+        entries = self._read_all()
+        return [
+            e for e in entries
+            if (
+                e.get("underlying", "").upper() == symbol.upper()
+                and e.get("timestamp", "") >= cutoff
+                and (
+                    e.get("action") in ("skip", "hold")
+                    or e.get("status") == "skipped"
+                )
+            )
+        ]
+
+    def format_skip_history_for_prompt(self, symbol: str, days: int = 30) -> str:
+        """Format recent skip history as a string for Claude's context.
+
+        Helps Claude recognize persistent conditions — e.g. if it has been
+        skipping SPY for IV rank 12 cycles in a row, that is worth knowing.
+        """
+        skips = self.get_recent_skips(symbol, days)
+        if not skips:
+            return ""
+
+        # Summarize skip reasons by frequency
+        from collections import Counter
+        reasons = Counter(
+            e.get("skip_reason") or e.get("reasoning", "unknown")
+            for e in skips
+        )
+
+        lines = [f"Recent skips on {symbol.upper()} (last {days} days): {len(skips)} total"]
+        for reason, count in reasons.most_common(5):
+            # Truncate long reasoning strings
+            reason_short = reason[:80] + "..." if len(reason) > 80 else reason
+            lines.append(f"  x{count}: {reason_short}")
+
+        body = "\n".join(lines)
+        return f"<skip_history>\n{body}\n</skip_history>"
+
     def format_for_prompt(self, symbol: str, n: int = 5) -> str:
         """Format recent trades as a string suitable for Claude's context.
 
