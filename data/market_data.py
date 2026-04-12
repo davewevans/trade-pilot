@@ -341,6 +341,51 @@ def get_orats_iv_rank_batch(symbols: list[str]) -> dict[str, dict]:
         return {}
 
 
+def get_finnhub_earnings_history(symbol: str) -> list[dict]:
+    """Return recent earnings surprise history from Finnhub."""
+    if not settings.FINNHUB_API_KEY:
+        return []
+    try:
+        from data.finnhub_client import FinnhubClient
+
+        return FinnhubClient().get_earnings_history(symbol)
+    except Exception:
+        logger.warning(
+            "Finnhub earnings history failed for %s", symbol, exc_info=True,
+        )
+        return []
+
+
+def get_finnhub_analyst_data(symbol: str) -> dict:
+    """Return analyst recommendations and price target from Finnhub."""
+    if not settings.FINNHUB_API_KEY:
+        return {}
+    try:
+        from data.finnhub_client import FinnhubClient
+
+        return FinnhubClient().get_analyst_data(symbol)
+    except Exception:
+        logger.warning(
+            "Finnhub analyst data failed for %s", symbol, exc_info=True,
+        )
+        return {}
+
+
+def get_finnhub_news_sentiment(symbol: str) -> dict | None:
+    """Return Finnhub NLP news sentiment."""
+    if not settings.FINNHUB_API_KEY:
+        return None
+    try:
+        from data.finnhub_client import FinnhubClient
+
+        return FinnhubClient().get_news_sentiment(symbol)
+    except Exception:
+        logger.warning(
+            "Finnhub news sentiment failed for %s", symbol, exc_info=True,
+        )
+        return None
+
+
 def get_earnings_calendar(symbol: str) -> dict:
     """Return upcoming earnings from Finnhub (yfinance fallback)."""
     if settings.FINNHUB_API_KEY:

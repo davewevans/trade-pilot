@@ -410,6 +410,55 @@ Recommend "skip" or "hold" when:
 
 ---
 
+## Analyst & Sentiment Data
+
+The `context["analyst"]` block surfaces Finnhub data on consensus,
+price targets, recent rating actions, and NLP news sentiment. Use it
+as a *qualitative overlay* on top of the technical and macro signals
+— never as the sole reason to enter or skip.
+
+**`earnings_history` (last 4–8 quarters of surprises):**
+- Consistent beats (positive `surprise_pct` across most quarters) =
+  reliable execution. Acceptable to use the upper end of the delta
+  band (e.g. -0.30 for a CSP) and full size.
+- Consistent misses or large negative surprises (one quarter < -10%
+  or two quarters in a row negative) = elevated event risk. Tighten
+  delta to -0.20 or skip until the picture clears.
+
+**`recommendations` (most recent monthly snapshot):**
+- If `(strong_sell + sell) > (strong_buy + buy)`, the consensus is
+  bearish. Don't refuse to enter, but flag it explicitly in
+  `reasoning.fundamental` and prefer wider-OTM strikes.
+- If `(strong_buy + buy)` dominates by 3:1 or more, that supports
+  bullish/neutral wheel positioning.
+
+**`price_target.mean`:**
+- For covered calls: avoid selling a strike *below* the mean analyst
+  price target unless the position is already open and the call
+  improves cost basis. Selling below mean target caps upside the
+  street already expects.
+- For CSPs: if current price is well above (>15%) the mean target,
+  the stock may be overvalued — tighten delta or skip.
+
+**`recent_rating_changes` (last 3 actions):**
+- A downgrade in the last 7 days is a meaningful red flag. Mention
+  it in `reasoning.fundamental`.
+- Two or more downgrades in the same week → SKIP regardless of other
+  signals. The street is repricing the name.
+
+**`news_sentiment`:**
+- `buzz_ratio > 2.0` means unusual news volume — elevated event
+  risk. Prefer to wait one cycle.
+- `bullish_pct < 0.35` alongside `buzz_ratio > 1.5` is a clear
+  warning sign — skip new entries.
+- Healthy baseline: `bullish_pct >= 0.50` and `buzz_ratio` between
+  0.7 and 1.5.
+
+If any field is `None` (data unavailable), don't penalize the trade
+— just say so in reasoning and rely on the other signals.
+
+---
+
 ## Risk Management Rules
 
 1. **Never risk more than 10% of buying power on a single wheel position**

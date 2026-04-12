@@ -8,6 +8,7 @@ numpy
 yfinance
 ta
 requests
+finnhub-python
 fredapi
 schedule
 fastapi

@@ -84,6 +84,15 @@ class ContextBuilder:
             futures["news"] = pool.submit(_fetch_news, symbol)
             futures["orats_summary"] = pool.submit(market_data.get_orats_summary, symbol)
             futures["orats_cores"] = pool.submit(market_data.get_orats_cores, symbol)
+            futures["earnings_history"] = pool.submit(
+                market_data.get_finnhub_earnings_history, symbol,
+            )
+            futures["analyst_data"] = pool.submit(
+                market_data.get_finnhub_analyst_data, symbol,
+            )
+            futures["news_sentiment"] = pool.submit(
+                market_data.get_finnhub_news_sentiment, symbol,
+            )
             futures["earnings"] = pool.submit(market_data.get_earnings_calendar, symbol)
             futures["vix_term"] = pool.submit(market_data.get_vix_term_structure)
             futures["ex_dividend"] = pool.submit(market_data.get_ex_dividend_date, symbol)
@@ -165,6 +174,16 @@ class ContextBuilder:
                 "abs_avg_earnings_move",
             )
             context["earnings"]["orats_source"] = "orats"
+
+        # ── Analyst data (Finnhub) ──────────────────────────
+        analyst = results.get("analyst_data") or {}
+        context["analyst"] = {
+            "earnings_history": results.get("earnings_history") or [],
+            "recommendations": analyst.get("recommendation"),
+            "price_target": analyst.get("price_target"),
+            "recent_rating_changes": analyst.get("recent_rating_changes", []),
+            "news_sentiment": results.get("news_sentiment"),
+        }
 
         # ── Ex-dividend (for bear call spread assignment risk) ──
         ex_div = results.get("ex_dividend") or {}
