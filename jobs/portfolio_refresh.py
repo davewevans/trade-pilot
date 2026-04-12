@@ -65,6 +65,14 @@ def run() -> None:
     except Exception as e:
         logger.warning("Failed to write portfolio snapshot: %s", e)
 
+    # ── Equity history (powers the equity curve chart) ──────────
+    try:
+        history = broker.get_portfolio_history(period="3M", timeframe="1D")
+        if history:
+            sw.write_equity_history(history)
+    except Exception as e:
+        logger.warning("Failed to fetch/write equity history: %s", e)
+
     logger.debug(
         "Portfolio refresh: equity=$%.2f | CB=%s | positions=%d",
         equity, cb_status.status, len(positions),

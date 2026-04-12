@@ -194,6 +194,18 @@ def circuit_breakers():
     return data
 
 
+@app.get("/api/equity-history")
+def equity_history():
+    """Equity curve data — 3 months, daily resolution."""
+    data = _read_json(SNAPSHOTS / "equity_history.json")
+    if data is None:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "No equity history data yet"},
+        )
+    return data
+
+
 @app.get("/api/decisions")
 def decisions(
     limit: int = Query(default=50, ge=1, le=500),

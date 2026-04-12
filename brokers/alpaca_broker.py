@@ -519,3 +519,36 @@ class AlpacaBroker(BaseBroker):
                     "Failed to fetch activities type=%s", act_type, exc_info=True,
                 )
         return all_activities
+
+    def get_portfolio_history(
+        self,
+        period: str = "3M",
+        timeframe: str = "1D",
+    ) -> dict:
+        """Return portfolio equity history via the Alpaca REST API.
+
+        Args:
+            period:    Duration — "1W", "1M", "3M", "6M", "1A", "all".
+            timeframe: Resolution — "1Min", "5Min", "15Min", "1H", "1D".
+
+        Returns:
+            Raw Alpaca response dict with keys: timestamp, equity,
+            profit_loss, profit_loss_pct, base_value, timeframe.
+            Returns empty dict on failure.
+        """
+        headers = {
+            "APCA-API-KEY-ID":     self._api_key,
+            "APCA-API-SECRET-KEY": self._secret_key,
+        }
+        url    = f"{settings.ALPACA_TRADE_URL}/v2/account/portfolio/history"
+        params = {"period": period, "timeframe": timeframe,
+                  "extended_hours": False}
+        try:
+            resp = http_requests.get(
+                url, headers=headers, params=params, timeout=10
+            )
+            resp.raise_for_status()
+            return resp.json()
+        except Exception:
+            logger.exception("Failed to fetch portfolio history")
+            return {}

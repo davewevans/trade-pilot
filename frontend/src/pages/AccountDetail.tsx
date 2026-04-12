@@ -16,7 +16,7 @@ import { Badge } from '../components/shared/Badge'
 import { EmptyState } from '../components/shared/EmptyState'
 import { LoadingSpinner } from '../components/shared/LoadingSpinner'
 import { StatCard } from '../components/shared/StatCard'
-import type { Position, Trade } from '../types'
+import type { CircuitBreaker, EquityHistory, Position, Trade } from '../types'
 
 // Maps the URL account slug to the strategy_type tag that
 // StateWriter.write_portfolio_snapshot stamps on each position. Keep in
@@ -75,6 +75,7 @@ function WheelPipeline({ states }: { states: Record<string, string> }) {
 
 function PositionRow({ p }: { p: Position }) {
   const pl = Number(p.unrealized_pnl ?? 0)
+  const upl = p.unrealized_pnl
   return (
     <tr>
       <td className="font-mono text-xs">{p.symbol}</td>
@@ -90,8 +91,23 @@ function PositionRow({ p }: { p: Position }) {
       >
         {fmtSigned(pl)}
       </td>
-      <td className="font-mono tabular text-xs" style={{ color: 'var(--text-muted)' }}>
+      <td className="font-mono tabular text-xs">
         {p.delta != null ? p.delta.toFixed(2) : '—'}
+      </td>
+      <td className="font-mono tabular text-xs">
+        {p.theta != null ? p.theta.toFixed(2) : '—'}
+      </td>
+      <td className="font-mono tabular text-xs">
+        {p.dte != null ? p.dte : '—'}
+      </td>
+      <td
+        className="font-mono tabular text-xs"
+        style={{
+          color: upl == null ? 'var(--text-muted)'
+            : upl >= 0 ? 'var(--green)' : 'var(--red)',
+        }}
+      >
+        {upl == null ? '—' : fmtSigned(Number(upl))}
       </td>
     </tr>
   )
@@ -100,10 +116,36 @@ function PositionRow({ p }: { p: Position }) {
 export function AccountDetail() {
   const { account = '' } = useParams()
   const accountMeta = ACCOUNTS.find((a) => a.account === account)
-  const { portfolio, stats, performance, loading } = useAccount(account)
+  const { portfolio, stats, loading } = useAccount(account)
 
   const [trades, setTrades] = useState<Trade[] | null>(null)
   const [tradesLoading, setTradesLoading] = useState(true)
+  const [cb, setCb] = useState<CircuitBreaker | null>(null)
+  const [equityHistory, setEquityHistory] = useState<EquityHistory | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    const load = () => {
+      api.circuitBreakers().then((c) => { if (!cancelled) setCb(c) }).catch(() => {
+        if (!cancelled) setCb(null)
+      })
+    }
+    load()
+    const id = setInterval(load, 60_000)
+    return () => { cancelled = true; clearInterval(id) }
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    const load = () => {
+      api.equityHistory().then((h) => { if (!cancelled) setEquityHistory(h) }).catch(() => {
+        if (!cancelled) setEquityHistory(null)
+      })
+    }
+    load()
+    const id = setInterval(load, 5 * 60_000)
+    return () => { cancelled = true; clearInterval(id) }
+  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -145,12 +187,28 @@ export function AccountDetail() {
   const wheelStates = portfolio?.wheel_states ?? {}
   const isWheel = account === 'wheel'
 
-  // Last 90 days of equity curve
-  const cutoff = new Date()
-  cutoff.setDate(cutoff.getDate() - 90)
-  const equityData = (performance?.equity_curve ?? []).filter(
-    (p) => new Date(p.date) >= cutoff,
-  )
+  const equityPoints = equityHistory?.points ?? []
+  const baseValue = equityHistory?.base_value ?? 0
+  const lastEquity = equityPoints.length
+    ? equityPoints[equityPoints.length - 1].equity
+    : null
+  const equityLineColor =
+    lastEquity == null || baseValue === 0 ? 'var(--accent)'
+      : lastEquity >= baseValue ? 'var(--green)' : 'var(--red)'
+
+  const todayPnlVal = portfolio?.account?.today_pnl
+  const todayPnlPct = portfolio?.account?.today_pnl_pct
+  const bpUsedPct = portfolio?.account?.buying_power_used_pct
+  const todayColor =
+    todayPnlVal == null || todayPnlVal === 0 ? 'var(--text-muted)'
+      : todayPnlVal > 0 ? 'var(--green)' : 'var(--red)'
+  const todayDisplay = todayPnlVal == null
+    ? '—'
+    : `${fmtSigned(todayPnlVal)} (${todayPnlPct != null ? `${todayPnlPct >= 0 ? '+' : ''}${todayPnlPct.toFixed(2)}%` : '—'})`
+
+  const cbStatus = cb?.status
+  const cbHalted = cb?.halted
+  const cbBadgeText = cbStatus === 'RED' && cbHalted ? 'HALTED' : cbStatus
 
   return (
     <div className="space-y-6">
@@ -159,11 +217,14 @@ export function AccountDetail() {
           <Link to="/" className="text-xs" style={{ color: 'var(--text-muted)' }}>
             ← Dashboard
           </Link>
-          <h2 className="text-2xl font-semibold mt-1">{accountMeta.label}</h2>
+          <div className="flex items-center gap-2 mt-1">
+            <h2 className="text-2xl font-semibold">{accountMeta.label}</h2>
+            {cbStatus && <Badge variant="circuit">{cbBadgeText}</Badge>}
+          </div>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
         <StatCard
           label="Portfolio value"
           value={fmtMoney(portfolio?.account?.total_equity)}
@@ -172,6 +233,12 @@ export function AccountDetail() {
         <StatCard
           label="Buying power"
           value={fmtMoney(portfolio?.account?.buying_power)}
+          sub={bpUsedPct ? `${bpUsedPct.toFixed(0)}% deployed` : undefined}
+          size="lg"
+        />
+        <StatCard
+          label="Today"
+          value={<span style={{ color: todayColor }}>{todayDisplay}</span>}
           size="lg"
         />
         <StatCard
@@ -220,6 +287,9 @@ export function AccountDetail() {
                   <th>Current</th>
                   <th>P&amp;L</th>
                   <th>Delta</th>
+                  <th>Theta</th>
+                  <th>DTE</th>
+                  <th>Unrealized</th>
                 </tr>
               </thead>
               <tbody>
@@ -236,14 +306,14 @@ export function AccountDetail() {
           className="rounded p-3"
           style={{ backgroundColor: 'var(--bg-card)', border: '1px solid var(--border)', height: 280 }}
         >
-          {equityData.length === 0 ? (
+          {equityPoints.length === 0 ? (
             <EmptyState message="No equity data yet" />
           ) : (
             <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={equityData} margin={{ top: 8, right: 16, bottom: 8, left: 8 }}>
+              <LineChart data={equityPoints} margin={{ top: 8, right: 16, bottom: 8, left: 8 }}>
                 <CartesianGrid stroke="var(--border)" strokeDasharray="3 3" />
                 <XAxis dataKey="date" stroke="var(--text-muted)" fontSize={11} />
-                <YAxis stroke="var(--text-muted)" fontSize={11} />
+                <YAxis stroke="var(--text-muted)" fontSize={11} domain={['auto', 'auto']} />
                 <Tooltip
                   contentStyle={{
                     backgroundColor: 'var(--bg-secondary)',
@@ -251,14 +321,28 @@ export function AccountDetail() {
                     color: 'var(--text-primary)',
                     fontSize: 12,
                   }}
+                  formatter={(value: number, name: string) => {
+                    if (name === 'equity') return [fmtMoney(value), 'Equity']
+                    if (name === 'pnl') return [fmtSigned(value), 'Daily P&L']
+                    return [value, name]
+                  }}
                 />
-                <ReferenceLine y={0} stroke="var(--text-muted)" />
+                {baseValue > 0 && (
+                  <ReferenceLine y={baseValue} stroke="var(--text-muted)" strokeDasharray="3 3" />
+                )}
                 <Line
                   type="monotone"
-                  dataKey="cumulative_pnl"
-                  stroke="var(--accent)"
+                  dataKey="equity"
+                  stroke={equityLineColor}
                   strokeWidth={2}
                   dot={false}
+                />
+                <Line
+                  type="monotone"
+                  dataKey="pnl"
+                  stroke="transparent"
+                  dot={false}
+                  legendType="none"
                 />
               </LineChart>
             </ResponsiveContainer>

@@ -151,12 +151,21 @@ class StateWriter:
                     "theta": self._safe_float(p.get("theta")),
                 })
 
+            last_equity = self._safe_float(account_data.get("last_equity"), 0)
+            today_pnl = round(equity - last_equity, 2) if last_equity else 0.0
+            today_pnl_pct = (
+                round((today_pnl / last_equity) * 100, 3) if last_equity else 0.0
+            )
+
             snapshot = {
                 "timestamp": self._now_iso(),
                 "account": {
                     "total_equity": equity,
+                    "last_equity": last_equity,
                     "buying_power": buying_power,
                     "buying_power_used_pct": bp_used_pct,
+                    "today_pnl": today_pnl,
+                    "today_pnl_pct": today_pnl_pct,
                 },
                 "positions": pos_list,
                 "wheel_states": wheel_states,
@@ -168,6 +177,50 @@ class StateWriter:
             logger.debug("Wrote portfolio snapshot: %s", path)
         except Exception:
             logger.exception("Failed to write portfolio snapshot")
+
+    def write_equity_history(self, history: dict) -> None:
+        """Write snapshots/equity_history.json.
+
+        Transforms Alpaca's /v2/account/portfolio/history response into a
+        clean list of {date, equity, pnl, pnl_pct} dicts for the chart.
+        Null equity values (non-trading days) are skipped.
+        """
+        try:
+            timestamps = history.get("timestamp") or []
+            equities   = history.get("equity") or []
+            pnl        = history.get("profit_loss") or []
+            pnl_pct    = history.get("profit_loss_pct") or []
+
+            if not timestamps:
+                logger.debug("No equity history data to write")
+                return
+
+            points = []
+            for i, ts in enumerate(timestamps):
+                eq = equities[i] if i < len(equities) else None
+                if eq is None:
+                    continue
+                points.append({
+                    "date":    datetime.fromtimestamp(ts).strftime("%Y-%m-%d"),
+                    "equity":  round(float(eq), 2),
+                    "pnl":     round(float(pnl[i]), 2)
+                               if i < len(pnl) and pnl[i] is not None else 0.0,
+                    "pnl_pct": round(float(pnl_pct[i]) * 100, 3)
+                               if i < len(pnl_pct) and pnl_pct[i] is not None else 0.0,
+                })
+
+            snapshot = {
+                "timestamp":  self._now_iso(),
+                "base_value": self._safe_float(history.get("base_value"), 0),
+                "timeframe":  history.get("timeframe", "1D"),
+                "points":     points,
+            }
+
+            path = self.dir / "equity_history.json"
+            self._atomic_write(path, json.dumps(snapshot, indent=2, default=str))
+            logger.debug("Wrote equity history: %d points", len(points))
+        except Exception:
+            logger.exception("Failed to write equity history snapshot")
 
     def write_context_snapshot(self, context_dict: dict) -> None:
         """Write ``snapshots/context.json``."""

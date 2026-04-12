@@ -3,11 +3,24 @@ import type {
   CircuitBreaker,
   DecisionStats,
   DecisionsResponse,
+  EquityHistory,
   HealthStatus,
   Performance,
   Portfolio,
   Trade,
 } from '../types'
+
+export interface MacroContext {
+  vix?: number | null
+  fear_greed_score?: number | null
+  fear_greed_rating?: string | null
+}
+
+export interface ContextResponse {
+  macro?: MacroContext
+  confirmed_market_regime?: string | null
+  [key: string]: unknown
+}
 
 export interface TradesResponse {
   trades: Trade[]
@@ -66,6 +79,10 @@ export const api = {
   },
 
   circuitBreakers: () => get<CircuitBreaker>('/api/circuit-breakers'),
+
+  context: () => get<ContextResponse>('/api/context'),
+
+  equityHistory: () => get<EquityHistory>('/api/equity-history'),
 
   regimeHistory: () =>
     get<{ confirmed: string; readings: string[] }>('/api/regime-history'),

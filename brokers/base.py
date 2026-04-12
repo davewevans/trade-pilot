@@ -121,3 +121,9 @@ class BaseBroker(ABC):
     def get_order(self, order_id: str) -> dict:
         """Fetch a single order by ID. Optional — used to confirm fills."""
         raise NotImplementedError
+
+    def get_portfolio_history(
+        self, period: str = "3M", timeframe: str = "1D"
+    ) -> dict:
+        """Return portfolio history. Override in broker implementations."""
+        return {}

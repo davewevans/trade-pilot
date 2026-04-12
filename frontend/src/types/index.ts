@@ -19,11 +19,29 @@ export interface Position {
   theta?: number
 }
 
+export interface EquityHistoryPoint {
+  date: string
+  equity: number
+  pnl: number
+  pnl_pct: number
+}
+
+export interface EquityHistory {
+  timestamp: string
+  base_value: number
+  timeframe: string
+  points: EquityHistoryPoint[]
+}
+
 export interface Portfolio {
   account: {
     total_equity: number
     buying_power: number
     cash: number
+    last_equity?: number
+    today_pnl?: number
+    today_pnl_pct?: number
+    buying_power_used_pct?: number
   }
   positions: Position[]
   wheel_states: Record<string, string>

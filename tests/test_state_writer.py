@@ -41,7 +41,8 @@ class TestPortfolioSnapshot:
         writer.write_portfolio_snapshot(
             account_data={
                 "portfolio_value": "125000.00",
-                "buying_power": "50000.00",
+                "buying_power":    "50000.00",
+                "last_equity":     "124000.00",
             },
             positions=[
                 {
@@ -74,6 +75,9 @@ class TestPortfolioSnapshot:
         assert data["positions"][0]["strike"] == 540.0
         assert data["positions"][0]["delta"] == -0.25
         assert data["wheel_states"]["SPY"] == "SHORT_PUT"
+        assert "today_pnl" in data["account"]
+        assert "today_pnl_pct" in data["account"]
+        assert "last_equity" in data["account"]
 
     def test_handles_zero_equity(self, writer, snap_dir):
         writer.write_portfolio_snapshot(
@@ -237,6 +241,37 @@ class TestCircuitBreaker:
         assert data["status"] == "GREEN"
         assert data["halted"] is False
         assert data["active_rules"] == []
+
+
+# ── write_equity_history ────────────────────────────────────
+
+
+class TestEquityHistory:
+    def test_produces_valid_json(self, writer, snap_dir):
+        history = {
+            "timestamp":       [1700000000, 1700086400, 1700172800],
+            "equity":          [100000.0, 100312.5, None],
+            "profit_loss":     [0.0, 312.5, None],
+            "profit_loss_pct": [0.0, 0.003125, None],
+            "base_value":      100000.0,
+            "timeframe":       "1D",
+        }
+        writer.write_equity_history(history)
+
+        path = snap_dir / "equity_history.json"
+        assert path.exists()
+
+        data = json.loads(path.read_text(encoding="utf-8"))
+        assert "timestamp" in data
+        assert data["base_value"] == 100000.0
+        # Null equity entry (index 2) should be skipped
+        assert len(data["points"]) == 2
+        assert data["points"][0]["equity"] == 100000.0
+        assert data["points"][1]["pnl"] == 312.5
+
+    def test_empty_history_writes_nothing(self, writer, snap_dir):
+        writer.write_equity_history({})
+        assert not (snap_dir / "equity_history.json").exists()
 
 
 # ── atomic write ────────────────────────────────────────────

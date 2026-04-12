@@ -1,11 +1,13 @@
+import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { ACCOUNTS } from '../api/client'
+import { ACCOUNTS, api, type ContextResponse } from '../api/client'
 import { useAccount } from '../hooks/useAccount'
 import { useDecisions } from '../hooks/useDecisions'
 import { Badge } from '../components/shared/Badge'
 import { EmptyState } from '../components/shared/EmptyState'
 import { LoadingSpinner } from '../components/shared/LoadingSpinner'
-import type { Decision, Performance } from '../types'
+import { StatCard } from '../components/shared/StatCard'
+import type { CircuitBreaker, Decision, Performance } from '../types'
 
 const fmtMoney = (n: number | null | undefined) =>
   n == null ? '—' : `$${n.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
@@ -19,7 +21,15 @@ function todayPnl(perf: Performance | null): number | null {
   return perf.equity_curve[idx].cumulative_pnl - prev
 }
 
-function AccountCard({ account, label }: { account: string; label: string }) {
+function AccountCard({
+  account,
+  label,
+  cbStatus,
+}: {
+  account: string
+  label: string
+  cbStatus: string | null
+}) {
   const { portfolio, stats, performance, loading } = useAccount(account)
   const todays = todayPnl(performance)
 
@@ -37,7 +47,10 @@ function AccountCard({ account, label }: { account: string; label: string }) {
       }}
     >
       <div className="flex items-baseline justify-between mb-3">
-        <h3 className="text-base font-semibold">{label}</h3>
+        <div className="flex items-center gap-2">
+          <h3 className="text-base font-semibold">{label}</h3>
+          {cbStatus && <Badge variant="circuit">{cbStatus}</Badge>}
+        </div>
         {loading && <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>loading…</span>}
       </div>
       <div
@@ -105,6 +118,29 @@ function ActivityRow({ d }: { d: Decision }) {
 
 export function Dashboard() {
   const { data, loading } = useDecisions({ limit: 20 })
+  const [context, setContext] = useState<ContextResponse | null>(null)
+  const [cb, setCb] = useState<CircuitBreaker | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    const load = () => {
+      api.context().then((c) => { if (!cancelled) setContext(c) }).catch(() => {
+        if (!cancelled) setContext(null)
+      })
+      api.circuitBreakers().then((c) => { if (!cancelled) setCb(c) }).catch(() => {
+        if (!cancelled) setCb(null)
+      })
+    }
+    load()
+    const id = setInterval(load, 60_000)
+    return () => { cancelled = true; clearInterval(id) }
+  }, [])
+
+  const vix = context?.macro?.vix
+  const fg = context?.macro?.fear_greed_score
+  const fgRating = context?.macro?.fear_greed_rating
+  const regime = context?.confirmed_market_regime
+  const cbStatus = cb?.status ?? null
 
   return (
     <div className="space-y-6">
@@ -112,8 +148,26 @@ export function Dashboard() {
         <h2 className="text-lg font-semibold mb-3">Accounts</h2>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           {ACCOUNTS.map((a) => (
-            <AccountCard key={a.account} account={a.account} label={a.label} />
+            <AccountCard
+              key={a.account}
+              account={a.account}
+              label={a.label}
+              cbStatus={cbStatus}
+            />
           ))}
+        </div>
+      </div>
+
+      <div>
+        <h2 className="text-lg font-semibold mb-3">Market context</h2>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <StatCard label="VIX" value={vix == null ? '—' : vix.toFixed(2)} />
+          <StatCard
+            label="Fear & Greed"
+            value={fg == null ? '—' : fg}
+            sub={fgRating || undefined}
+          />
+          <StatCard label="Market Regime" value={regime || '—'} />
         </div>
       </div>
 
