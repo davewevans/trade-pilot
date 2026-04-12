@@ -106,7 +106,7 @@ class Guardrails:
         if action == "sell_put":
             return self._check_sell_put(decision, account, positions, context)
         if action == "sell_call":
-            return self._check_sell_call(decision, positions)
+            return self._check_sell_call(decision, positions, context)
         if action == "roll":
             return self._check_roll(positions)
         if action in ("hold", "skip"):
@@ -137,6 +137,10 @@ class Guardrails:
 
     # ── sell_put ─────────────────────────────────────────────
 
+    # SYNC NOTE: The 21-day earnings threshold is enforced here in code
+    # AND stated as a hard rule in prompts/system.md. If you change this
+    # number, update both places. The prompt says "no earnings within 21
+    # days" — this guardrail is the code-level enforcement of that rule.
     def _check_sell_put(
         self, decision: dict, account: dict, positions: list, context: dict | None
     ) -> tuple[bool, str]:
@@ -174,10 +178,10 @@ class Guardrails:
         if context:
             earnings = context.get("earnings", {})
             days_until = earnings.get("days_until_earnings")
-            if days_until is not None and days_until <= 14:
+            if days_until is not None and days_until <= 21:
                 return (
                     False,
-                    f"Earnings in {days_until} days — must be > 14 days away to sell a CSP",
+                    f"Earnings in {days_until} days — must be > 21 days away to sell a CSP",
                 )
 
         return True, ""
@@ -185,7 +189,7 @@ class Guardrails:
     # ── sell_call ────────────────────────────────────────────
 
     def _check_sell_call(
-        self, decision: dict, positions: list
+        self, decision: dict, positions: list, context: dict | None = None
     ) -> tuple[bool, str]:
         """Validate a sell_call recommendation."""
         symbol = decision.get("symbol") or ""
@@ -215,6 +219,16 @@ class Guardrails:
             qty = float(pos.get("qty") or 0)
             if pos_root == root and "C" in pos_sym and qty < 0:
                 return False, f"Already have an open covered call on {root}: {pos_sym}"
+
+        # Earnings proximity check
+        if context:
+            earnings = context.get("earnings", {})
+            days_until = earnings.get("days_until_earnings")
+            if days_until is not None and days_until <= 21:
+                return (
+                    False,
+                    f"Earnings in {days_until} days — must be > 21 days away to sell a CC",
+                )
 
         return True, ""
 
