@@ -301,18 +301,25 @@ def _handle_spread_open(
 ):
     """Validate and execute a spread OPEN decision."""
     validator_name = _GUARDRAIL_MAP.get(name)
-    if validator_name:
-        validator = getattr(guardrails, validator_name)
-        open_spreads = tracker.get_open_spreads(strategy_type=name)
-        if name == "iron_condor":
-            is_valid, rejection = validator(decision, context, account, open_condors=open_spreads)
-        else:
-            is_valid, rejection = validator(decision, context, account, open_spreads=open_spreads)
+    if not validator_name:
+        logger.error(
+            "No guardrail mapped for strategy '%s' — skipping trade. "
+            "Add it to _GUARDRAIL_MAP before deploying.", name,
+        )
+        report_lines.append(f"**{name}** -- SKIPPED (no guardrail mapped)")
+        return
 
-        if not is_valid:
-            logger.warning("%s GUARDRAIL REJECTED: %s", name, rejection)
-            report_lines.append(f"**{name}** -- REJECTED: {rejection}")
-            return
+    validator = getattr(guardrails, validator_name)
+    open_spreads = tracker.get_open_spreads(strategy_type=name)
+    if name == "iron_condor":
+        is_valid, rejection = validator(decision, context, account, open_condors=open_spreads)
+    else:
+        is_valid, rejection = validator(decision, context, account, open_spreads=open_spreads)
+
+    if not is_valid:
+        logger.warning("%s GUARDRAIL REJECTED: %s", name, rejection)
+        report_lines.append(f"**{name}** -- REJECTED: {rejection}")
+        return
 
     underlying = decision.get("underlying", settings.WATCHLIST[0] if settings.WATCHLIST else "")
 
