@@ -7,6 +7,7 @@ hot path: a DB write failure is logged but the job continues running
 on the existing JSON snapshots.
 """
 
+import json
 import logging
 import re
 from datetime import datetime, timezone
@@ -142,7 +143,13 @@ class TradeRecorder:
                 "cycle_id": cycle_id,
                 "wheel_state": wheel_state,
                 "action": action_upper,
-                "reasoning": str(reasoning) if reasoning is not None else None,
+                # Preserve dict structure as JSON so the read path can rehydrate
+                # to the 6-field reasoning object. Strings, None, etc. pass
+                # through unchanged.
+                "reasoning": (
+                    json.dumps(reasoning, default=str)
+                    if isinstance(reasoning, dict) else reasoning
+                ),
                 "confidence": _coerce_confidence(confidence),
                 "alpaca_order_id": alpaca_order_id,
                 "prompt_version": prompt_version,

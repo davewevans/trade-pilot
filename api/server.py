@@ -197,9 +197,11 @@ def circuit_breakers():
 @app.get("/api/decisions")
 def decisions(
     limit: int = Query(default=50, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
     underlying: str | None = Query(default=None),
     action: str | None = Query(default=None),
     account: str | None = Query(default=None),
+    confidence: float | None = Query(default=None),
 ):
     conn = _open_db()
     if conn is not None:
@@ -207,9 +209,11 @@ def decisions(
             repo = DecisionRepository(conn)
             rows, total = repo.query(
                 limit=limit,
+                offset=offset,
                 underlying=underlying,
                 action=action,
                 strategy_types=_strategy_filter(account),
+                confidence=confidence,
             )
             return {"decisions": rows, "total": total}
         finally:

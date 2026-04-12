@@ -11,6 +11,14 @@ def _row_to_dict(row: sqlite3.Row) -> dict:
             d["context"] = json.loads(d["context_json"])
         except (TypeError, ValueError):
             d["context"] = None
+    # Reasoning is stored as TEXT; the recorder JSON-encodes dicts on write.
+    # Try to parse it back; legacy rows written as Python-repr strings or
+    # plain prose stay as strings (frontend handles both).
+    if isinstance(d.get("reasoning"), str):
+        try:
+            d["reasoning"] = json.loads(d["reasoning"])
+        except (json.JSONDecodeError, TypeError):
+            pass  # leave as string
     return d
 
 
@@ -80,13 +88,18 @@ class DecisionRepository:
         underlying: str | None = None,
         action: str | None = None,
         strategy_types: list[str] | None = None,
+        confidence: float | None = None,
+        offset: int = 0,
     ) -> tuple[list[dict], int]:
         """Filtered decision query for the API.
 
         Returns ``(rows, total_count_after_filter)``. ``action`` and
         ``underlying`` filters are case-insensitive. ``strategy_types``
         scopes results to a list of strategies (used by the API's
-        ``?account=`` filter).
+        ``?account=`` filter). ``confidence`` filters by exact match
+        (the recorder writes discrete 0.9/0.6/0.3 values). ``offset``
+        supports paginated "load more" — the total count returned is
+        the full filtered total, ignoring offset.
         """
         where: list[str] = []
         params: list = []
@@ -100,6 +113,9 @@ class DecisionRepository:
             placeholders = ",".join(["?"] * len(strategy_types))
             where.append(f"strategy_type IN ({placeholders})")
             params.extend(strategy_types)
+        if confidence is not None:
+            where.append("confidence = ?")
+            params.append(confidence)
         clause = (" WHERE " + " AND ".join(where)) if where else ""
 
         total = self._conn.execute(
@@ -110,8 +126,8 @@ class DecisionRepository:
             f"""
             SELECT * FROM decisions{clause}
             ORDER BY timestamp DESC, id DESC
-            LIMIT ?
+            LIMIT ? OFFSET ?
             """,
-            (*params, limit),
+            (*params, limit, offset),
         ).fetchall()
         return [_row_to_dict(r) for r in rows], int(total)

@@ -27,6 +27,9 @@ export interface DecisionsParams {
   underlying?: string
   action?: string
   limit?: number
+  offset?: number
+  // 0.9 / 0.6 / 0.3 — converted from HIGH/MEDIUM/LOW UI labels
+  confidence?: number
 }
 
 export const api = {
@@ -41,6 +44,8 @@ export const api = {
     if (params.underlying) q.set('underlying', params.underlying)
     if (params.action) q.set('action', params.action)
     if (params.limit) q.set('limit', String(params.limit))
+    if (params.offset) q.set('offset', String(params.offset))
+    if (params.confidence != null) q.set('confidence', String(params.confidence))
     const qs = q.toString()
     return get<DecisionsResponse>(`/api/decisions${qs ? `?${qs}` : ''}`)
   },

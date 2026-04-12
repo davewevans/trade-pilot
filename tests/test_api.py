@@ -261,6 +261,38 @@ class TestDecisions:
         assert body["total"] == 1
         assert body["decisions"][0]["underlying"] == "AAPL"
 
+    def test_filter_by_confidence(self, client, db):
+        _seed_decision(db, action="SELL_PUT", confidence=0.9, underlying="A")
+        _seed_decision(db, action="SELL_PUT", confidence=0.6, underlying="B")
+        _seed_decision(db, action="SELL_PUT", confidence=0.3, underlying="C")
+        body = client.get("/api/decisions?confidence=0.9").json()
+        assert body["total"] == 1
+        assert body["decisions"][0]["underlying"] == "A"
+
+    def test_offset_paginates_correctly(self, client, db):
+        # Seed 5 rows with strictly-increasing timestamps so DESC order is
+        # deterministic.
+        for i in range(5):
+            _seed_decision(
+                db,
+                timestamp=f"2026-04-12T10:0{i}:00",
+                action="SELL_PUT",
+                underlying=f"X{i}",
+            )
+        # Most-recent-first → expected order: X4, X3, X2, X1, X0
+        body = client.get("/api/decisions?limit=2&offset=2").json()
+        assert body["total"] == 5  # full filtered count, ignoring offset
+        assert [d["underlying"] for d in body["decisions"]] == ["X2", "X1"]
+
+    def test_confidence_offset_combine_with_account(self, client, db):
+        # Mixed strategies + confidences. Only wheel rows with conf=0.9 match.
+        _seed_decision(db, strategy_type="wheel", confidence=0.9, underlying="W1")
+        _seed_decision(db, strategy_type="wheel", confidence=0.6, underlying="W2")
+        _seed_decision(db, strategy_type="iron_condor", confidence=0.9, underlying="I1")
+        body = client.get("/api/decisions?account=wheel&confidence=0.9").json()
+        assert body["total"] == 1
+        assert body["decisions"][0]["underlying"] == "W1"
+
 
 # ── /api/decisions/stats ────────────────────────────────────
 
