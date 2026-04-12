@@ -72,15 +72,15 @@ class BullPutSpreadStrategy:
 
     # ── main cycle ──────────────────────────────────────────
 
-    def run_cycle(self, context: dict) -> dict:
+    def run_cycle(self, context: dict, advisor=None) -> dict:
         """Main decision method called by the scheduler."""
         if self.state == BullPutSpreadState.IDLE:
-            return self._evaluate_entry(context)
+            return self._evaluate_entry(context, advisor=advisor)
         return self._evaluate_management(context)
 
     # ── entry evaluation ────────────────────────────────────
 
-    def _evaluate_entry(self, context: dict) -> dict:
+    def _evaluate_entry(self, context: dict, advisor=None) -> dict:
         """Check hard conditions, then ask Claude if they pass."""
         skip = self._check_entry_conditions(context)
         if skip:
@@ -111,8 +111,10 @@ class BullPutSpreadStrategy:
                 "skip_reason": "low_ratio",
             }
 
-        decision = self._ask_claude_entry(context, best)
-        return decision
+        if advisor is not None:
+            enriched = {**context, "best_candidate": best}
+            return advisor.ask_spread(enriched, "bull_put_spread", "idle")
+        return self._ask_claude_entry(context, best)
 
     def _check_entry_conditions(self, context: dict) -> str | None:
         """Return a skip reason string, or None if all conditions pass."""

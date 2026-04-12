@@ -42,6 +42,18 @@ class ClaudeAdvisor:
             WheelState.LONG_STOCK: (_PROMPTS_DIR / "wheel_long_stock.md").read_text(encoding="utf-8"),
             WheelState.SHORT_CALL: (_PROMPTS_DIR / "wheel_short_call.md").read_text(encoding="utf-8"),
         }
+        self.spread_prompts: dict[str, str] = {}
+        for strategy in (
+            "bull_put_spread", "bear_call_spread",
+            "iron_condor", "long_call_vertical",
+        ):
+            for phase in ("idle", "open"):
+                key = f"{strategy}_{phase}"
+                path = _PROMPTS_DIR / f"{key}.md"
+                if path.exists():
+                    self.spread_prompts[key] = path.read_text(encoding="utf-8")
+                else:
+                    logger.warning("Spread prompt not found: %s", path)
         logger.info("Loaded prompt files from %s", _PROMPTS_DIR)
 
     def ask(self, context: dict, phase: WheelState) -> dict:
@@ -137,6 +149,121 @@ class ClaudeAdvisor:
         logger.info("Reasoning: %s", json.dumps(recommendation["reasoning"], indent=2))
 
         return recommendation
+
+    def ask_spread(
+        self, context: dict, strategy_type: str, phase: str,
+    ) -> dict:
+        """Send a spread-strategy decision request to Claude.
+
+        Uses the existing spread schema (uppercase OPEN/SKIP/HOLD/CLOSE
+        actions, flat ``reasoning`` string, strategy-specific OCC field
+        names). The caller is responsible for enriching ``context``
+        with any candidate data the prompt expects.
+
+        Returns the parsed decision dict. On unrecoverable parse
+        failure, returns a safe SKIP dict rather than raising.
+        """
+        key = f"{strategy_type}_{phase}"
+        prompt = self.spread_prompts.get(key)
+        if prompt is None:
+            logger.error("No spread prompt loaded for %s", key)
+            return {
+                "action": "SKIP",
+                "reasoning": f"No spread prompt loaded for {key}",
+                "skip_reason": "missing_prompt",
+            }
+
+        context_json = json.dumps(context, indent=2, default=str)
+        user_content = (
+            f"<instructions>\n{prompt}\n</instructions>\n\n"
+            f"<market_context>\n{context_json}\n</market_context>\n\n"
+            f"Make your decision now. Respond with raw JSON only."
+        )
+
+        logger.info(
+            "Asking Claude for spread advice (strategy=%s phase=%s)",
+            strategy_type, phase,
+        )
+
+        retry_suffix = (
+            "\n\nYour previous response was not valid JSON or was missing "
+            "required fields. Respond ONLY with raw JSON matching the schema "
+            "exactly. No prose, no markdown, no code blocks."
+        )
+
+        raw_text = ""
+        for attempt in range(2):
+            content = user_content if attempt == 0 else user_content + retry_suffix
+            try:
+                response = self.client.messages.create(
+                    model=self.model,
+                    max_tokens=2048,
+                    system=[
+                        {
+                            "type": "text",
+                            "text": self.system_prompt,
+                            "cache_control": {"type": "ephemeral"},
+                        }
+                    ],
+                    messages=[{"role": "user", "content": content}],
+                )
+            except Exception:
+                logger.exception("Anthropic API call failed for spread %s", key)
+                return {
+                    "action": "SKIP",
+                    "reasoning": "Claude API error",
+                    "skip_reason": "api_error",
+                }
+
+            self._last_usage = response.usage.model_dump() if response.usage else None
+            raw_text = response.content[0].text.strip()
+
+            try:
+                return self._parse_spread_response(raw_text)
+            except ValueError:
+                if attempt == 0:
+                    logger.warning(
+                        "Spread response failed to parse on attempt 1; retrying. "
+                        "Raw text:\n%s", raw_text,
+                    )
+                    continue
+                logger.warning(
+                    "Spread response unparseable after retry. Falling back to "
+                    "SKIP. Raw text:\n%s", raw_text,
+                )
+                return {
+                    "action": "SKIP",
+                    "reasoning": "Claude returned unparseable response after retry",
+                    "skip_reason": "parse_error",
+                }
+
+        # Unreachable, but keeps type-checkers happy
+        return {
+            "action": "SKIP",
+            "reasoning": "Unexpected exit from ask_spread loop",
+            "skip_reason": "internal_error",
+        }
+
+    @staticmethod
+    def _parse_spread_response(raw_text: str) -> dict:
+        """Parse a spread-strategy JSON response. Raises ValueError on failure."""
+        cleaned = raw_text
+        if cleaned.startswith("```"):
+            first_nl = cleaned.index("\n")
+            cleaned = cleaned[first_nl + 1:]
+        if cleaned.endswith("```"):
+            cleaned = cleaned[:-3]
+        cleaned = cleaned.strip()
+
+        try:
+            data = json.loads(cleaned)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Invalid JSON: {e}") from e
+
+        if "action" not in data:
+            raise ValueError("Missing required 'action' field")
+
+        return data
 
     @property
     def prompt_cache_stats(self) -> dict | None:
