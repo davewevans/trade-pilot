@@ -214,6 +214,24 @@ class AlpacaBroker(BaseBroker):
             if p.asset_class == AssetClass.US_OPTION
         ]
 
+    def get_equity_positions(self) -> list[dict]:
+        """Return all open equity (stock) positions."""
+        positions = self.client.get_all_positions()
+        return [
+            p.model_dump()
+            for p in positions
+            if p.asset_class == AssetClass.US_EQUITY
+        ]
+
+    def get_all_positions(self) -> list[dict]:
+        """Return all open positions (equity + options)."""
+        positions = self.client.get_all_positions()
+        return [
+            p.model_dump()
+            for p in positions
+            if p.asset_class in (AssetClass.US_EQUITY, AssetClass.US_OPTION)
+        ]
+
     def get_position(self, symbol_or_id: str) -> dict:
         """Return a single open position."""
         position = self.client.get_open_position(symbol_or_id)

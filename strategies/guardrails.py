@@ -79,6 +79,12 @@ class Guardrails:
     the trade is rejected with a human-readable reason.
     """
 
+    def __init__(self, broker=None):
+        # Optional broker reference used as a fallback to verify equity
+        # ownership for covered-call checks when the positions list passed
+        # to validate() does not include stock positions.
+        self.broker = broker
+
     def validate(
         self, decision: dict, account: dict, positions: list, context: dict | None = None
     ) -> tuple[bool, str]:
@@ -205,15 +211,34 @@ class Guardrails:
 
         root = self._extract_root(symbol)
 
-        # Must own >= 100 shares of the underlying
-        has_shares = False
-        for pos in positions:
-            pos_sym = (pos.get("symbol") or "").upper()
-            if pos_sym == root:
-                qty = float(pos.get("qty") or 0)
-                if qty >= 100:
-                    has_shares = True
-                    break
+        # Must own >= 100 shares of the underlying. The positions list may
+        # be options-only (legacy callers); if no equity row is present at
+        # all, fall back to broker.get_equity_positions() to verify.
+        def _owns_shares(pos_list) -> bool:
+            for pos in pos_list:
+                pos_sym = (pos.get("symbol") or "").upper()
+                if pos_sym == root and float(pos.get("qty") or 0) >= 100:
+                    return True
+            return False
+
+        has_shares = _owns_shares(positions)
+
+        if not has_shares:
+            has_any_equity = any(
+                not _OCC_ROOT_RE.match((p.get("symbol") or "").upper())
+                for p in positions
+            )
+            if not has_any_equity and self.broker is not None and hasattr(
+                self.broker, "get_equity_positions"
+            ):
+                try:
+                    has_shares = _owns_shares(self.broker.get_equity_positions())
+                except Exception:
+                    logger.warning(
+                        "get_equity_positions fallback failed for %s",
+                        root,
+                        exc_info=True,
+                    )
 
         if not has_shares:
             return False, f"Must own >= 100 shares of {root} to sell a covered call"

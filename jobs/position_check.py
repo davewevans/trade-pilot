@@ -70,7 +70,7 @@ def run() -> None:
         return
 
     advisor = ClaudeAdvisor()
-    guardrails = Guardrails()
+    guardrails = Guardrails(broker=broker)
     strategy = WheelStrategy(broker)
     journal = TradeJournal(path=settings.JOURNAL_PATH)
     ctx_builder = ContextBuilder(broker=broker, journal=journal)

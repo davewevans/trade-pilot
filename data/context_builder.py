@@ -825,7 +825,10 @@ class ContextBuilder:
 
     def _fetch_positions(self, symbol: str) -> list[dict] | None:
         try:
-            positions = self.broker.get_positions()
+            if hasattr(self.broker, "get_all_positions"):
+                positions = self.broker.get_all_positions()
+            else:
+                positions = self.broker.get_positions()
             return [
                 p for p in positions
                 if symbol.upper() in str(p.get("symbol", "")).upper()

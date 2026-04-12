@@ -79,7 +79,7 @@ def run() -> None:
 
     # ── Shared dependencies ─────────────────────────────────
     advisor = ClaudeAdvisor()
-    guardrails = Guardrails()
+    guardrails = Guardrails(broker=broker)
     journal = TradeJournal(path=settings.JOURNAL_PATH)
     ctx_builder = ContextBuilder(broker=broker, journal=journal)
     tracker = SpreadTracker()
