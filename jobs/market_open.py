@@ -241,7 +241,18 @@ def run() -> None:
         for strategy_name in active_spreads:
             strat = spread_strategies[strategy_name]
             try:
-                decision = strat.run_cycle(shared_context)
+                # TODO: each spread strategy should eventually specify its
+                # own preferred underlying rather than reusing WATCHLIST[0].
+                try:
+                    spread_ctx = ctx_builder.build(settings.WATCHLIST[0], "IDLE")
+                except Exception:
+                    logger.exception(
+                        "Failed to build context for spread strategy %s", strategy_name,
+                    )
+                    report_lines.append(f"**{strategy_name}** -- ERROR (context build)")
+                    continue
+
+                decision = strat.run_cycle(spread_ctx, advisor)
                 action = decision.get("action", "SKIP")
                 logger.info("%s decision: %s", strategy_name, action)
 
@@ -258,7 +269,7 @@ def run() -> None:
                 if action == "OPEN":
                     _handle_spread_open(
                         strategy_name, strat, decision, guardrails,
-                        shared_context, account, tracker, settings, report_lines,
+                        spread_ctx, account, tracker, settings, report_lines,
                     )
                 elif action == "CLOSE" and decision.get("spread_id"):
                     _handle_spread_close(
