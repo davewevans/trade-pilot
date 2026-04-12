@@ -43,6 +43,16 @@ export function TopBar() {
           className="inline-block w-2.5 h-2.5 rounded-full"
           style={{ backgroundColor: dotColor }}
         />
+        <svg
+          width="20" height="20" viewBox="0 0 24 24" fill="none"
+          stroke="var(--accent)" strokeWidth="2" strokeLinecap="round"
+          aria-hidden="true"
+        >
+          <line x1="6" y1="3" x2="6" y2="21" />
+          <rect x="4" y="7" width="4" height="10" fill="var(--accent)" />
+          <line x1="14" y1="3" x2="14" y2="21" />
+          <rect x="12" y="11" width="4" height="8" fill="var(--green)" stroke="var(--green)" />
+        </svg>
         <span className="font-semibold tracking-wide">trade-pilot</span>
         {health?.halted && <Badge variant="circuit" value="RED">HALTED</Badge>}
       </div>

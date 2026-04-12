@@ -21,6 +21,12 @@ function todayPnl(perf: Performance | null): number | null {
   return perf.equity_curve[idx].cumulative_pnl - prev
 }
 
+const ACCOUNT_ACCENT: Record<string, string> = {
+  wheel: 'var(--accent-wheel)',
+  iron_condor: 'var(--accent-iron-condor)',
+  spreads: 'var(--accent-spreads)',
+}
+
 function AccountCard({
   account,
   label,
@@ -30,6 +36,7 @@ function AccountCard({
   label: string
   cbStatus: string | null
 }) {
+  const accent = ACCOUNT_ACCENT[account] ?? 'var(--accent)'
   const { portfolio, stats, performance, loading } = useAccount(account)
   const todays = todayPnl(performance)
 
@@ -44,6 +51,7 @@ function AccountCard({
       style={{
         backgroundColor: 'var(--bg-card)',
         border: '1px solid var(--border)',
+        borderTop: `3px solid ${accent}`,
       }}
     >
       <div className="flex items-baseline justify-between mb-3">
@@ -145,7 +153,7 @@ export function Dashboard() {
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-lg font-semibold mb-3">Accounts</h2>
+        <h2 className="section-heading">Accounts</h2>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           {ACCOUNTS.map((a) => (
             <AccountCard
@@ -159,7 +167,7 @@ export function Dashboard() {
       </div>
 
       <div>
-        <h2 className="text-lg font-semibold mb-3">Market context</h2>
+        <h2 className="section-heading">Market context</h2>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <StatCard label="VIX" value={vix == null ? '—' : vix.toFixed(2)} />
           <StatCard
@@ -172,7 +180,7 @@ export function Dashboard() {
       </div>
 
       <div>
-        <h2 className="text-lg font-semibold mb-3">Recent activity</h2>
+        <h2 className="section-heading">Recent activity</h2>
         <div
           className="rounded overflow-hidden"
           style={{ backgroundColor: 'var(--bg-card)', border: '1px solid var(--border)' }}
@@ -180,7 +188,11 @@ export function Dashboard() {
           {loading ? (
             <LoadingSpinner />
           ) : !data?.decisions.length ? (
-            <EmptyState message="No decisions yet" hint="The bot will populate this on its next run." />
+            <EmptyState
+              icon="clock"
+              message="No decisions yet"
+              hint="The bot will fill this in on its next run — hang tight."
+            />
           ) : (
             <table>
               <thead>

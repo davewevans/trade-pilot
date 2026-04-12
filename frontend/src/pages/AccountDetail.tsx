@@ -38,7 +38,13 @@ type WheelPhase = (typeof _WHEEL_PHASES)[number]
 
 function WheelPipeline({ states }: { states: Record<string, string> }) {
   const entries = Object.entries(states)
-  if (!entries.length) return <EmptyState message="No wheel state yet" />
+  if (!entries.length) return (
+    <EmptyState
+      icon="wheel"
+      message="No wheel state yet"
+      hint="Watchlist symbols will appear here once the bot starts cycling."
+    />
+  )
   return (
     <div className="space-y-2">
       {entries.map(([sym, state]) => (
@@ -251,12 +257,22 @@ export function AccountDetail() {
           value={stats?.win_rate != null ? `${stats.win_rate.toFixed(1)}%` : '—'}
           sub={stats ? `${stats.trades} trades / ${stats.skips} skips` : undefined}
           size="lg"
+          accent={
+            stats?.win_rate != null
+              ? stats.win_rate > 0 ? 'var(--green)' : 'var(--red)'
+              : undefined
+          }
+          valueColor={
+            stats?.win_rate != null && stats.win_rate > 0
+              ? 'var(--green)'
+              : undefined
+          }
         />
       </div>
 
       {isWheel && (
         <section>
-          <h3 className="text-sm font-semibold mb-3">Wheel state</h3>
+          <h3 className="section-heading">Wheel state</h3>
           <div
             className="rounded p-4"
             style={{ backgroundColor: 'var(--bg-card)', border: '1px solid var(--border)' }}
@@ -267,13 +283,13 @@ export function AccountDetail() {
       )}
 
       <section>
-        <h3 className="text-sm font-semibold mb-3">Open positions</h3>
+        <h3 className="section-heading">Open positions</h3>
         <div
           className="rounded overflow-hidden"
           style={{ backgroundColor: 'var(--bg-card)', border: '1px solid var(--border)' }}
         >
           {positions.length === 0 ? (
-            <EmptyState message="No open positions" />
+            <EmptyState icon="inbox" message="No open positions" hint="New positions will show up here as the bot opens them." />
           ) : (
             <table>
               <thead>
@@ -301,13 +317,13 @@ export function AccountDetail() {
       </section>
 
       <section>
-        <h3 className="text-sm font-semibold mb-3">Equity curve (last 90 days)</h3>
+        <h3 className="section-heading">Equity curve (last 90 days)</h3>
         <div
           className="rounded p-3"
           style={{ backgroundColor: 'var(--bg-card)', border: '1px solid var(--border)', height: 280 }}
         >
           {equityPoints.length === 0 ? (
-            <EmptyState message="No equity data yet" />
+            <EmptyState icon="chart" message="No equity data yet" hint="Daily snapshots accrue once the portfolio refresh job runs." />
           ) : (
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={equityPoints} margin={{ top: 8, right: 16, bottom: 8, left: 8 }}>
@@ -351,7 +367,7 @@ export function AccountDetail() {
       </section>
 
       <section>
-        <h3 className="text-sm font-semibold mb-3">Closed trades</h3>
+        <h3 className="section-heading">Closed trades</h3>
         <div
           className="rounded overflow-hidden"
           style={{ backgroundColor: 'var(--bg-card)', border: '1px solid var(--border)' }}
@@ -359,7 +375,7 @@ export function AccountDetail() {
           {tradesLoading && trades === null ? (
             <LoadingSpinner />
           ) : !trades || trades.length === 0 ? (
-            <EmptyState message="No closed trades yet" />
+            <EmptyState icon="list" message="No closed trades yet" hint="Filled trades will land here after the next reconcile." />
           ) : (
             <table>
               <thead>

@@ -2,14 +2,19 @@ import { NavLink } from 'react-router-dom'
 import { ACCOUNTS } from '../../api/client'
 
 const linkClass = ({ isActive }: { isActive: boolean }) =>
-  `block px-3 py-2 rounded text-sm transition-colors ${
-    isActive ? 'font-semibold' : ''
+  `block px-3 py-2 rounded text-sm transition-all ${
+    isActive ? 'font-semibold' : 'hover:bg-[var(--bg-card)]'
   }`
 
 const linkStyle = (isActive: boolean): React.CSSProperties => ({
   color: isActive ? 'var(--text-primary)' : 'var(--text-secondary)',
-  backgroundColor: isActive ? 'var(--bg-card)' : 'transparent',
-  borderLeft: `2px solid ${isActive ? 'var(--accent)' : 'transparent'}`,
+  backgroundColor: isActive
+    ? 'color-mix(in srgb, var(--accent) 14%, var(--bg-card))'
+    : 'transparent',
+  borderLeft: `3px solid ${isActive ? 'var(--accent)' : 'transparent'}`,
+  boxShadow: isActive
+    ? 'inset 0 0 0 1px color-mix(in srgb, var(--accent) 25%, transparent)'
+    : 'none',
 })
 
 export function Sidebar() {

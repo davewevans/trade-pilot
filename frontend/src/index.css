@@ -15,6 +15,29 @@
   --yellow: #eab308;
   --blue: #3b82f6;
   --accent: #6366f1;
+  --accent-wheel: #3b82f6;
+  --accent-iron-condor: #a855f7;
+  --accent-spreads: #14b8a6;
+}
+
+.section-heading {
+  font-size: 0.95rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  position: relative;
+  padding-bottom: 0.4rem;
+  margin-bottom: 0.85rem;
+  border-bottom: 1px solid var(--border);
+}
+.section-heading::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  bottom: -1px;
+  width: 36px;
+  height: 2px;
+  background: var(--accent);
+  border-radius: 1px;
 }
 
 html, body, #root {

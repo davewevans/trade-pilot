@@ -6,9 +6,11 @@ interface StatCardProps {
   sub?: ReactNode
   trend?: 'up' | 'down' | 'flat'
   size?: 'sm' | 'md' | 'lg'
+  valueColor?: string
+  accent?: string
 }
 
-export function StatCard({ label, value, sub, trend, size = 'md' }: StatCardProps) {
+export function StatCard({ label, value, sub, trend, size = 'md', valueColor, accent }: StatCardProps) {
   const valueClass =
     size === 'lg' ? 'text-3xl' : size === 'sm' ? 'text-lg' : 'text-2xl'
   const trendColor =
@@ -20,15 +22,22 @@ export function StatCard({ label, value, sub, trend, size = 'md' }: StatCardProp
   return (
     <div
       className="rounded-md p-4"
-      style={{ backgroundColor: 'var(--bg-card)', border: '1px solid var(--border)' }}
+      style={{
+        backgroundColor: 'var(--bg-card)',
+        border: '1px solid var(--border)',
+        borderTop: accent ? `3px solid ${accent}` : '1px solid var(--border)',
+      }}
     >
       <div
-        className="text-[11px] uppercase tracking-wider mb-1"
-        style={{ color: 'var(--text-muted)' }}
+        className="text-[12px] uppercase tracking-wider mb-1 font-semibold"
+        style={{ color: 'var(--text-secondary)' }}
       >
         {label}
       </div>
-      <div className={`${valueClass} font-mono tabular`} style={{ color: 'var(--text-primary)' }}>
+      <div
+        className={`${valueClass} font-mono tabular`}
+        style={{ color: valueColor || 'var(--text-primary)' }}
+      >
         {value}
       </div>
       {sub != null && (
