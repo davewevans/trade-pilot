@@ -163,6 +163,17 @@ def validate_startup() -> None:
         )
         sys.exit(1)
 
+    # 5. Initialize SQLite schema (idempotent — safe on every startup)
+    try:
+        from database.db import Database
+
+        db = Database()
+        db.init_schema()
+        db.close()
+    except Exception:
+        logger.exception("Failed to initialize SQLite schema — exiting")
+        sys.exit(1)
+
     logger.info("Startup validation passed")
 
 

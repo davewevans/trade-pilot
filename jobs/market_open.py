@@ -85,6 +85,18 @@ def run() -> None:
     tracker = SpreadTracker()
     router = StrategyRouter()
 
+    # Dual-write recorder: writes decisions/trades/cycles to SQLite alongside
+    # the existing JSON snapshots. Failures are logged but never block the job.
+    from database.db import Database
+    from database.recorder import TradeRecorder
+    try:
+        _db = Database()
+        _db.init_schema()
+        recorder = TradeRecorder(_db.get_connection())
+    except Exception:
+        logger.exception("Failed to initialize DB recorder — continuing without DB writes")
+        recorder = None
+
     # Each strategy gets a broker pointed at its designated account
     try:
         wheel_broker = make_broker("wheel")
@@ -169,6 +181,15 @@ def run() -> None:
                     )
                 except Exception as e:
                     logger.warning("Failed to write decision snapshot: %s", e)
+                if recorder is not None:
+                    recorder.record_decision(
+                        strategy_type="wheel", underlying=symbol,
+                        action="SKIP",
+                        wheel_state=state.value,
+                        reasoning=f"Guardrail rejected: {rejection}",
+                        confidence=decision.get("confidence"),
+                        context=context,
+                    )
                 journal.append({
                     "symbol": decision.get("symbol"), "underlying": symbol,
                     "wheel_state": state.value, "action": "skip",
@@ -185,6 +206,18 @@ def run() -> None:
             except Exception as e:
                 logger.warning("Failed to write decision snapshot: %s", e)
 
+            decision_id_db = None
+            cycle_id_db = None
+            if recorder is not None:
+                decision_id_db, cycle_id_db = recorder.record_decision(
+                    strategy_type="wheel", underlying=symbol,
+                    action=decision.get("action"),
+                    wheel_state=state.value,
+                    reasoning=decision.get("reasoning"),
+                    confidence=decision.get("confidence"),
+                    context=context,
+                )
+
             if settings.DRY_RUN:
                 logger.info("DRY RUN - would execute: %s", json.dumps(decision, default=str))
                 report_lines.append(f"**{symbol}** -- DRY RUN: {decision.get('action')}")
@@ -196,6 +229,19 @@ def run() -> None:
                 logger.info("%s order executed: %s", symbol, order_id)
             else:
                 logger.info("%s no order (action=%s)", symbol, decision.get("action"))
+
+            if recorder is not None and order_id and cycle_id_db:
+                recorder.record_trade(
+                    cycle_id=cycle_id_db,
+                    decision_id=decision_id_db,
+                    alpaca_order_id=order_id,
+                    underlying=symbol,
+                    strategy_type="wheel",
+                    action=decision.get("action"),
+                    symbol=decision.get("symbol", ""),
+                    limit_price=decision.get("limit_price") or 0.0,
+                    contracts=int(decision.get("qty") or 1),
+                )
 
             journal.append({
                 "symbol": decision.get("symbol"), "underlying": symbol,
@@ -266,6 +312,23 @@ def run() -> None:
                     )
                 except Exception as e:
                     logger.warning("Failed to write %s decision: %s", strategy_name, e)
+
+                # DB dual-write — spread trades themselves (multi-leg orders)
+                # are not yet inserted into the trades table. That requires
+                # per-leg expansion and is deferred to a follow-up task.
+                if recorder is not None:
+                    spread_underlying = (
+                        decision.get("underlying")
+                        or (settings.WATCHLIST[0] if settings.WATCHLIST else strategy_name)
+                    )
+                    recorder.record_decision(
+                        strategy_type=strategy_name,
+                        underlying=spread_underlying,
+                        action=action,
+                        reasoning=decision.get("reasoning"),
+                        confidence=decision.get("confidence"),
+                        context=spread_ctx,
+                    )
 
                 if action == "OPEN":
                     _handle_spread_open(

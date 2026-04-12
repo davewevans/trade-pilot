@@ -72,6 +72,17 @@ def run() -> None:
     journal = TradeJournal(path=settings.JOURNAL_PATH)
     ctx_builder = ContextBuilder(broker=broker, journal=journal)
 
+    # Dual-write recorder for SQLite (failures logged, never block job).
+    from database.db import Database
+    from database.recorder import TradeRecorder
+    try:
+        _db = Database()
+        _db.init_schema()
+        recorder = TradeRecorder(_db.get_connection())
+    except Exception:
+        logger.exception("Failed to initialize DB recorder — continuing without DB writes")
+        recorder = None
+
     now_str = datetime.now().strftime("%I:%M %p ET")
     report_lines: list[str] = []
 
@@ -123,6 +134,16 @@ def run() -> None:
                     except Exception as e:
                         logger.warning("Failed to write decision snapshot for %s: %s", underlying, e)
 
+                    if recorder is not None:
+                        recorder.record_decision(
+                            strategy_type="wheel", underlying=underlying,
+                            action="SKIP",
+                            wheel_state=state.value,
+                            reasoning=f"Guardrail rejected: {rejection}",
+                            confidence=decision.get("confidence"),
+                            context=context,
+                        )
+
                     report_lines.append(f"**{underlying}** — {action} REJECTED: {rejection}")
                     continue
 
@@ -136,6 +157,18 @@ def run() -> None:
                     )
                 except Exception as e:
                     logger.warning("Failed to write decision snapshot for %s: %s", underlying, e)
+
+                decision_id_db = None
+                cycle_id_db = None
+                if recorder is not None:
+                    decision_id_db, cycle_id_db = recorder.record_decision(
+                        strategy_type="wheel", underlying=underlying,
+                        action=action,
+                        wheel_state=state.value,
+                        reasoning=decision.get("reasoning"),
+                        confidence=decision.get("confidence"),
+                        context=context,
+                    )
 
                 if settings.DRY_RUN:
                     logger.info("DRY RUN - would execute: %s", json.dumps(decision, default=str))
@@ -151,6 +184,19 @@ def run() -> None:
                         "closed_at": datetime.now().isoformat(timespec="seconds"),
                     })
                     logger.info("%s %s executed: %s", underlying, action, order_id)
+
+                    if recorder is not None and cycle_id_db:
+                        recorder.record_trade(
+                            cycle_id=cycle_id_db,
+                            decision_id=decision_id_db,
+                            alpaca_order_id=order_id,
+                            underlying=underlying,
+                            strategy_type="wheel",
+                            action=action,
+                            symbol=decision.get("symbol", ""),
+                            limit_price=decision.get("limit_price") or 0.0,
+                            contracts=int(decision.get("qty") or 1),
+                        )
                 report_lines.append(f"**{underlying}** — {action} executed")
             else:
                 # Write hold decision snapshot
@@ -163,6 +209,16 @@ def run() -> None:
                     )
                 except Exception as e:
                     logger.warning("Failed to write decision snapshot for %s: %s", underlying, e)
+
+                if recorder is not None:
+                    recorder.record_decision(
+                        strategy_type="wheel", underlying=underlying,
+                        action=action or "HOLD",
+                        wheel_state=state.value,
+                        reasoning=decision.get("reasoning"),
+                        confidence=decision.get("confidence"),
+                        context=context,
+                    )
 
                 report_lines.append(f"**{underlying}** — hold")
 

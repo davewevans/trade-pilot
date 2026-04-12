@@ -19,6 +19,24 @@ def run() -> None:
     broker = get_broker()
     journal = TradeJournal(path=settings.JOURNAL_PATH)
 
+    # ── DB reconciliation (additive — JSON path below runs regardless) ──
+    from database.db import Database
+    from database.recorder import TradeRecorder
+    from jobs.reconcile_orders import reconcile_pending_orders
+
+    recorder = None
+    try:
+        _db = Database()
+        _db.init_schema()
+        recorder = TradeRecorder(_db.get_connection())
+    except Exception:
+        logger.exception("Failed to init DB recorder — skipping DB reconciler")
+
+    if recorder is not None:
+        reconcile_pending_orders(broker, recorder)
+    else:
+        logger.warning("DB recorder unavailable — skipping reconcile_pending_orders")
+
     # ── Today's orders ──────────────────────────────────────
     today_str = datetime.now().strftime("%Y-%m-%d")
     orders = broker.get_orders(status="closed")
