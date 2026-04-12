@@ -38,12 +38,6 @@ export function Sidebar() {
       <NavLink to="/reasoning" className={linkClass} style={({ isActive }) => linkStyle(isActive)}>
         Reasoning
       </NavLink>
-      <NavLink to="/strategies" className={linkClass} style={({ isActive }) => linkStyle(isActive)}>
-        Strategies
-      </NavLink>
-      <NavLink to="/guardrails" className={linkClass} style={({ isActive }) => linkStyle(isActive)}>
-        Guardrails
-      </NavLink>
 
       <div
         className="text-[10px] uppercase tracking-wider mt-6 mb-2 px-3"
@@ -61,6 +55,46 @@ export function Sidebar() {
           {a.label}
         </NavLink>
       ))}
+
+      <div
+        className="text-[10px] uppercase tracking-wider mt-6 mb-2 px-3"
+        style={{ color: 'var(--text-muted)' }}
+      >
+        Learn
+      </div>
+      <NavLink to="/how-it-works" className={linkClass} style={({ isActive }) => linkStyle(isActive)}>
+        How Claude Decides
+      </NavLink>
+      <NavLink to="/strategies" className={linkClass} style={({ isActive }) => linkStyle(isActive)}>
+        Strategies
+      </NavLink>
+      <NavLink to="/guardrails" className={linkClass} style={({ isActive }) => linkStyle(isActive)}>
+        Guardrails
+      </NavLink>
+      <NavLink to="/circuit-breakers" className={linkClass} style={({ isActive }) => linkStyle(isActive)}>
+        Circuit Breakers
+      </NavLink>
+      <NavLink to="/market-regimes" className={linkClass} style={({ isActive }) => linkStyle(isActive)}>
+        Market Regimes
+      </NavLink>
+      <NavLink to="/skip-reasons" className={linkClass} style={({ isActive }) => linkStyle(isActive)}>
+        Skip Reasons
+      </NavLink>
+      <NavLink to="/glossary" className={linkClass} style={({ isActive }) => linkStyle(isActive)}>
+        Glossary
+      </NavLink>
+      <NavLink to="/data-sources" className={linkClass} style={({ isActive }) => linkStyle(isActive)}>
+        Data Sources
+      </NavLink>
+      <NavLink to="/faq" className={linkClass} style={({ isActive }) => linkStyle(isActive)}>
+        FAQ
+      </NavLink>
+
+      <hr className="my-4 border-0 h-px" style={{ backgroundColor: 'var(--border)' }} />
+
+      <NavLink to="/about" className={linkClass} style={({ isActive }) => linkStyle(isActive)}>
+        About
+      </NavLink>
     </aside>
   )
 }
