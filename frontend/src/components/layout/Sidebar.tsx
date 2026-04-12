@@ -38,6 +38,12 @@ export function Sidebar() {
       <NavLink to="/reasoning" className={linkClass} style={({ isActive }) => linkStyle(isActive)}>
         Reasoning
       </NavLink>
+      <NavLink to="/strategies" className={linkClass} style={({ isActive }) => linkStyle(isActive)}>
+        Strategies
+      </NavLink>
+      <NavLink to="/guardrails" className={linkClass} style={({ isActive }) => linkStyle(isActive)}>
+        Guardrails
+      </NavLink>
 
       <div
         className="text-[10px] uppercase tracking-wider mt-6 mb-2 px-3"

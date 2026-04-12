@@ -27,12 +27,29 @@ export function TopBar() {
     }
   }, [])
 
+  const dotColor = !health
+    ? 'var(--text-muted)'
+    : health.halted
+      ? 'var(--red)'
+      : 'var(--green)'
+
+  const dotTitle = !health
+    ? 'API unreachable'
+    : health.halted
+      ? 'Halted'
+      : 'Healthy'
+
   return (
     <header
       className="flex items-center justify-between px-6 h-14 border-b"
       style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border)' }}
     >
       <div className="flex items-center gap-3">
+        <span
+          className="inline-block w-2.5 h-2.5 rounded-full"
+          style={{ backgroundColor: dotColor }}
+          title={dotTitle}
+        />
         <img
           src="/favicon.svg"
           alt=""
