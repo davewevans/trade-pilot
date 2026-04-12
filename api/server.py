@@ -551,6 +551,69 @@ def _performance_from_jsonl() -> dict:
     }
 
 
+@app.get("/api/trades")
+def trades(
+    account: str | None = Query(default=None),
+    underlying: str | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=1000),
+):
+    conn = _open_db()
+    if conn is not None:
+        try:
+            repo = TradeRepository(conn)
+            rows = repo.get_filled(
+                strategy_types=_strategy_filter(account),
+                underlying=underlying,
+            )
+            # Most recent first; attach computed pnl per the same sign
+            # convention used by /api/performance.
+            rows.reverse()
+            enriched = []
+            for r in rows:
+                pnl = _trade_pnl(r)
+                enriched.append({**r, "pnl": round(pnl, 2) if pnl is not None else None})
+            total = len(enriched)
+            return {"trades": enriched[:limit], "total": total}
+        finally:
+            conn.close()
+
+    # TODO: remove fallback once DB is stable
+    logger.warning("DB unavailable for /api/trades — falling back to JSONL")
+    return _trades_from_jsonl(account=account, underlying=underlying, limit=limit)
+
+
+def _trades_from_jsonl(
+    account: str | None,
+    underlying: str | None,
+    limit: int,
+) -> dict:
+    """JSONL fallback. Filters journal.jsonl entries with a fill_price."""
+    entries = _read_jsonl(JOURNAL_PATH)
+    strategy_types = _strategy_filter(account)
+    out: list[dict] = []
+    for e in entries:
+        if e.get("fill_price") is None:
+            continue
+        st = e.get("strategy_type") or ("wheel" if e.get("wheel_state") else None)
+        if strategy_types and st not in strategy_types:
+            continue
+        if underlying and (e.get("underlying") or "").upper() != underlying.upper():
+            continue
+        out.append({
+            "filled_at": e.get("closed_at") or e.get("timestamp"),
+            "submitted_at": e.get("timestamp"),
+            "underlying": e.get("underlying"),
+            "strategy_type": st,
+            "trade_type": (e.get("action") or "").upper(),
+            "symbol": e.get("contract_symbol") or e.get("symbol"),
+            "fill_price": e.get("fill_price"),
+            "contracts": e.get("qty") or 1,
+            "pnl": e.get("pnl"),
+        })
+    out.reverse()
+    return {"trades": out[:limit], "total": len(out)}
+
+
 @app.get("/api/strategy-states")
 def strategy_states():
     portfolio = _read_json(SNAPSHOTS / "portfolio.json")

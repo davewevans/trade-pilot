@@ -178,3 +178,19 @@ class SpreadTracker:
     def to_snapshot(self) -> list[dict]:
         """Return all spreads in a format suitable for StateWriter."""
         return [dict(s) for s in self._spreads]
+
+    def get_all_leg_symbols(self) -> set[str]:
+        """Return the OCC symbols of every leg across all open spreads.
+
+        Used by ``StateWriter.write_portfolio_snapshot`` to tag positions
+        with their owning strategy.
+        """
+        symbols: set[str] = set()
+        for s in self._spreads:
+            if s.get("status") != "open":
+                continue
+            for leg in s.get("legs", []):
+                sym = leg.get("symbol")
+                if sym:
+                    symbols.add(sym.upper())
+        return symbols

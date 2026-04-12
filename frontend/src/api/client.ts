@@ -6,7 +6,13 @@ import type {
   HealthStatus,
   Performance,
   Portfolio,
+  Trade,
 } from '../types'
+
+export interface TradesResponse {
+  trades: Trade[]
+  total: number
+}
 
 const BASE = '' // same origin in prod; Vite proxy handles /api in dev
 
@@ -44,6 +50,15 @@ export const api = {
 
   performance: (account?: string) =>
     get<Performance>(`/api/performance${account ? `?account=${account}` : ''}`),
+
+  trades: (params: { account?: string; underlying?: string; limit?: number }) => {
+    const q = new URLSearchParams()
+    if (params.account) q.set('account', params.account)
+    if (params.underlying) q.set('underlying', params.underlying)
+    if (params.limit) q.set('limit', String(params.limit))
+    const qs = q.toString()
+    return get<TradesResponse>(`/api/trades${qs ? `?${qs}` : ''}`)
+  },
 
   circuitBreakers: () => get<CircuitBreaker>('/api/circuit-breakers'),
 

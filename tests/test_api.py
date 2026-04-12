@@ -332,6 +332,85 @@ class TestDecisionStats:
 # ── /api/performance ────────────────────────────────────────
 
 
+class TestTrades:
+    def test_empty_when_no_filled(self, client, db):
+        # DB exists but no filled trades.
+        r = client.get("/api/trades")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["trades"] == []
+        assert body["total"] == 0
+
+    def test_filter_by_account(self, client, db):
+        _seed_trade(
+            db, alpaca_order_id="o_w", strategy_type="wheel",
+            trade_type="SELL_PUT", fill_price=1.0, filled_at="2026-04-10T10:00:00",
+        )
+        _seed_trade(
+            db, alpaca_order_id="o_ic", strategy_type="iron_condor",
+            trade_type="SELL_PUT", fill_price=1.0, filled_at="2026-04-10T10:01:00",
+        )
+        _seed_trade(
+            db, alpaca_order_id="o_bp", strategy_type="bull_put_spread",
+            trade_type="SELL_PUT", fill_price=1.0, filled_at="2026-04-10T10:02:00",
+        )
+        body = client.get("/api/trades?account=wheel").json()
+        assert body["total"] == 1
+        assert body["trades"][0]["strategy_type"] == "wheel"
+
+        body = client.get("/api/trades?account=spreads").json()
+        assert body["total"] == 1
+        assert body["trades"][0]["strategy_type"] == "bull_put_spread"
+
+    def test_filter_by_underlying(self, client, db):
+        _seed_trade(
+            db, alpaca_order_id="o_spy", underlying="SPY",
+            trade_type="SELL_PUT", fill_price=1.0, filled_at="2026-04-10T10:00:00",
+        )
+        _seed_trade(
+            db, alpaca_order_id="o_aapl", underlying="AAPL",
+            trade_type="SELL_PUT", fill_price=1.0, filled_at="2026-04-10T10:01:00",
+        )
+        body = client.get("/api/trades?underlying=spy").json()
+        assert body["total"] == 1
+        assert body["trades"][0]["underlying"] == "SPY"
+
+    def test_pending_excluded(self, client, db):
+        _seed_trade(
+            db, alpaca_order_id="o_pending", trade_type="SELL_PUT",
+            fill_price=None, fill_status="pending", filled_at=None,
+        )
+        _seed_trade(
+            db, alpaca_order_id="o_filled", trade_type="SELL_PUT",
+            fill_price=1.0, filled_at="2026-04-10T10:00:00",
+        )
+        body = client.get("/api/trades").json()
+        assert body["total"] == 1
+        assert body["trades"][0]["alpaca_order_id"] == "o_filled"
+
+    def test_falls_back_to_jsonl_when_db_missing(self, client, journal_path, db_path):
+        assert not db_path.exists()
+        journal_path.write_text(
+            "\n".join([
+                json.dumps({
+                    "timestamp": "2026-04-10T10:00:00",
+                    "underlying": "SPY", "action": "sell_put",
+                    "contract_symbol": "SPY260515P00485000",
+                    "fill_price": 1.5, "qty": 1, "wheel_state": "IDLE",
+                    "closed_at": "2026-04-10T10:01:00",
+                }),
+                json.dumps({
+                    "timestamp": "2026-04-10T10:02:00",
+                    "underlying": "AAPL", "action": "skip",
+                    "fill_price": None,
+                }),
+            ]) + "\n"
+        )
+        body = client.get("/api/trades").json()
+        assert body["total"] == 1  # skip with null fill_price excluded
+        assert body["trades"][0]["underlying"] == "SPY"
+
+
 class TestPerformance:
     def test_empty_when_no_db_and_no_journal(self, client):
         r = client.get("/api/performance")

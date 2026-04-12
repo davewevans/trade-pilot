@@ -92,7 +92,9 @@ class TradeRepository:
         return [dict(r) for r in rows]
 
     def get_filled(
-        self, strategy_types: list[str] | None = None,
+        self,
+        strategy_types: list[str] | None = None,
+        underlying: str | None = None,
     ) -> list[dict]:
         """Trades with fill_status='filled' AND a known fill_price.
 
@@ -100,14 +102,18 @@ class TradeRepository:
         chronological equity curve. Rows with NULL ``fill_price`` are
         excluded — a pending/unfilled trade has no realized P&L yet
         and must not be counted as a $0 trade. ``strategy_types``
-        scopes results to a list of strategies.
+        scopes results to a list of strategies; ``underlying`` filters
+        to a single ticker (case-insensitive).
         """
         params: list = []
         extra = ""
         if strategy_types:
             placeholders = ",".join(["?"] * len(strategy_types))
-            extra = f" AND strategy_type IN ({placeholders})"
+            extra += f" AND strategy_type IN ({placeholders})"
             params.extend(strategy_types)
+        if underlying:
+            extra += " AND UPPER(underlying) = UPPER(?)"
+            params.append(underlying)
         rows = self._conn.execute(
             f"""
             SELECT * FROM trades

@@ -8,13 +8,13 @@ export interface Position {
   symbol: string
   underlying: string
   strategy_type: string
-  strike_price: number
-  expiration_date: string
+  strike: number
+  expiration: string
   dte: number
-  qty: number
-  avg_entry_price: number
-  current_price: number
-  unrealized_pl: number
+  quantity: number
+  entry_credit: number
+  current_value: number
+  unrealized_pnl: number
   delta?: number
   theta?: number
 }

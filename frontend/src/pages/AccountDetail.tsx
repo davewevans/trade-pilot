@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import {
   CartesianGrid,
@@ -9,13 +10,22 @@ import {
   XAxis,
   YAxis,
 } from 'recharts'
-import { ACCOUNTS } from '../api/client'
+import { ACCOUNTS, api } from '../api/client'
 import { useAccount } from '../hooks/useAccount'
 import { Badge } from '../components/shared/Badge'
 import { EmptyState } from '../components/shared/EmptyState'
 import { LoadingSpinner } from '../components/shared/LoadingSpinner'
 import { StatCard } from '../components/shared/StatCard'
 import type { Position, Trade } from '../types'
+
+// Maps the URL account slug to the strategy_type tag that
+// StateWriter.write_portfolio_snapshot stamps on each position. Keep in
+// sync with `_tag_strategy_type` in data/state_writer.py.
+const ACCOUNT_TO_POSITION_TAG: Record<string, string> = {
+  wheel: 'wheel',
+  spreads: 'spread',
+  iron_condor: 'iron_condor',
+}
 
 const fmtMoney = (n: number | null | undefined) =>
   n == null ? '—' : `$${n.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
@@ -64,16 +74,16 @@ function WheelPipeline({ states }: { states: Record<string, string> }) {
 }
 
 function PositionRow({ p }: { p: Position }) {
-  const pl = Number(p.unrealized_pl ?? 0)
+  const pl = Number(p.unrealized_pnl ?? 0)
   return (
     <tr>
       <td className="font-mono text-xs">{p.symbol}</td>
       <td><Badge variant="neutral">{p.strategy_type}</Badge></td>
-      <td className="font-mono tabular">{p.strike_price ?? '—'}</td>
-      <td className="font-mono text-xs">{p.expiration_date ?? '—'}</td>
+      <td className="font-mono tabular">{p.strike ?? '—'}</td>
+      <td className="font-mono text-xs">{p.expiration ?? '—'}</td>
       <td className="font-mono tabular">{p.dte ?? '—'}</td>
-      <td className="font-mono tabular">{fmtMoney(p.avg_entry_price)}</td>
-      <td className="font-mono tabular">{fmtMoney(p.current_price)}</td>
+      <td className="font-mono tabular">{fmtMoney(p.entry_credit)}</td>
+      <td className="font-mono tabular">{fmtMoney(p.current_value)}</td>
       <td
         className="font-mono tabular"
         style={{ color: pl >= 0 ? 'var(--green)' : 'var(--red)' }}
@@ -87,31 +97,34 @@ function PositionRow({ p }: { p: Position }) {
   )
 }
 
-function TradeRow({ t }: { t: Trade }) {
-  const pl = Number(t.pnl ?? 0)
-  return (
-    <tr>
-      <td className="font-mono">{t.underlying}</td>
-      <td><Badge variant="action">{t.trade_type}</Badge></td>
-      <td className="font-mono text-xs">{t.symbol}</td>
-      <td className="font-mono tabular">{fmtMoney(t.fill_price)}</td>
-      <td
-        className="font-mono tabular"
-        style={{ color: pl >= 0 ? 'var(--green)' : 'var(--red)' }}
-      >
-        {fmtSigned(pl)}
-      </td>
-      <td className="font-mono text-xs" style={{ color: 'var(--text-muted)' }}>
-        {t.filled_at ? new Date(t.filled_at).toLocaleString() : '—'}
-      </td>
-    </tr>
-  )
-}
-
 export function AccountDetail() {
   const { account = '' } = useParams()
   const accountMeta = ACCOUNTS.find((a) => a.account === account)
   const { portfolio, stats, performance, loading } = useAccount(account)
+
+  const [trades, setTrades] = useState<Trade[] | null>(null)
+  const [tradesLoading, setTradesLoading] = useState(true)
+
+  useEffect(() => {
+    let cancelled = false
+    setTradesLoading(true)
+    api
+      .trades({ account, limit: 100 })
+      .then((r) => {
+        if (cancelled) return
+        // API returns most recent first; keep that ordering.
+        setTrades(r.trades)
+      })
+      .catch(() => {
+        if (!cancelled) setTrades([])
+      })
+      .finally(() => {
+        if (!cancelled) setTradesLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [account])
 
   if (!accountMeta) {
     return (
@@ -124,12 +137,10 @@ export function AccountDetail() {
 
   if (loading && !portfolio) return <LoadingSpinner />
 
-  const positions = (portfolio?.positions ?? []).filter((p) => {
-    if (account === 'spreads') {
-      return ['bull_put_spread', 'bear_call_spread', 'long_call_vertical'].includes(p.strategy_type)
-    }
-    return p.strategy_type === account
-  })
+  const positionTag = ACCOUNT_TO_POSITION_TAG[account]
+  const positions = (portfolio?.positions ?? []).filter(
+    (p) => p.strategy_type === positionTag,
+  )
 
   const wheelStates = portfolio?.wheel_states ?? {}
   const isWheel = account === 'wheel'
@@ -140,12 +151,6 @@ export function AccountDetail() {
   const equityData = (performance?.equity_curve ?? []).filter(
     (p) => new Date(p.date) >= cutoff,
   )
-
-  // We don't have a /api/trades endpoint yet — show best/worst as proxies.
-  const closedTrades: Trade[] = [
-    performance?.best_trade,
-    performance?.worst_trade,
-  ].filter((t): t is Trade => Boolean(t))
 
   return (
     <div className="space-y-6">
@@ -262,33 +267,30 @@ export function AccountDetail() {
       </section>
 
       <section>
-        <h3 className="text-sm font-semibold mb-3">
-          Notable trades
-          <span className="ml-2 text-xs font-normal" style={{ color: 'var(--text-muted)' }}>
-            (best &amp; worst — full trade history pending /api/trades endpoint)
-          </span>
-        </h3>
+        <h3 className="text-sm font-semibold mb-3">Closed trades</h3>
         <div
           className="rounded overflow-hidden"
           style={{ backgroundColor: 'var(--bg-card)', border: '1px solid var(--border)' }}
         >
-          {closedTrades.length === 0 ? (
+          {tradesLoading && trades === null ? (
+            <LoadingSpinner />
+          ) : !trades || trades.length === 0 ? (
             <EmptyState message="No closed trades yet" />
           ) : (
             <table>
               <thead>
                 <tr>
+                  <th>Date</th>
                   <th>Underlying</th>
                   <th>Type</th>
                   <th>Symbol</th>
-                  <th>Fill</th>
+                  <th>Fill price</th>
                   <th>P&amp;L</th>
-                  <th>Filled</th>
                 </tr>
               </thead>
               <tbody>
-                {closedTrades.map((t, i) => (
-                  <TradeRow key={`${t.id ?? i}-${t.symbol}`} t={t} />
+                {trades.map((t, i) => (
+                  <ClosedTradeRow key={`${t.id ?? i}-${t.symbol}`} t={t} />
                 ))}
               </tbody>
             </table>
@@ -296,5 +298,26 @@ export function AccountDetail() {
         </div>
       </section>
     </div>
+  )
+}
+
+function ClosedTradeRow({ t }: { t: Trade }) {
+  const pl = Number(t.pnl ?? 0)
+  return (
+    <tr>
+      <td className="font-mono text-xs" style={{ color: 'var(--text-muted)' }}>
+        {t.filled_at ? new Date(t.filled_at).toLocaleString() : '—'}
+      </td>
+      <td className="font-mono">{t.underlying}</td>
+      <td><Badge variant="action">{t.trade_type}</Badge></td>
+      <td className="font-mono text-xs">{t.symbol}</td>
+      <td className="font-mono tabular">{fmtMoney(t.fill_price)}</td>
+      <td
+        className="font-mono tabular"
+        style={{ color: pl >= 0 ? 'var(--green)' : 'var(--red)' }}
+      >
+        {fmtSigned(pl)}
+      </td>
+    </tr>
   )
 }

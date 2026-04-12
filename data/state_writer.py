@@ -15,6 +15,36 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
+def _tag_strategy_type(
+    symbol: str,
+    wheel_symbols: set[str],
+    spread_leg_symbols: set[str],
+) -> str:
+    """Best-effort attribution of an OCC option symbol to its strategy.
+
+    - Symbols that appear in the SpreadTracker's open spread legs → 'spread'
+    - Symbols whose extracted underlying matches a watchlist wheel ticker
+      → 'wheel'
+    - Otherwise → 'unknown'
+    """
+    if not symbol:
+        return "unknown"
+    sym_upper = symbol.upper()
+    if sym_upper in spread_leg_symbols:
+        return "spread"
+    # Extract the underlying root from the OCC symbol — leading alpha chars
+    # before the YYMMDD expiration. Strip any trailing P/C just in case.
+    root = ""
+    for ch in sym_upper:
+        if ch.isalpha():
+            root += ch
+        else:
+            break
+    if root in wheel_symbols:
+        return "wheel"
+    return "unknown"
+
+
 def get_snapshot_dir() -> Path:
     """Return the snapshot directory, preferring ``settings.SNAPSHOTS_DIR``."""
     try:
@@ -70,8 +100,17 @@ class StateWriter:
         positions: list[dict],
         wheel_states: dict[str, str],
         open_spreads: list[dict] | None = None,
+        wheel_symbols: list[str] | None = None,
+        spread_leg_symbols: set[str] | None = None,
     ) -> None:
-        """Write ``snapshots/portfolio.json``."""
+        """Write ``snapshots/portfolio.json``.
+
+        ``wheel_symbols`` and ``spread_leg_symbols`` are used to tag each
+        position with a ``strategy_type`` (Alpaca itself doesn't know which
+        strategy owns a position). When neither is provided, positions
+        whose dict already has a ``strategy_type`` keep it; otherwise
+        the field is set to ``"unknown"``.
+        """
         try:
             equity = self._safe_float(account_data.get("portfolio_value"), 0)
             buying_power = self._safe_float(account_data.get("buying_power"), 0)
@@ -81,12 +120,26 @@ class StateWriter:
                 else 0.0
             )
 
+            wheel_set = (
+                {w.upper() for w in wheel_symbols} if wheel_symbols else set()
+            )
+            spread_set = (
+                {s.upper() for s in spread_leg_symbols}
+                if spread_leg_symbols else set()
+            )
+
             pos_list = []
             for p in positions:
+                symbol = p.get("symbol", "") or ""
+                tagged = _tag_strategy_type(symbol, wheel_set, spread_set)
+                # Respect any pre-existing tag on the position dict, but
+                # only if it's a non-empty string.
+                existing = p.get("strategy_type") or ""
+                strategy_type = existing if existing else tagged
                 pos_list.append({
                     "underlying": p.get("underlying", p.get("root_symbol", "")),
-                    "strategy_type": p.get("strategy_type", ""),
-                    "symbol": p.get("symbol", ""),
+                    "strategy_type": strategy_type,
+                    "symbol": symbol,
                     "strike": self._safe_float(p.get("strike_price")),
                     "expiration": p.get("expiration_date"),
                     "dte": p.get("dte"),

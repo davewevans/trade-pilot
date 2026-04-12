@@ -56,7 +56,10 @@ def run() -> None:
 
     try:
         positions_all = broker.get_positions()
-        sw.write_portfolio_snapshot(account, positions_all, {})
+        sw.write_portfolio_snapshot(
+            account, positions_all, {},
+            wheel_symbols=list(settings.WATCHLIST),
+        )
     except Exception as e:
         logger.warning("Failed to write portfolio snapshot: %s", e)
 

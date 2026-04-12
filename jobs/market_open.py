@@ -137,6 +137,8 @@ def run() -> None:
         sw.write_portfolio_snapshot(
             account, positions, wheel_states,
             open_spreads=tracker.to_snapshot(),
+            wheel_symbols=list(settings.WATCHLIST),
+            spread_leg_symbols=tracker.get_all_leg_symbols(),
         )
     except Exception as e:
         logger.warning("Failed to write portfolio snapshot: %s", e)

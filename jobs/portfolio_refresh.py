@@ -42,20 +42,25 @@ def run() -> None:
 
     # ── Spread reconciliation ───────────────────────────────
     open_spreads: list[dict] = []
+    spread_legs: set[str] = set()
     try:
         tracker = SpreadTracker()
         closed_ids = tracker.reconcile_with_alpaca(positions)
         for sid in closed_ids:
             tracker.close_spread(sid)
         open_spreads = tracker.to_snapshot()
+        spread_legs = tracker.get_all_leg_symbols()
     except Exception as e:
         logger.warning("Failed to reconcile spreads: %s", e)
 
     # ── Portfolio snapshot (includes spreads) ────────────────
     try:
+        from config import settings
         sw.write_portfolio_snapshot(
             account, positions, {},
             open_spreads=open_spreads,
+            wheel_symbols=list(settings.WATCHLIST),
+            spread_leg_symbols=spread_legs,
         )
     except Exception as e:
         logger.warning("Failed to write portfolio snapshot: %s", e)
