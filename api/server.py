@@ -11,7 +11,7 @@ import logging
 import sqlite3
 from collections import Counter
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, Query
@@ -162,7 +162,10 @@ def _read_jsonl(path: Path) -> list[dict]:
 def health():
     return {
         "status": "ok",
-        "timestamp": datetime.now().isoformat(timespec="seconds"),
+        # Timezone-aware ISO string so the browser can convert to local time.
+        # `datetime.now()` (naive) gets interpreted as local time by JS, which
+        # produces the wrong wall-clock when the server runs in UTC (Render).
+        "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "halted": LOCK_PATH.exists(),
     }
 
