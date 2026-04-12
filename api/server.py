@@ -8,6 +8,7 @@ Runs independently from the scheduler.  Start with::
 
 import json
 import logging
+import sqlite3
 from collections import Counter
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -18,8 +19,61 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from config import settings
+from database.repositories import DecisionRepository, TradeRepository
 
 logger = logging.getLogger(__name__)
+
+
+# Per-leg cash flow sign convention for the trades table. Used when
+# the schema's `premium_credit` is unpopulated (current state). Caller
+# is responsible for filtering out NULL `fill_price` rows BEFORE this.
+_SELL_TRADE_TYPES = {"SELL_PUT", "SELL_CALL"}
+_BUY_TRADE_TYPES = {"BUY_PUT", "BUY_CALL"}
+
+
+def _trade_pnl(trade: dict) -> float | None:
+    """Cash-flow P&L for a single filled trade row.
+
+    Returns None if `fill_price` is NULL (caller should have filtered)
+    or if the trade_type is not one of the four recognized options.
+    """
+    fp = trade.get("fill_price")
+    if fp is None:
+        return None
+    tt = (trade.get("trade_type") or "").upper()
+    if tt in _SELL_TRADE_TYPES:
+        sign = 1
+    elif tt in _BUY_TRADE_TYPES:
+        sign = -1
+    else:
+        return None
+    contracts = int(trade.get("contracts") or 1)
+    try:
+        return float(fp) * contracts * 100 * sign
+    except (TypeError, ValueError):
+        return None
+
+
+def _open_db() -> sqlite3.Connection | None:
+    """Open a read-only-style sqlite3 connection or None if unavailable.
+
+    Returns None silently if the DB file doesn't exist (so the API can
+    fall back to JSONL during the dual-write transition). Logs and
+    returns None on any other error.
+    """
+    path = Path(DB_PATH)
+    if not path.exists():
+        return None
+    try:
+        # check_same_thread=False because FastAPI may serve requests on
+        # different threads; we open a fresh connection per request, so
+        # there's no shared mutable state.
+        conn = sqlite3.connect(str(path), check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        return conn
+    except Exception:
+        logger.exception("Failed to open SQLite DB at %s", path)
+        return None
 
 
 @asynccontextmanager
@@ -48,6 +102,7 @@ SNAPSHOTS = settings.SNAPSHOTS_DIR
 DATA_DIR = settings.DATA_DIR
 JOURNAL_PATH = settings.JOURNAL_PATH
 LOCK_PATH = DATA_DIR / "HALTED.lock"
+DB_PATH = settings.DATABASE_PATH
 
 
 # ── helpers ─────────────────────────────────────────────────
@@ -125,9 +180,18 @@ def decisions(
     underlying: str | None = Query(default=None),
     action: str | None = Query(default=None),
 ):
-    all_decisions = _read_jsonl(SNAPSHOTS / "decisions.jsonl")
+    conn = _open_db()
+    if conn is not None:
+        try:
+            repo = DecisionRepository(conn)
+            rows, total = repo.query(limit=limit, underlying=underlying, action=action)
+            return {"decisions": rows, "total": total}
+        finally:
+            conn.close()
 
-    # Filter
+    # TODO: remove fallback once DB is stable
+    logger.warning("DB unavailable for /api/decisions — falling back to JSONL")
+    all_decisions = _read_jsonl(SNAPSHOTS / "decisions.jsonl")
     if underlying:
         ul = underlying.upper()
         all_decisions = [d for d in all_decisions if d.get("underlying", "").upper() == ul]
@@ -139,13 +203,95 @@ def decisions(
         ]
 
     total = len(all_decisions)
-    # Most recent first, then apply limit
     recent = list(reversed(all_decisions))[:limit]
     return {"decisions": recent, "total": total}
 
 
 @app.get("/api/decisions/stats")
 def decisions_stats():
+    conn = _open_db()
+    if conn is not None:
+        try:
+            return _decisions_stats_from_db(conn)
+        finally:
+            conn.close()
+
+    # TODO: remove fallback once DB is stable
+    logger.warning("DB unavailable for /api/decisions/stats — falling back to JSONL")
+    return _decisions_stats_from_jsonl()
+
+
+def _decisions_stats_from_db(conn: sqlite3.Connection) -> dict:
+    """Aggregate stats via SQL over the decisions + trades tables."""
+    total = conn.execute("SELECT COUNT(*) FROM decisions").fetchone()[0]
+
+    # Per-action counts. Action vocabulary is uppercased on write.
+    action_counts: dict[str, int] = {}
+    for row in conn.execute(
+        "SELECT action, COUNT(*) AS n FROM decisions GROUP BY action"
+    ):
+        action_counts[str(row["action"]).upper()] = int(row["n"])
+
+    skips = action_counts.get("SKIP", 0)
+    closes = action_counts.get("CLOSE", 0)
+    rolls = action_counts.get("ROLL", 0)
+    # "trades" = any actionable decision (everything except HOLD/SKIP)
+    holds = action_counts.get("HOLD", 0)
+    trades = total - skips - holds
+
+    # Decisions per underlying.
+    by_underlying: dict[str, int] = {}
+    for row in conn.execute(
+        "SELECT underlying, COUNT(*) AS n FROM decisions GROUP BY underlying"
+    ):
+        by_underlying[row["underlying"]] = int(row["n"])
+
+    # Skip reasons. The decisions table has no normalized skip_reason
+    # column; we use the `reasoning` text directly. Cardinality may be
+    # high until we normalize. (Per design note 1(a).)
+    # TODO: add a skip_reason column or normalize at write time.
+    skip_reasons: Counter = Counter()
+    for row in conn.execute(
+        "SELECT reasoning FROM decisions WHERE UPPER(action) = 'SKIP'"
+    ):
+        reason = (row["reasoning"] or "").strip() or "unknown"
+        skip_reasons[reason] += 1
+
+    # avg_iv_rank_at_entry: no dedicated column on decisions, and the
+    # recorder doesn't currently populate trades.iv_rank_at_entry from
+    # market_open. Return null until that's wired up.
+    # TODO: populate trades.iv_rank_at_entry in TradeRecorder.record_trade
+    avg_ivr = None
+
+    # Win rate over filled trades (cash-flow P&L per design note 2(b)).
+    repo = TradeRepository(conn)
+    filled = repo.get_filled()
+    closed_count = 0
+    profitable = 0
+    for t in filled:
+        pnl = _trade_pnl(t)
+        if pnl is None:
+            continue
+        closed_count += 1
+        if pnl > 0:
+            profitable += 1
+    win_rate = (profitable / closed_count * 100) if closed_count else 0.0
+
+    return {
+        "total_decisions": int(total),
+        "skips": skips,
+        "trades": trades,
+        "closes": closes,
+        "rolls": rolls,
+        "skip_reasons": dict(skip_reasons.most_common()),
+        "win_rate": round(win_rate, 1),
+        "avg_iv_rank_at_entry": avg_ivr,
+        "decisions_by_underlying": by_underlying,
+    }
+
+
+def _decisions_stats_from_jsonl() -> dict:
+    """JSONL fallback — same logic as the pre-DB implementation."""
     all_decisions = _read_jsonl(SNAPSHOTS / "decisions.jsonl")
 
     total = len(all_decisions)
@@ -184,7 +330,6 @@ def decisions_stats():
             except (TypeError, ValueError):
                 pass
 
-    # Win rate from journal (closed positions with pnl)
     journal_entries = _read_jsonl(JOURNAL_PATH)
     for e in journal_entries:
         if e.get("closed_at") and e.get("pnl") is not None:
@@ -210,6 +355,95 @@ def decisions_stats():
 
 @app.get("/api/performance")
 def performance():
+    conn = _open_db()
+    if conn is not None:
+        try:
+            return _performance_from_db(conn)
+        finally:
+            conn.close()
+
+    # TODO: remove fallback once DB is stable
+    logger.warning("DB unavailable for /api/performance — falling back to JSONL")
+    return _performance_from_jsonl()
+
+
+def _performance_from_db(conn: sqlite3.Connection) -> dict:
+    """Performance roll-up from the trades table.
+
+    Per-trade P&L is computed as `fill_price * contracts * 100 * sign`
+    where SELL_* trades are +1 and BUY_* trades are -1. This matches
+    the cash-flow accounting the JSONL implementation also did. Rows
+    with NULL fill_price are excluded from all P&L calculations.
+    """
+    repo = TradeRepository(conn)
+    filled = repo.get_filled()
+
+    if not filled:
+        return {
+            "equity_curve": [],
+            "total_pnl": 0.0,
+            "total_pnl_pct": 0.0,
+            "realized_pnl": 0.0,
+            "unrealized_pnl": 0.0,
+            "best_trade": None,
+            "worst_trade": None,
+        }
+
+    # Aggregate by date for the equity curve.
+    daily_pnl: dict[str, float] = {}
+    total_pnl = 0.0
+    best_trade: dict | None = None
+    worst_trade: dict | None = None
+    best_pnl = float("-inf")
+    worst_pnl = float("inf")
+
+    for t in filled:
+        pnl = _trade_pnl(t)
+        if pnl is None:
+            continue
+        total_pnl += pnl
+
+        # Use filled_at if present (post-reconciler), else submitted_at.
+        ts = t.get("filled_at") or t.get("submitted_at") or ""
+        date_key = str(ts)[:10] if ts else "unknown"
+        daily_pnl[date_key] = daily_pnl.get(date_key, 0.0) + pnl
+
+        if pnl > best_pnl:
+            best_pnl = pnl
+            best_trade = {**t, "pnl": round(pnl, 2)}
+        if pnl < worst_pnl:
+            worst_pnl = pnl
+            worst_trade = {**t, "pnl": round(pnl, 2)}
+
+    # Cumulative equity curve, ordered by date.
+    equity_curve: list[dict] = []
+    cum = 0.0
+    for date_key in sorted(daily_pnl):
+        cum += daily_pnl[date_key]
+        equity_curve.append({
+            "date": date_key,
+            "cumulative_pnl": round(cum, 2),
+        })
+
+    portfolio_data = _read_json(SNAPSHOTS / "portfolio.json")
+    portfolio_value = 0.0
+    if portfolio_data:
+        portfolio_value = float((portfolio_data.get("account") or {}).get("total_equity", 0))
+    total_pnl_pct = (total_pnl / portfolio_value * 100) if portfolio_value else 0.0
+
+    return {
+        "equity_curve": equity_curve,
+        "total_pnl": round(total_pnl, 2),
+        "total_pnl_pct": round(total_pnl_pct, 2),
+        "realized_pnl": round(total_pnl, 2),
+        "unrealized_pnl": 0.0,
+        "best_trade": best_trade,
+        "worst_trade": worst_trade,
+    }
+
+
+def _performance_from_jsonl() -> dict:
+    """JSONL fallback — same logic as the pre-DB implementation."""
     entries = _read_jsonl(JOURNAL_PATH)
 
     equity_curve: list[dict] = []
@@ -251,12 +485,10 @@ def performance():
                     "timestamp": e.get("timestamp"),
                 }
 
-        # Build equity curve from fill_price entries
         ts = e.get("timestamp")
         if ts and e.get("fill_price") is not None:
             equity_curve.append({"timestamp": ts, "equity": round(total_pnl, 2)})
 
-    # Read portfolio snapshot for current equity baseline
     portfolio_data = _read_json(SNAPSHOTS / "portfolio.json")
     portfolio_value = 0.0
     if portfolio_data:

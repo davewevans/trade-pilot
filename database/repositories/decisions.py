@@ -73,3 +73,38 @@ class DecisionRepository:
             (underlying, limit),
         ).fetchall()
         return [_row_to_dict(r) for r in rows]
+
+    def query(
+        self,
+        limit: int = 50,
+        underlying: str | None = None,
+        action: str | None = None,
+    ) -> tuple[list[dict], int]:
+        """Filtered decision query for the API.
+
+        Returns ``(rows, total_count_after_filter)``. ``action`` and
+        ``underlying`` filters are case-insensitive.
+        """
+        where: list[str] = []
+        params: list = []
+        if underlying:
+            where.append("UPPER(underlying) = UPPER(?)")
+            params.append(underlying)
+        if action:
+            where.append("UPPER(action) = UPPER(?)")
+            params.append(action)
+        clause = (" WHERE " + " AND ".join(where)) if where else ""
+
+        total = self._conn.execute(
+            f"SELECT COUNT(*) FROM decisions{clause}", params,
+        ).fetchone()[0]
+
+        rows = self._conn.execute(
+            f"""
+            SELECT * FROM decisions{clause}
+            ORDER BY timestamp DESC, id DESC
+            LIMIT ?
+            """,
+            (*params, limit),
+        ).fetchall()
+        return [_row_to_dict(r) for r in rows], int(total)

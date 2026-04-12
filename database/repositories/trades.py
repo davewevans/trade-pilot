@@ -90,3 +90,21 @@ class TradeRepository:
             (cycle_id,),
         ).fetchall()
         return [dict(r) for r in rows]
+
+    def get_filled(self) -> list[dict]:
+        """Trades with fill_status='filled' AND a known fill_price.
+
+        Ordered by ``filled_at`` ascending so the API can build a
+        chronological equity curve. Rows with NULL ``fill_price`` are
+        excluded — a pending/unfilled trade has no realized P&L yet
+        and must not be counted as a $0 trade.
+        """
+        rows = self._conn.execute(
+            """
+            SELECT * FROM trades
+             WHERE fill_status = 'filled'
+               AND fill_price IS NOT NULL
+             ORDER BY filled_at ASC, id ASC
+            """
+        ).fetchall()
+        return [dict(r) for r in rows]
