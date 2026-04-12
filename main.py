@@ -176,6 +176,14 @@ def validate_startup() -> None:
 
     logger.info("Startup validation passed")
 
+    # Write initial portfolio snapshots for all accounts so the
+    # dashboard has data before the first scheduled cycle runs.
+    try:
+        from jobs.startup_snapshot import run as run_startup_snapshot
+        run_startup_snapshot()
+    except Exception as e:
+        logger.warning("Startup snapshot failed (non-fatal): %s", e)
+
 
 # ── main ────────────────────────────────────────────────────
 

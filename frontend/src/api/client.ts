@@ -84,6 +84,9 @@ export const api = {
 
   equityHistory: () => get<EquityHistory>('/api/equity-history'),
 
+  accounts: () =>
+    get<Record<string, Portfolio | null>>('/api/accounts'),
+
   regimeHistory: () =>
     get<{ confirmed: string; readings: string[] }>('/api/regime-history'),
 

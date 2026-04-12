@@ -222,6 +222,75 @@ class StateWriter:
         except Exception:
             logger.exception("Failed to write equity history snapshot")
 
+    def write_account_snapshot(
+        self,
+        account_name: str,
+        account_data: dict,
+        positions: list[dict],
+    ) -> None:
+        """Write a per-account portfolio snapshot.
+
+        Writes to snapshots/portfolio_{account_name}.json.
+        Used by the startup snapshot job and portfolio_refresh.
+
+        Args:
+            account_name: One of "wheel", "iron_condor", "spreads".
+            account_data: Raw account dict from broker.get_account().
+            positions:    Raw positions list from broker.get_positions().
+        """
+        try:
+            equity = self._safe_float(account_data.get("portfolio_value"), 0)
+            buying_power = self._safe_float(account_data.get("buying_power"), 0)
+            last_equity = self._safe_float(account_data.get("last_equity"), 0)
+            today_pnl = round(equity - last_equity, 2) if last_equity else 0.0
+            today_pnl_pct = (
+                round((today_pnl / last_equity) * 100, 3) if last_equity else 0.0
+            )
+            bp_used_pct = (
+                round((1 - buying_power / equity) * 100, 2) if equity else 0.0
+            )
+
+            snapshot = {
+                "timestamp":    self._now_iso(),
+                "account_name": account_name,
+                "account": {
+                    "total_equity":          equity,
+                    "last_equity":           last_equity,
+                    "buying_power":          buying_power,
+                    "buying_power_used_pct": bp_used_pct,
+                    "today_pnl":             today_pnl,
+                    "today_pnl_pct":         today_pnl_pct,
+                },
+                "positions": [
+                    {
+                        "symbol":        p.get("symbol", ""),
+                        "underlying":    p.get("underlying", p.get("root_symbol", "")),
+                        "strategy_type": p.get("strategy_type", ""),
+                        "strike":        self._safe_float(p.get("strike_price")),
+                        "expiration":    p.get("expiration_date"),
+                        "dte":           p.get("dte"),
+                        "quantity":      p.get("qty"),
+                        "entry_credit":  self._safe_float(p.get("avg_entry_price")),
+                        "current_value": self._safe_float(
+                            p.get("current_price", p.get("market_value"))
+                        ),
+                        "unrealized_pnl": self._safe_float(p.get("unrealized_pl")),
+                        "delta":          self._safe_float(p.get("delta")),
+                        "theta":          self._safe_float(p.get("theta")),
+                    }
+                    for p in positions
+                ],
+            }
+
+            filename = f"portfolio_{account_name}.json"
+            path = self.dir / filename
+            self._atomic_write(path, json.dumps(snapshot, indent=2, default=str))
+            logger.debug("Wrote account snapshot: %s", path)
+        except Exception:
+            logger.exception(
+                "Failed to write account snapshot for %s", account_name
+            )
+
     def write_context_snapshot(self, context_dict: dict) -> None:
         """Write ``snapshots/context.json``."""
         try:

@@ -194,6 +194,41 @@ def circuit_breakers():
     return data
 
 
+@app.get("/api/portfolio/{account_name}")
+def portfolio_by_account(account_name: str):
+    """Return portfolio snapshot for a specific account.
+
+    account_name must be one of: wheel, iron_condor, spreads.
+    """
+    valid = {"wheel", "iron_condor", "spreads"}
+    if account_name not in valid:
+        return JSONResponse(
+            status_code=404,
+            content={"error": f"Unknown account: {account_name}"},
+        )
+    data = _read_json(SNAPSHOTS / f"portfolio_{account_name}.json")
+    if data is None:
+        return JSONResponse(
+            status_code=503,
+            content={"error": f"No data yet for account: {account_name}"},
+        )
+    return data
+
+
+@app.get("/api/accounts")
+def all_accounts():
+    """Return a summary of all three accounts for the dashboard cards.
+
+    Returns a dict keyed by account name. Missing accounts return
+    null for that key — the frontend handles the empty state.
+    """
+    result = {}
+    for name in ("wheel", "iron_condor", "spreads"):
+        data = _read_json(SNAPSHOTS / f"portfolio_{name}.json")
+        result[name] = data  # None if missing — frontend shows "—"
+    return result
+
+
 @app.get("/api/equity-history")
 def equity_history():
     """Equity curve data — 3 months, daily resolution."""

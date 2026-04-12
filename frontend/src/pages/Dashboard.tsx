@@ -1,25 +1,15 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { ACCOUNTS, api, type ContextResponse } from '../api/client'
-import { useAccount } from '../hooks/useAccount'
 import { useDecisions } from '../hooks/useDecisions'
 import { Badge } from '../components/shared/Badge'
 import { EmptyState } from '../components/shared/EmptyState'
 import { LoadingSpinner } from '../components/shared/LoadingSpinner'
 import { StatCard } from '../components/shared/StatCard'
-import type { CircuitBreaker, Decision, Performance } from '../types'
+import type { CircuitBreaker, Decision, Portfolio } from '../types'
 
 const fmtMoney = (n: number | null | undefined) =>
   n == null ? '—' : `$${n.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
-
-function todayPnl(perf: Performance | null): number | null {
-  if (!perf || !perf.equity_curve.length) return null
-  const today = new Date().toISOString().slice(0, 10)
-  const idx = perf.equity_curve.findIndex((p) => p.date === today)
-  if (idx < 0) return null
-  const prev = idx > 0 ? perf.equity_curve[idx - 1].cumulative_pnl : 0
-  return perf.equity_curve[idx].cumulative_pnl - prev
-}
 
 const ACCOUNT_ACCENT: Record<string, string> = {
   wheel: 'var(--accent-wheel)',
@@ -31,18 +21,27 @@ function AccountCard({
   account,
   label,
   cbStatus,
+  snapshot,
 }: {
   account: string
   label: string
   cbStatus: string | null
+  snapshot: Portfolio | null
 }) {
   const accent = ACCOUNT_ACCENT[account] ?? 'var(--accent)'
-  const { portfolio, stats, performance, loading } = useAccount(account)
-  const todays = todayPnl(performance)
 
-  const equity = portfolio?.account?.total_equity
-  const bp = portfolio?.account?.buying_power
-  const positionsCount = portfolio?.positions?.length ?? 0
+  const equity = snapshot?.account?.total_equity
+  const bp = snapshot?.account?.buying_power
+  const todayPnlVal = snapshot?.account?.today_pnl
+  const positionsCount = snapshot?.positions?.length ?? 0
+
+  const todayColor =
+    todayPnlVal == null || todayPnlVal === 0 ? 'var(--text-muted)'
+      : todayPnlVal > 0 ? 'var(--green)' : 'var(--red)'
+  const todayDisplay =
+    todayPnlVal == null || todayPnlVal === 0
+      ? '—'
+      : `${todayPnlVal > 0 ? '+' : ''}${fmtMoney(todayPnlVal)}`
 
   return (
     <Link
@@ -59,7 +58,6 @@ function AccountCard({
           <h3 className="text-base font-semibold">{label}</h3>
           {cbStatus && <Badge variant="circuit">{cbStatus}</Badge>}
         </div>
-        {loading && <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>loading…</span>}
       </div>
       <div
         className="text-3xl font-mono tabular mb-1"
@@ -70,7 +68,7 @@ function AccountCard({
       <div className="text-xs mb-4" style={{ color: 'var(--text-muted)' }}>
         Buying power: <span className="font-mono tabular">{fmtMoney(bp)}</span>
       </div>
-      <div className="grid grid-cols-3 gap-3 text-xs">
+      <div className="grid grid-cols-2 gap-3 text-xs">
         <div>
           <div style={{ color: 'var(--text-muted)' }}>Open</div>
           <div className="font-mono tabular text-sm" style={{ color: 'var(--text-primary)' }}>
@@ -78,21 +76,9 @@ function AccountCard({
           </div>
         </div>
         <div>
-          <div style={{ color: 'var(--text-muted)' }}>Win rate</div>
-          <div className="font-mono tabular text-sm" style={{ color: 'var(--text-primary)' }}>
-            {stats?.win_rate != null ? `${stats.win_rate.toFixed(1)}%` : '—'}
-          </div>
-        </div>
-        <div>
           <div style={{ color: 'var(--text-muted)' }}>Today</div>
-          <div
-            className="font-mono tabular text-sm"
-            style={{
-              color: todays == null ? 'var(--text-muted)'
-                : todays >= 0 ? 'var(--green)' : 'var(--red)',
-            }}
-          >
-            {todays == null ? '—' : `${todays >= 0 ? '+' : ''}${fmtMoney(todays)}`}
+          <div className="font-mono tabular text-sm" style={{ color: todayColor }}>
+            {todayDisplay}
           </div>
         </div>
       </div>
@@ -128,6 +114,7 @@ export function Dashboard() {
   const { data, loading } = useDecisions({ limit: 20 })
   const [context, setContext] = useState<ContextResponse | null>(null)
   const [cb, setCb] = useState<CircuitBreaker | null>(null)
+  const [accounts, setAccounts] = useState<Record<string, Portfolio | null>>({})
 
   useEffect(() => {
     let cancelled = false
@@ -137,6 +124,9 @@ export function Dashboard() {
       })
       api.circuitBreakers().then((c) => { if (!cancelled) setCb(c) }).catch(() => {
         if (!cancelled) setCb(null)
+      })
+      api.accounts().then((a) => { if (!cancelled) setAccounts(a) }).catch(() => {
+        if (!cancelled) setAccounts({})
       })
     }
     load()
@@ -161,6 +151,7 @@ export function Dashboard() {
               account={a.account}
               label={a.label}
               cbStatus={cbStatus}
+              snapshot={accounts[a.account] ?? null}
             />
           ))}
         </div>
