@@ -3,21 +3,25 @@
 # this file or any file in the repo.
 
 services:
-  - type: worker
+  - type: web
     name: trade-pilot
     runtime: python
     region: ohio          # US East — closest to US markets
-    plan: starter         # $7/mo — required for background workers
-    buildCommand: pip install -r requirements.txt
-    startCommand: python main.py
+    plan: starter
+    buildCommand: |
+      pip install -r requirements.txt
+      cd frontend && npm ci && npm run build
+    startCommand: ./start.sh
 
-    # Persistent disk for journal, reports, and logs
+    # Persistent disk for journal, reports, logs, and SQLite DB
     disk:
       name: trade-pilot-data
       mountPath: /data
-      sizeGB: 1           # 1GB is plenty for text files
+      sizeGB: 1           # 1GB is plenty for text files + SQLite
 
     envVars:
+      - key: PORT
+        value: 8000
       - key: RENDER
         value: true
       - key: DATA_DIR

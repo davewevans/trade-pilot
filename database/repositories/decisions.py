@@ -79,11 +79,14 @@ class DecisionRepository:
         limit: int = 50,
         underlying: str | None = None,
         action: str | None = None,
+        strategy_types: list[str] | None = None,
     ) -> tuple[list[dict], int]:
         """Filtered decision query for the API.
 
         Returns ``(rows, total_count_after_filter)``. ``action`` and
-        ``underlying`` filters are case-insensitive.
+        ``underlying`` filters are case-insensitive. ``strategy_types``
+        scopes results to a list of strategies (used by the API's
+        ``?account=`` filter).
         """
         where: list[str] = []
         params: list = []
@@ -93,6 +96,10 @@ class DecisionRepository:
         if action:
             where.append("UPPER(action) = UPPER(?)")
             params.append(action)
+        if strategy_types:
+            placeholders = ",".join(["?"] * len(strategy_types))
+            where.append(f"strategy_type IN ({placeholders})")
+            params.extend(strategy_types)
         clause = (" WHERE " + " AND ".join(where)) if where else ""
 
         total = self._conn.execute(

@@ -91,20 +91,31 @@ class TradeRepository:
         ).fetchall()
         return [dict(r) for r in rows]
 
-    def get_filled(self) -> list[dict]:
+    def get_filled(
+        self, strategy_types: list[str] | None = None,
+    ) -> list[dict]:
         """Trades with fill_status='filled' AND a known fill_price.
 
         Ordered by ``filled_at`` ascending so the API can build a
         chronological equity curve. Rows with NULL ``fill_price`` are
         excluded — a pending/unfilled trade has no realized P&L yet
-        and must not be counted as a $0 trade.
+        and must not be counted as a $0 trade. ``strategy_types``
+        scopes results to a list of strategies.
         """
+        params: list = []
+        extra = ""
+        if strategy_types:
+            placeholders = ",".join(["?"] * len(strategy_types))
+            extra = f" AND strategy_type IN ({placeholders})"
+            params.extend(strategy_types)
         rows = self._conn.execute(
-            """
+            f"""
             SELECT * FROM trades
              WHERE fill_status = 'filled'
                AND fill_price IS NOT NULL
+               {extra}
              ORDER BY filled_at ASC, id ASC
-            """
+            """,
+            params,
         ).fetchall()
         return [dict(r) for r in rows]

@@ -105,6 +105,23 @@ LOCK_PATH = DATA_DIR / "HALTED.lock"
 DB_PATH = settings.DATABASE_PATH
 
 
+# Account → strategy_type mapping. Used by the ?account= query param
+# on /api/decisions, /api/decisions/stats, /api/performance.
+# Omit ?account= (or pass an unknown value) for the unfiltered view.
+_ACCOUNT_STRATEGY_MAP: dict[str, list[str]] = {
+    "wheel": ["wheel"],
+    "iron_condor": ["iron_condor"],
+    "spreads": ["bull_put_spread", "bear_call_spread", "long_call_vertical"],
+}
+
+
+def _strategy_filter(account: str | None) -> list[str] | None:
+    """Resolve ?account=... to a strategy_type list, or None for no filter."""
+    if not account:
+        return None
+    return _ACCOUNT_STRATEGY_MAP.get(account.lower())
+
+
 # ── helpers ─────────────────────────────────────────────────
 
 
@@ -179,12 +196,18 @@ def decisions(
     limit: int = Query(default=50, ge=1, le=500),
     underlying: str | None = Query(default=None),
     action: str | None = Query(default=None),
+    account: str | None = Query(default=None),
 ):
     conn = _open_db()
     if conn is not None:
         try:
             repo = DecisionRepository(conn)
-            rows, total = repo.query(limit=limit, underlying=underlying, action=action)
+            rows, total = repo.query(
+                limit=limit,
+                underlying=underlying,
+                action=action,
+                strategy_types=_strategy_filter(account),
+            )
             return {"decisions": rows, "total": total}
         finally:
             conn.close()
@@ -208,11 +231,11 @@ def decisions(
 
 
 @app.get("/api/decisions/stats")
-def decisions_stats():
+def decisions_stats(account: str | None = Query(default=None)):
     conn = _open_db()
     if conn is not None:
         try:
-            return _decisions_stats_from_db(conn)
+            return _decisions_stats_from_db(conn, _strategy_filter(account))
         finally:
             conn.close()
 
@@ -221,14 +244,27 @@ def decisions_stats():
     return _decisions_stats_from_jsonl()
 
 
-def _decisions_stats_from_db(conn: sqlite3.Connection) -> dict:
+def _decisions_stats_from_db(
+    conn: sqlite3.Connection,
+    strategy_types: list[str] | None = None,
+) -> dict:
     """Aggregate stats via SQL over the decisions + trades tables."""
-    total = conn.execute("SELECT COUNT(*) FROM decisions").fetchone()[0]
+    where = ""
+    params: list = []
+    if strategy_types:
+        placeholders = ",".join(["?"] * len(strategy_types))
+        where = f" WHERE strategy_type IN ({placeholders})"
+        params = list(strategy_types)
+
+    total = conn.execute(
+        f"SELECT COUNT(*) FROM decisions{where}", params,
+    ).fetchone()[0]
 
     # Per-action counts. Action vocabulary is uppercased on write.
     action_counts: dict[str, int] = {}
     for row in conn.execute(
-        "SELECT action, COUNT(*) AS n FROM decisions GROUP BY action"
+        f"SELECT action, COUNT(*) AS n FROM decisions{where} GROUP BY action",
+        params,
     ):
         action_counts[str(row["action"]).upper()] = int(row["n"])
 
@@ -242,7 +278,8 @@ def _decisions_stats_from_db(conn: sqlite3.Connection) -> dict:
     # Decisions per underlying.
     by_underlying: dict[str, int] = {}
     for row in conn.execute(
-        "SELECT underlying, COUNT(*) AS n FROM decisions GROUP BY underlying"
+        f"SELECT underlying, COUNT(*) AS n FROM decisions{where} GROUP BY underlying",
+        params,
     ):
         by_underlying[row["underlying"]] = int(row["n"])
 
@@ -251,8 +288,12 @@ def _decisions_stats_from_db(conn: sqlite3.Connection) -> dict:
     # high until we normalize. (Per design note 1(a).)
     # TODO: add a skip_reason column or normalize at write time.
     skip_reasons: Counter = Counter()
+    skip_where = (
+        f"{where} AND UPPER(action) = 'SKIP'"
+        if where else " WHERE UPPER(action) = 'SKIP'"
+    )
     for row in conn.execute(
-        "SELECT reasoning FROM decisions WHERE UPPER(action) = 'SKIP'"
+        f"SELECT reasoning FROM decisions{skip_where}", params,
     ):
         reason = (row["reasoning"] or "").strip() or "unknown"
         skip_reasons[reason] += 1
@@ -265,7 +306,7 @@ def _decisions_stats_from_db(conn: sqlite3.Connection) -> dict:
 
     # Win rate over filled trades (cash-flow P&L per design note 2(b)).
     repo = TradeRepository(conn)
-    filled = repo.get_filled()
+    filled = repo.get_filled(strategy_types=strategy_types)
     closed_count = 0
     profitable = 0
     for t in filled:
@@ -354,11 +395,11 @@ def _decisions_stats_from_jsonl() -> dict:
 
 
 @app.get("/api/performance")
-def performance():
+def performance(account: str | None = Query(default=None)):
     conn = _open_db()
     if conn is not None:
         try:
-            return _performance_from_db(conn)
+            return _performance_from_db(conn, _strategy_filter(account))
         finally:
             conn.close()
 
@@ -367,7 +408,10 @@ def performance():
     return _performance_from_jsonl()
 
 
-def _performance_from_db(conn: sqlite3.Connection) -> dict:
+def _performance_from_db(
+    conn: sqlite3.Connection,
+    strategy_types: list[str] | None = None,
+) -> dict:
     """Performance roll-up from the trades table.
 
     Per-trade P&L is computed as `fill_price * contracts * 100 * sign`
@@ -376,7 +420,7 @@ def _performance_from_db(conn: sqlite3.Connection) -> dict:
     with NULL fill_price are excluded from all P&L calculations.
     """
     repo = TradeRepository(conn)
-    filled = repo.get_filled()
+    filled = repo.get_filled(strategy_types=strategy_types)
 
     if not filled:
         return {
@@ -564,3 +608,22 @@ def regime_history():
     if data is None:
         return {"readings": [], "confirmed": "NEUTRAL"}
     return data
+
+
+# ── Static frontend ────────────────────────────────────────
+# Mounted at the end so all /api/* routes take precedence.
+# Skipped if `api/static/` is empty (pre-build dev environment).
+
+from fastapi.staticfiles import StaticFiles
+
+_STATIC_DIR = Path(__file__).parent / "static"
+if _STATIC_DIR.exists() and any(
+    p.name != ".gitkeep" for p in _STATIC_DIR.iterdir()
+):
+    app.mount("/", StaticFiles(directory=str(_STATIC_DIR), html=True), name="frontend")
+else:
+    logger.info(
+        "Frontend static dir empty (%s) — skipping mount. "
+        "Run `cd frontend && npm run build` to populate.",
+        _STATIC_DIR,
+    )
