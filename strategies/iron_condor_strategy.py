@@ -132,8 +132,11 @@ class IronCondorStrategy:
         if not ic_legs:
             return "No viable iron condor candidates found", 0.0
 
-        total_credit = float(ic_legs.get("total_credit", 0))
-        return None, total_credit
+        # Rank by combined EV score (ORATS-adjusted POP × max_gain - loss risk,
+        # summed across both legs).  Falls back to total_credit when unavailable.
+        ev = ic_legs.get("total_ev_score")
+        score = float(ev) if ev is not None else float(ic_legs.get("total_credit", 0))
+        return None, score
 
     def _check_entry_conditions(self, context: dict) -> str | None:
         """Return a skip reason string, or None if all conditions pass."""

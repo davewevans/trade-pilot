@@ -141,6 +141,12 @@ class LongCallVerticalStrategy:
                 0.0,
             )
 
+        # Rank by EV score when available (accounts for whether call options
+        # are cheap relative to ORATS' forecast — key for debit spreads where
+        # overpriced IV hurts). Falls back to reward/risk ratio.
+        ev = best.get("ev_score")
+        if ev is not None:
+            return None, float(ev)
         max_gain = best.get("max_gain") or 0
         score = (float(max_gain) / float(net_debit)) if max_gain else (1.0 / float(net_debit))
         return None, float(score)

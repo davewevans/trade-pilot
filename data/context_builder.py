@@ -28,6 +28,7 @@ _SOURCE_MAP: dict[str, str] = {
     "news": "Alpaca News",
     "orats_summary": "ORATS",
     "orats_cores": "ORATS",
+    "orats_monies": "ORATS",
     "earnings_history": "Finnhub",
     "analyst_data": "Finnhub",
     "news_sentiment": "Finnhub",
@@ -123,6 +124,7 @@ class ContextBuilder:
             futures["news"] = pool.submit(_fetch_news, symbol)
             futures["orats_summary"] = pool.submit(market_data.get_orats_summary, symbol)
             futures["orats_cores"] = pool.submit(market_data.get_orats_cores, symbol)
+            futures["orats_monies"] = pool.submit(market_data.get_orats_monies, symbol)
             futures["earnings_history"] = pool.submit(
                 market_data.get_finnhub_earnings_history, symbol,
             )
@@ -162,6 +164,24 @@ class ContextBuilder:
             iv_env = "UNKNOWN"
 
         cores = results.get("orats_cores") or {}
+        monies_rows = results.get("orats_monies") or []
+
+        # ── Premium richness signal from implied vs forecast move ──
+        # If implied_move > forecast_move, options are overpriced relative
+        # to ORATS' model of actual expected movement → sellers have edge.
+        implied_move = orats.get("implied_move_pct") if orats else None
+        forecast_move = orats.get("forecast_move_pct") if orats else None
+        premium_richness: float | None = None
+        premium_richness_label: str | None = None
+        if implied_move is not None and forecast_move is not None and implied_move != 0:
+            premium_richness = round((implied_move - forecast_move) / implied_move, 4)
+            if premium_richness > 0.10:
+                premium_richness_label = "RICH"      # selling has positive edge
+            elif premium_richness < -0.10:
+                premium_richness_label = "CHEAP"     # buying has positive edge
+            else:
+                premium_richness_label = "FAIR"
+
         context["volatility"] = {
             "iv_rank_1y": orats.get("iv_rank_1y") if orats else None,
             "iv_rank_1m": orats.get("iv_rank_1m") if orats else None,
@@ -175,8 +195,11 @@ class ContextBuilder:
             "term_structure_slope": orats.get("term_structure_slope") if orats else None,
             "skew_m1": orats.get("skew_m1") if orats else None,
             "skew_m2": orats.get("skew_m2") if orats else None,
-            "implied_move_pct": orats.get("implied_move_pct") if orats else None,
-            "forecast_move_pct": orats.get("forecast_move_pct") if orats else None,
+            "implied_move_pct": implied_move,
+            "forecast_move_pct": forecast_move,
+            # Premium richness: >0 means options are expensive (sellers have edge)
+            "premium_richness": premium_richness,
+            "premium_richness_label": premium_richness_label,
             # Expanded summary fields
             "ex_ern_iv_30d": orats.get("ex_ern_iv_30d") if orats else None,
             "contango": orats.get("contango") if orats else None,
@@ -190,6 +213,8 @@ class ContextBuilder:
             "hv_ex_earnings_20d": cores.get("hv_ex_earnings_20d"),
             "rip": cores.get("rip"),
             "orats_available": orats is not None,
+            # Monies: vol smile availability
+            "monies_available": len(monies_rows) > 0,
         }
         # Backward compat: iv_rank at top level for existing prompts
         context["iv_rank"] = context["volatility"]["iv_rank_1y"]
@@ -375,6 +400,13 @@ class ContextBuilder:
                         try:
                             candidates = self.build_spread_candidates(
                                 symbol, st, underlying_price=current_price,
+                            )
+                            # Enrich all candidates + best_candidate with EV scores
+                            _enrich_with_ev(
+                                candidates,
+                                strategy_type=st,
+                                orats_summary=orats or {},
+                                monies_rows=monies_rows,
                             )
                             all_candidates[st] = candidates
                         except Exception:
@@ -751,19 +783,29 @@ class ContextBuilder:
 
     @staticmethod
     def _pick_best(candidates: list[dict]) -> dict | None:
-        """Pick the credit spread candidate with highest credit_to_width_ratio and good liquidity."""
+        """Pick the credit spread candidate with the highest EV score.
+
+        Falls back to credit_to_width_ratio when EV scores are unavailable
+        (e.g. ORATS monies data could not be fetched).
+        """
         liquid = [c for c in candidates if c.get("liquidity_ok")]
         if not liquid:
             return None
+        if any(c.get("ev_score") is not None for c in liquid):
+            return max(liquid, key=lambda c: c.get("ev_score") or 0)
         return max(liquid, key=lambda c: c.get("credit_to_width_ratio", 0))
 
     @staticmethod
     def _pick_best_debit(candidates: list[dict]) -> dict | None:
-        """Pick the debit spread candidate with best risk/reward and good liquidity."""
+        """Pick the debit spread candidate with the highest EV score.
+
+        Falls back to max_gain/max_loss ratio when EV scores are unavailable.
+        """
         liquid = [c for c in candidates if c.get("liquidity_ok")]
         if not liquid:
             return None
-        # Best = highest max_gain / max_loss ratio
+        if any(c.get("ev_score") is not None for c in liquid):
+            return max(liquid, key=lambda c: c.get("ev_score") or 0)
         return max(
             liquid,
             key=lambda c: c["max_gain"] / c["max_loss"] if c.get("max_loss", 0) > 0 else 0,
@@ -1122,3 +1164,225 @@ class ContextBuilder:
             f"DTE Earnings: {dte_str} | VIX: {vix_str} | "
             f"F&G: {fg_str} | RFR: {rfr_str}"
         )
+
+
+# ── EV / probability-of-profit enrichment ─────────────────────────────────────
+# Module-level so it can be called from tests or other modules.
+
+
+def compute_ev_score(
+    candidate: dict,
+    option_type: str,
+    orats_summary: dict,
+    monies_rows: list[dict],
+) -> dict:
+    """Compute EV-enriched probability of profit for a spread candidate.
+
+    Uses ORATS smoothed volatility from the monies endpoint to calculate a
+    more accurate probability than raw delta alone.  Also incorporates the
+    gap between ORATS' implied move (market-priced) and its forecast move
+    (model-estimated actual expected move) to detect premium richness/cheapness.
+
+    Args:
+        candidate: A spread candidate dict (with short_leg.delta, max_gain,
+                   max_loss, dte fields).
+        option_type: ``"put"`` for bull put/wheel CSP, ``"call"`` for bear
+                     call, ``"debit"`` for long call vertical.
+        orats_summary: Dict from ORATSClient.get_summary() with
+                       implied_move_pct, forecast_move_pct, atm_iv_m1.
+        monies_rows: List of rows from ORATSClient.get_monies() — one per
+                     expiration.  May be empty if ORATS is unavailable.
+
+    Returns:
+        Dict with keys:
+            base_pop           – naive 1 - |delta| probability
+            skew_adjustment    – monies-derived adjustment for skew richness
+            ev_adjustment      – implied-vs-forecast-move richness factor
+            adjusted_pop       – final probability used for EV
+            ev_score           – expected value in dollars (adjusted_pop *
+                                 max_gain - (1-adjusted_pop) * max_loss)
+            premium_richness   – raw (implied-forecast)/implied ratio
+            monies_vol_at_strike – smoothed ORATS vol at the short strike delta
+    """
+    import math
+
+    short_leg = candidate.get("short_leg") or {}
+    short_delta = abs(short_leg.get("delta") or 0)
+    max_gain = float(candidate.get("max_gain") or 0)
+    max_loss = float(candidate.get("max_loss") or 1)
+    dte = int(candidate.get("dte") or 30)
+
+    # Guard: degenerate candidates
+    if short_delta <= 0 or max_loss <= 0:
+        return {
+            "base_pop": None, "skew_adjustment": 0.0, "ev_adjustment": 0.0,
+            "adjusted_pop": None, "ev_score": None,
+            "premium_richness": None, "monies_vol_at_strike": None,
+        }
+
+    # ── 1. Base probability from delta ────────────────────────────────────────
+    # For a short put/call: POP ≈ 1 - |delta|.
+    # This is the risk-neutral probability the option expires OTM.
+    base_pop = 1.0 - short_delta
+
+    # ── 2. Smoothed vol at strike from ORATS monies ───────────────────────────
+    # The monies endpoint returns vol at standardised delta-percentage levels:
+    # vol100 ≈ ATM, vol30 = 30-delta put, vol5 = 5-delta put.
+    # For a call spread: a 30-delta call = 70-delta put equivalent → vol70.
+    monies_vol_at_strike: float | None = None
+    atm_vol = orats_summary.get("atm_iv_m1")
+
+    if monies_rows:
+        # Match the monies row closest in DTE to the candidate expiration
+        best_row: dict | None = None
+        best_diff = float("inf")
+        for row in monies_rows:
+            exp_str = row.get("expir_date", "")
+            try:
+                from datetime import date as _date
+                row_dte = (_date.fromisoformat(exp_str) - _date.today()).days
+                diff = abs(row_dte - dte)
+                if diff < best_diff:
+                    best_diff = diff
+                    best_row = row
+            except (ValueError, TypeError):
+                continue
+
+        if best_row is not None:
+            # Map candidate delta to the nearest monies bucket (multiples of 5)
+            if option_type == "put":
+                # Put side: vol30 for 30-delta put
+                raw_level = short_delta * 100
+            else:
+                # Call side: a 30-delta call ≈ 70-delta put in put-skew space
+                raw_level = (1.0 - short_delta) * 100
+
+            bucket = int(round(raw_level / 5.0) * 5)
+            bucket = max(5, min(95, bucket))
+            field = f"vol{bucket}"
+            monies_vol_at_strike = best_row.get(field)
+
+    # ── 3. Skew adjustment ────────────────────────────────────────────────────
+    # If the smoothed vol at the short strike is higher than ATM vol, the
+    # market is paying extra for protection at that strike.  For put sellers
+    # this is a tail-wind: the real-world probability of the put expiring
+    # worthless is higher than the risk-neutral delta implies.
+    skew_adjustment = 0.0
+    if monies_vol_at_strike is not None and atm_vol and atm_vol > 0:
+        skew_premium = (monies_vol_at_strike - atm_vol) / atm_vol
+        # Apply a dampened adjustment: ±5% max from skew alone.
+        if option_type in ("put",):
+            # Put skew is positive → higher vol at OTM puts → sellers favoured
+            skew_adjustment = min(0.05, max(-0.05, skew_premium * 0.10))
+        elif option_type == "call":
+            # OTM call vol is usually lower (or equal) — flip sign
+            skew_adjustment = min(0.05, max(-0.05, -skew_premium * 0.10))
+        # For debit spreads (buying calls) high call vol hurts us
+        elif option_type == "debit":
+            skew_adjustment = min(0.05, max(-0.05, -skew_premium * 0.10))
+
+    # ── 4. Implied vs forecast move adjustment (user's formula) ───────────────
+    # ev_adjustment = (implied_move - forecast_move) / implied_move
+    # positive → options are overpriced → selling has extra edge
+    # negative → options are underpriced → selling has less edge
+    implied_move = orats_summary.get("implied_move_pct")
+    forecast_move = orats_summary.get("forecast_move_pct")
+    ev_adjustment = 0.0
+    premium_richness: float | None = None
+
+    if implied_move and forecast_move and implied_move != 0:
+        ev_adjustment = (implied_move - forecast_move) / implied_move
+        premium_richness = round(ev_adjustment, 4)
+        # For debit spreads, overpriced options hurt buyers
+        if option_type == "debit":
+            ev_adjustment = -ev_adjustment
+
+    # ── 5. Adjusted POP (user's formula) ──────────────────────────────────────
+    adjusted_pop = base_pop * (1 + ev_adjustment * 0.10)
+    adjusted_pop += skew_adjustment
+    # Clamp: never go below 50% or above 99%
+    adjusted_pop = max(0.50, min(0.99, adjusted_pop))
+
+    # ── 6. Expected Value ──────────────────────────────────────────────────────
+    ev_score = (adjusted_pop * max_gain) - ((1.0 - adjusted_pop) * max_loss)
+
+    return {
+        "base_pop": round(base_pop, 4),
+        "skew_adjustment": round(skew_adjustment, 4),
+        "ev_adjustment": round(ev_adjustment, 4),
+        "adjusted_pop": round(adjusted_pop, 4),
+        "ev_score": round(ev_score, 2),
+        "premium_richness": premium_richness,
+        "monies_vol_at_strike": monies_vol_at_strike,
+    }
+
+
+def _enrich_with_ev(
+    candidates_result: dict,
+    strategy_type: str,
+    orats_summary: dict,
+    monies_rows: list[dict],
+) -> None:
+    """Mutate a ``build_spread_candidates`` result in-place: add EV fields.
+
+    Enriches every candidate in ``candidates_result["candidates"]`` with the
+    output of ``compute_ev_score()``, then re-selects ``best_candidate`` using
+    EV score as the primary sort key.
+
+    Iron condor candidates are enriched on each leg and the combined entry
+    is updated with a ``total_ev_score`` that is the sum of both legs.
+    """
+    from data.context_builder import ContextBuilder  # avoid circular for _pick*
+
+    raw_candidates: list[dict] = candidates_result.get("candidates", [])
+
+    # Determine option_type for the EV computation
+    if strategy_type == "bull_put_spread":
+        otype = "put"
+    elif strategy_type == "bear_call_spread":
+        otype = "call"
+    elif strategy_type == "long_call_vertical":
+        otype = "debit"
+    else:  # iron_condor — treat put/call sides separately below
+        otype = "put"
+
+    for c in raw_candidates:
+        # Iron condor candidates may be mixed put+call; detect by presence of
+        # the iron_condor_legs structure rather than individual candidates.
+        ev = compute_ev_score(c, otype, orats_summary, monies_rows)
+        c.update(ev)
+
+    # Re-elect best_candidate using ev_score
+    if strategy_type == "iron_condor":
+        # Re-pick both legs independently and rebuild iron_condor_legs
+        put_candidates = [c for c in raw_candidates if (c.get("short_leg") or {}).get("delta", 0) < 0]
+        call_candidates = [c for c in raw_candidates if (c.get("short_leg") or {}).get("delta", 0) > 0]
+
+        # Enrich call candidates separately (use "call" otype for skew direction)
+        for c in call_candidates:
+            ev = compute_ev_score(c, "call", orats_summary, monies_rows)
+            c.update(ev)
+
+        best_put = ContextBuilder._pick_best(put_candidates)
+        best_call = ContextBuilder._pick_best(call_candidates)
+
+        if best_put and best_call:
+            total_credit = best_put["net_credit"] + best_call["net_credit"]
+            total_max_loss = max(best_put["max_loss"], best_call["max_loss"])
+            put_ev = best_put.get("ev_score") or 0
+            call_ev = best_call.get("ev_score") or 0
+            candidates_result["iron_condor_legs"] = {
+                "put_spread": best_put,
+                "call_spread": best_call,
+                "total_credit": round(total_credit, 4),
+                "total_max_loss": round(total_max_loss, 2),
+                "total_ev_score": round(put_ev + call_ev, 2),
+            }
+            candidates_result["best_candidate"] = candidates_result["iron_condor_legs"]
+        else:
+            candidates_result["best_candidate"] = None
+
+    elif strategy_type == "long_call_vertical":
+        candidates_result["best_candidate"] = ContextBuilder._pick_best_debit(raw_candidates)
+    else:
+        candidates_result["best_candidate"] = ContextBuilder._pick_best(raw_candidates)

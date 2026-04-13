@@ -145,7 +145,11 @@ class BearCallSpreadStrategy:
                 0.0,
             )
 
-        return None, float(net_credit)
+        # Rank by EV score (ORATS-adjusted probability × max_gain - loss risk).
+        # Falls back to net_credit when EV data is unavailable.
+        ev = best.get("ev_score")
+        score = float(ev) if ev is not None else float(net_credit)
+        return None, score
 
     def _check_entry_conditions(self, context: dict) -> str | None:
         regime = context.get("confirmed_market_regime", "NEUTRAL")
