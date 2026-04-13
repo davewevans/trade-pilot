@@ -37,10 +37,12 @@ class LongCallVerticalStrategy:
 
     State = LongCallVerticalState
 
-    def __init__(self, broker, state_writer=None, spread_tracker=None):
+    def __init__(self, broker, state_writer=None, spread_tracker=None, recorder=None):
         self.broker = broker
         self.state_writer = state_writer
         self.spread_tracker = spread_tracker
+        self.recorder = recorder
+        self.cb_status_at_entry: str | None = None
         self.state = LongCallVerticalState.IDLE
         self.open_spread_id: str | None = None
         self.pending_order_id: str | None = None
@@ -322,6 +324,7 @@ class LongCallVerticalStrategy:
                 max_loss=round(decision.get("net_debit", 0) * 100, 2),
                 max_gain=round((wing_width - decision.get("net_debit", 0)) * 100, 2),
                 entry_order_id=order_id,
+                cb_status_at_entry=self.cb_status_at_entry,
             )
             self.open_spread_id = spread_id
 

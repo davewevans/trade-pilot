@@ -115,11 +115,15 @@ def run() -> None:
     default_broker = broker
 
     spread_strategies = {
-        "iron_condor": IronCondorStrategy(broker=ic_broker, state_writer=sw, spread_tracker=tracker),
-        "bull_put_spread": BullPutSpreadStrategy(broker=default_broker, state_writer=sw, spread_tracker=tracker),
-        "bear_call_spread": BearCallSpreadStrategy(broker=default_broker, state_writer=sw, spread_tracker=tracker),
-        "long_call_vertical": LongCallVerticalStrategy(broker=default_broker, state_writer=sw, spread_tracker=tracker),
+        "iron_condor": IronCondorStrategy(broker=ic_broker, state_writer=sw, spread_tracker=tracker, recorder=recorder),
+        "bull_put_spread": BullPutSpreadStrategy(broker=default_broker, state_writer=sw, spread_tracker=tracker, recorder=recorder),
+        "bear_call_spread": BearCallSpreadStrategy(broker=default_broker, state_writer=sw, spread_tracker=tracker, recorder=recorder),
+        "long_call_vertical": LongCallVerticalStrategy(broker=default_broker, state_writer=sw, spread_tracker=tracker, recorder=recorder),
     }
+    # Stamp current circuit-breaker color on each strategy so any spread
+    # opened this cycle records the CB status it was entered under.
+    for _s in spread_strategies.values():
+        _s.cb_status_at_entry = cb_status.status
 
     # Reconcile any PENDING_OPEN / PENDING_CLOSE spreads from a previous
     # session before we make new decisions. Without this, management logic
@@ -417,9 +421,13 @@ def run() -> None:
                 except Exception as e:
                     logger.warning("Failed to write %s decision: %s", strategy_name, e)
 
-                # DB dual-write — spread trades themselves (multi-leg orders)
-                # are not yet inserted into the trades table. That requires
-                # per-leg expansion and is deferred to a follow-up task.
+                # DB dual-write — the spread trade row itself is inserted
+                # later by `_spread_lifecycle._record_spread_open_to_db`
+                # when reconciliation confirms the entry filled
+                # (PENDING_OPEN → OPEN). Same goes for the close update
+                # (PENDING_CLOSE → CLOSED). Here we only record the
+                # decision so the cycle exists by the time the fill row
+                # tries to attach.
                 spread_underlying = (
                     decision.get("underlying")
                     or (settings.WATCHLIST[0] if settings.WATCHLIST else strategy_name)

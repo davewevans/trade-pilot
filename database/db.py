@@ -104,6 +104,21 @@ _SCHEMA_STATEMENTS: tuple[str, ...] = (
 )
 
 
+# Idempotent additive migrations applied on every startup. Each is run
+# inside its own try/except so that re-applying after the column already
+# exists is a no-op (SQLite raises OperationalError "duplicate column").
+#
+# These columns extend the trades table to support multi-leg spreads:
+# wheel rows leave them NULL and behave exactly as before.
+_MIGRATIONS: tuple[str, ...] = (
+    "ALTER TABLE trades ADD COLUMN closed_at TEXT",
+    "ALTER TABLE trades ADD COLUMN close_fill_price REAL",
+    "ALTER TABLE trades ADD COLUMN realized_pnl REAL",
+    "ALTER TABLE trades ADD COLUMN outcome TEXT",
+    "ALTER TABLE trades ADD COLUMN cb_status_at_entry TEXT",
+)
+
+
 class Database:
     """Owns a single sqlite3.Connection with WAL + foreign keys enabled.
 
@@ -135,6 +150,28 @@ class Database:
             cur.execute(stmt)
         self._conn.commit()
         logger.info("Schema initialized: %d statements applied", len(_SCHEMA_STATEMENTS))
+        self._apply_migrations()
+
+    def _apply_migrations(self) -> None:
+        """Apply additive ALTER TABLE migrations idempotently.
+
+        SQLite has no ``IF NOT EXISTS`` for ADD COLUMN, so we attempt
+        each and swallow the "duplicate column" error that fires once
+        the migration has been applied.
+        """
+        applied = 0
+        for stmt in _MIGRATIONS:
+            try:
+                self._conn.execute(stmt)
+                self._conn.commit()
+                applied += 1
+            except sqlite3.OperationalError as e:
+                msg = str(e).lower()
+                if "duplicate column" in msg:
+                    continue
+                logger.warning("Migration failed (%s): %s", stmt, e)
+        if applied:
+            logger.info("Migrations applied: %d", applied)
 
     def get_connection(self) -> sqlite3.Connection:
         """Return the underlying sqlite3.Connection for repository injection."""

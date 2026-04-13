@@ -222,8 +222,21 @@ class AuthMiddleware(BaseHTTPMiddleware):
 # Per-leg cash flow sign convention for the trades table. Used when
 # the schema's `premium_credit` is unpopulated (current state). Caller
 # is responsible for filtering out NULL `fill_price` rows BEFORE this.
-_SELL_TRADE_TYPES = {"SELL_PUT", "SELL_CALL"}
-_BUY_TRADE_TYPES = {"BUY_PUT", "BUY_CALL"}
+_SELL_TRADE_TYPES = {
+    "SELL_PUT", "SELL_CALL",
+    # Multi-leg spreads recorded as one row per spread. SELL_* means
+    # entry is a credit (cash in). For these, fill_price is stored as
+    # a positive magnitude; sign comes from the trade_type, identical
+    # to the wheel convention.
+    "SELL_BULL_PUT_SPREAD", "SELL_BEAR_CALL_SPREAD", "SELL_IRON_CONDOR",
+    "SELL_LONG_CALL_VERTICAL",  # debit-spread CLOSE row direction
+}
+_BUY_TRADE_TYPES = {
+    "BUY_PUT", "BUY_CALL",
+    # Multi-leg debit-spread OPEN, and credit-spread CLOSE rows.
+    "BUY_BULL_PUT_SPREAD", "BUY_BEAR_CALL_SPREAD", "BUY_IRON_CONDOR",
+    "BUY_LONG_CALL_VERTICAL",
+}
 
 
 def _trade_pnl(trade: dict) -> float | None:

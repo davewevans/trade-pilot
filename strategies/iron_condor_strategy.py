@@ -41,10 +41,12 @@ class IronCondorStrategy:
 
     State = IronCondorState
 
-    def __init__(self, broker, state_writer=None, spread_tracker=None):
+    def __init__(self, broker, state_writer=None, spread_tracker=None, recorder=None):
         self.broker = broker
         self.state_writer = state_writer
         self.spread_tracker = spread_tracker
+        self.recorder = recorder
+        self.cb_status_at_entry: str | None = None
         self.state = IronCondorState.IDLE
         self.open_spread_id: str | None = None
         self.pending_order_id: str | None = None
@@ -356,6 +358,7 @@ class IronCondorStrategy:
                 max_loss=decision.get("max_loss", 0),
                 max_gain=abs(decision.get("total_credit", 0)) * 100,
                 entry_order_id=order_id,
+                cb_status_at_entry=self.cb_status_at_entry,
             )
             self.open_spread_id = spread_id
 

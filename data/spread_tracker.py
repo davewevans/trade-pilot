@@ -78,6 +78,7 @@ class SpreadTracker:
         max_loss: float,
         max_gain: float,
         entry_order_id: str | None = None,
+        cb_status_at_entry: str | None = None,
     ) -> str:
         """Register a newly submitted spread. Starts in PENDING_OPEN.
 
@@ -98,6 +99,7 @@ class SpreadTracker:
             "status": STATUS_PENDING_OPEN,
             "entry_order_id": entry_order_id,
             "close_order_id": None,
+            "cb_status_at_entry": cb_status_at_entry,
             "exit_credit": None,
             "pnl": None,
             "closed_at": None,
