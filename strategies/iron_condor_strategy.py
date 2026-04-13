@@ -10,16 +10,10 @@ import json
 import logging
 from datetime import datetime
 from enum import Enum
-from pathlib import Path
-
-import anthropic
 
 from config import settings
 
 logger = logging.getLogger(__name__)
-
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent
-_PROMPTS_DIR = _PROJECT_ROOT / "prompts"
 
 _IC_ENTRY_FIELDS = {
     "action", "reasoning",
@@ -50,13 +44,6 @@ class IronCondorStrategy:
         self.state = IronCondorState.IDLE
         self.open_spread_id: str | None = None
         self.pending_order_id: str | None = None
-        self._client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
-        self._model = "claude-sonnet-4-6"
-
-        # Load prompts
-        self._system_prompt = (_PROMPTS_DIR / "system.md").read_text(encoding="utf-8")
-        self._idle_prompt = (_PROMPTS_DIR / "iron_condor_idle.md").read_text(encoding="utf-8")
-        self._open_prompt = (_PROMPTS_DIR / "iron_condor_open.md").read_text(encoding="utf-8")
 
         self._state_path = settings.SNAPSHOTS_DIR / "iron_condor_state.json"
         self._load_state()
@@ -75,13 +62,13 @@ class IronCondorStrategy:
             logger.exception("Failed to load iron condor state — starting IDLE")
 
     def _save_state(self) -> None:
-        self._state_path.parent.mkdir(parents=True, exist_ok=True)
-        self._state_path.write_text(json.dumps({
+        from utils.fileio import atomic_json_write
+        atomic_json_write(self._state_path, {
             "state": self.state.value,
             "open_spread_id": self.open_spread_id,
             "pending_order_id": self.pending_order_id,
             "updated_at": datetime.now().isoformat(timespec="seconds"),
-        }, indent=2), encoding="utf-8")
+        })
 
     def reconcile_pending(self) -> None:
         """Resolve PENDING_OPEN / PENDING_CLOSE against broker order status."""
@@ -93,8 +80,10 @@ class IronCondorStrategy:
 
     # ── main cycle ──────────────────────────────────────────
 
-    def run_cycle(self, context: dict, advisor=None) -> dict:
+    def run_cycle(self, context: dict, advisor) -> dict:
         """Main decision method called by the scheduler."""
+        if advisor is None:
+            raise ValueError("advisor is required")
         if self.state in (
             IronCondorState.PENDING_OPEN, IronCondorState.PENDING_CLOSE,
         ):
@@ -125,11 +114,8 @@ class IronCondorStrategy:
                 "skip_reason": "no_candidates",
             }
 
-        # Ask Claude
-        if advisor is not None:
-            enriched = {**context, "iron_condor_candidate": ic_legs}
-            return advisor.ask_spread(enriched, "iron_condor", "idle")
-        return self._ask_claude_entry(context, ic_legs)
+        enriched = {**context, "iron_condor_candidate": ic_legs}
+        return advisor.ask_spread(enriched, "iron_condor", "idle")
 
     def _check_entry_conditions(self, context: dict) -> str | None:
         """Return a skip reason string, or None if all conditions pass."""
@@ -143,8 +129,8 @@ class IronCondorStrategy:
 
         # IV rank check
         ivr = context.get("iv_rank")
-        if ivr is not None and ivr < 40:
-            return f"IV rank {ivr} < 40 minimum"
+        if ivr is not None and ivr < 50:
+            return f"IV rank {ivr} < 50 minimum for iron condor"
 
         # VIX range
         if vix is not None and (vix < 18 or vix > 35):
@@ -163,36 +149,6 @@ class IronCondorStrategy:
                 return "Already have an active iron condor"
 
         return None
-
-    def _ask_claude_entry(self, context: dict, ic_legs: dict) -> dict:
-        """Ask Claude whether to open the iron condor."""
-        context_json = json.dumps({
-            **context,
-            "iron_condor_candidate": ic_legs,
-        }, indent=2, default=str)
-
-        user_content = (
-            f"{self._idle_prompt}\n\n"
-            f"<market_context>\n{context_json}\n</market_context>\n\n"
-            f"Make your decision."
-        )
-
-        try:
-            response = self._client.messages.create(
-                model=self._model,
-                max_tokens=1024,
-                system=[{
-                    "type": "text",
-                    "text": self._system_prompt,
-                    "cache_control": {"type": "ephemeral"},
-                }],
-                messages=[{"role": "user", "content": user_content}],
-            )
-            raw = response.content[0].text.strip()
-            return self._parse_response(raw)
-        except Exception:
-            logger.exception("Claude API call failed for iron condor entry")
-            return {"action": "SKIP", "reasoning": "Claude API error", "skip_reason": "api_error"}
 
     # ── management evaluation ───────────────────────────────
 
@@ -226,6 +182,17 @@ class IronCondorStrategy:
             snapshots = self.broker.get_option_snapshots(all_symbols)
         except Exception:
             logger.warning("Failed to fetch snapshots for condor management")
+
+        missing = [s for s in all_symbols if s not in snapshots or snapshots[s].get("mid") is None]
+        if missing:
+            logger.warning(
+                "%s management: missing snapshots for %s — defaulting to HOLD",
+                type(self).__name__, missing,
+            )
+            return {
+                "action": "HOLD",
+                "reasoning": f"Cannot evaluate: missing price data for {len(missing)} leg(s)",
+            }
 
         # Current spread value = sum(short mids) - sum(long mids)
         short_value = sum(
@@ -419,26 +386,3 @@ class IronCondorStrategy:
         )
         return True
 
-    # ── parsing ─────────────────────────────────────────────
-
-    @staticmethod
-    def _parse_response(raw_text: str) -> dict:
-        """Parse Claude's JSON response."""
-        cleaned = raw_text
-        if cleaned.startswith("```"):
-            first_nl = cleaned.index("\n")
-            cleaned = cleaned[first_nl + 1:]
-        if cleaned.endswith("```"):
-            cleaned = cleaned[:-3]
-        cleaned = cleaned.strip()
-
-        try:
-            data = json.loads(cleaned)
-        except json.JSONDecodeError:
-            logger.error("Claude returned invalid JSON for iron condor:\n%s", raw_text)
-            return {"action": "SKIP", "reasoning": "Invalid JSON response", "skip_reason": "parse_error"}
-
-        if "action" not in data:
-            return {"action": "SKIP", "reasoning": "Missing action field", "skip_reason": "parse_error"}
-
-        return data

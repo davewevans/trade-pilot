@@ -171,13 +171,26 @@ class RegimeStabilityFilter:
 
     def _save(self) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._path.write_text(
+        import os
+        tmp = self._path.with_suffix(".tmp")
+        tmp.write_text(
             json.dumps({
                 "readings": self._readings,
                 "confirmed": self._confirmed,
             }, indent=2),
             encoding="utf-8",
         )
+        os.replace(str(tmp), str(self._path))
+
+    def reset(self) -> None:
+        """Clear readings/confirmed regime. Intended for tests."""
+        self._readings = []
+        self._confirmed = "NEUTRAL"
+        try:
+            if self._path.exists():
+                self._path.unlink()
+        except Exception:
+            pass
 
     # ── public API ──────────────────────────────────────────
 

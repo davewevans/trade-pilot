@@ -157,4 +157,13 @@ def run() -> None:
     # ── Write daily report section ──────────────────────────
     append_section("Pre-Market Briefing (6:00 AM ET)", "\n".join(briefing_lines))
 
+    # Prune old terminal spreads from the tracker (prevents unbounded growth).
+    try:
+        from data.spread_tracker import SpreadTracker
+        pruned = SpreadTracker().prune_old_spreads(max_age_days=30)
+        if pruned:
+            logger.info("Pruned %d old spread tracker entries", pruned)
+    except Exception:
+        logger.warning("Failed to prune spread tracker", exc_info=True)
+
     logger.info("=== PRE-MARKET JOB COMPLETE ===")

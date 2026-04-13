@@ -79,9 +79,9 @@ class WheelStrategy:
             "open_position": self.open_position,
             "updated_at": datetime.now().isoformat(),
         }
-        os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
-        with open(STATE_FILE, "w") as f:
-            json.dump(data, f, indent=2, default=str)
+        from pathlib import Path
+        from utils.fileio import atomic_json_write
+        atomic_json_write(Path(STATE_FILE), data)
         logger.info("State saved: symbol=%s state=%s", self.symbol, self.state.value)
 
     # ── state reconciliation ─────────────────────────────────
@@ -305,24 +305,6 @@ class WheelStrategy:
 
     @staticmethod
     def _occ_option_type(occ_symbol: str) -> str | None:
-        """Extract 'C' or 'P' from an OCC option symbol.
-
-        OCC format: ROOT(padded to 6) + YYMMDD(6) + C/P(1) + strike*1000(8)
-        Example: SPY   260417P00540000
-
-        Args:
-            occ_symbol: The OCC-format option symbol.
-
-        Returns:
-            'C' for call, 'P' for put, or None if unrecognised.
-        """
-        # Walk backwards from position 12 to handle variable-length roots
-        for i, ch in enumerate(occ_symbol):
-            if ch.isdigit():
-                # Found start of YYMMDD — type char is 6 positions later
-                type_idx = i + 6
-                if type_idx < len(occ_symbol):
-                    t = occ_symbol[type_idx].upper()
-                    return t if t in ("C", "P") else None
-                break
-        return None
+        """Extract 'C' or 'P' from an OCC option symbol."""
+        from utils.occ import extract_option_type
+        return extract_option_type(occ_symbol)

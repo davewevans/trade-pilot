@@ -11,16 +11,10 @@ import json
 import logging
 from datetime import datetime
 from enum import Enum
-from pathlib import Path
-
-import anthropic
 
 from config import settings
 
 logger = logging.getLogger(__name__)
-
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent
-_PROMPTS_DIR = _PROJECT_ROOT / "prompts"
 
 
 class BullPutSpreadState(str, Enum):
@@ -46,12 +40,6 @@ class BullPutSpreadStrategy:
         self.state = BullPutSpreadState.IDLE
         self.open_spread_id: str | None = None
         self.pending_order_id: str | None = None
-        self._client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
-        self._model = "claude-sonnet-4-6"
-
-        self._system_prompt = (_PROMPTS_DIR / "system.md").read_text(encoding="utf-8")
-        self._idle_prompt = (_PROMPTS_DIR / "bull_put_spread_idle.md").read_text(encoding="utf-8")
-        self._open_prompt = (_PROMPTS_DIR / "bull_put_spread_open.md").read_text(encoding="utf-8")
 
         self._state_path = settings.SNAPSHOTS_DIR / "bull_put_spread_state.json"
         self._load_state()
@@ -70,13 +58,13 @@ class BullPutSpreadStrategy:
             logger.exception("Failed to load bull put spread state — starting IDLE")
 
     def _save_state(self) -> None:
-        self._state_path.parent.mkdir(parents=True, exist_ok=True)
-        self._state_path.write_text(json.dumps({
+        from utils.fileio import atomic_json_write
+        atomic_json_write(self._state_path, {
             "state": self.state.value,
             "open_spread_id": self.open_spread_id,
             "pending_order_id": self.pending_order_id,
             "updated_at": datetime.now().isoformat(timespec="seconds"),
-        }, indent=2), encoding="utf-8")
+        })
 
     def reconcile_pending(self) -> None:
         """Resolve PENDING_OPEN / PENDING_CLOSE against broker order status."""
@@ -88,8 +76,10 @@ class BullPutSpreadStrategy:
 
     # ── main cycle ──────────────────────────────────────────
 
-    def run_cycle(self, context: dict, advisor=None) -> dict:
+    def run_cycle(self, context: dict, advisor) -> dict:
         """Main decision method called by the scheduler."""
+        if advisor is None:
+            raise ValueError("advisor is required")
         # Skip while an entry/close order is still pending fill — acting
         # now would mean acting on a phantom (or already-closing) position.
         if self.state in (
@@ -136,10 +126,8 @@ class BullPutSpreadStrategy:
                 "skip_reason": "low_ratio",
             }
 
-        if advisor is not None:
-            enriched = {**context, "best_candidate": best}
-            return advisor.ask_spread(enriched, "bull_put_spread", "idle")
-        return self._ask_claude_entry(context, best)
+        enriched = {**context, "best_candidate": best}
+        return advisor.ask_spread(enriched, "bull_put_spread", "idle")
 
     def _check_entry_conditions(self, context: dict) -> str | None:
         """Return a skip reason string, or None if all conditions pass."""
@@ -172,36 +160,6 @@ class BullPutSpreadStrategy:
 
         return None
 
-    def _ask_claude_entry(self, context: dict, best_candidate: dict) -> dict:
-        """Ask Claude whether to open the bull put spread."""
-        context_json = json.dumps({
-            **context,
-            "best_candidate": best_candidate,
-        }, indent=2, default=str)
-
-        user_content = (
-            f"{self._idle_prompt}\n\n"
-            f"<market_context>\n{context_json}\n</market_context>\n\n"
-            f"Make your decision."
-        )
-
-        try:
-            response = self._client.messages.create(
-                model=self._model,
-                max_tokens=1024,
-                system=[{
-                    "type": "text",
-                    "text": self._system_prompt,
-                    "cache_control": {"type": "ephemeral"},
-                }],
-                messages=[{"role": "user", "content": user_content}],
-            )
-            raw = response.content[0].text.strip()
-            return self._parse_response(raw)
-        except Exception:
-            logger.exception("Claude API call failed for bull put spread entry")
-            return {"action": "SKIP", "reasoning": "Claude API error", "skip_reason": "api_error"}
-
     # ── management evaluation ───────────────────────────────
 
     def _evaluate_management(self, context: dict) -> dict:
@@ -230,11 +188,23 @@ class BullPutSpreadStrategy:
         short_symbols = [l["symbol"] for l in legs if l.get("side", "").lower() == "sell"]
         long_symbols = [l["symbol"] for l in legs if l.get("side", "").lower() == "buy"]
 
+        all_symbols = short_symbols + long_symbols
         snapshots = {}
         try:
-            snapshots = self.broker.get_option_snapshots(short_symbols + long_symbols)
+            snapshots = self.broker.get_option_snapshots(all_symbols)
         except Exception:
             logger.warning("Failed to fetch snapshots for bull put spread management")
+
+        missing = [s for s in all_symbols if s not in snapshots or snapshots[s].get("mid") is None]
+        if missing:
+            logger.warning(
+                "%s management: missing snapshots for %s — defaulting to HOLD",
+                type(self).__name__, missing,
+            )
+            return {
+                "action": "HOLD",
+                "reasoning": f"Cannot evaluate: missing price data for {len(missing)} leg(s)",
+            }
 
         short_value = sum(
             (snapshots.get(s, {}).get("mid") or 0) for s in short_symbols
@@ -405,26 +375,3 @@ class BullPutSpreadStrategy:
         )
         return True
 
-    # ── parsing ─────────────────────────────────────────────
-
-    @staticmethod
-    def _parse_response(raw_text: str) -> dict:
-        """Parse Claude's JSON response."""
-        cleaned = raw_text
-        if cleaned.startswith("```"):
-            first_nl = cleaned.index("\n")
-            cleaned = cleaned[first_nl + 1:]
-        if cleaned.endswith("```"):
-            cleaned = cleaned[:-3]
-        cleaned = cleaned.strip()
-
-        try:
-            data = json.loads(cleaned)
-        except json.JSONDecodeError:
-            logger.error("Claude returned invalid JSON for bull put spread:\n%s", raw_text)
-            return {"action": "SKIP", "reasoning": "Invalid JSON response", "skip_reason": "parse_error"}
-
-        if "action" not in data:
-            return {"action": "SKIP", "reasoning": "Missing action field", "skip_reason": "parse_error"}
-
-        return data

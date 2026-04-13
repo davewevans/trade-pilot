@@ -9,7 +9,6 @@ on the existing JSON snapshots.
 
 import json
 import logging
-import re
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -30,25 +29,23 @@ _CYCLE_OPENING_ACTIONS = frozenset({
 })
 _NON_TRADE_ACTIONS = frozenset({"HOLD", "SKIP"})
 
-_OCC_RE = re.compile(r"^([A-Z]+)(\d{6})([CP])(\d{8})$")
+from utils.occ import parse_occ as _parse_occ_shared
 
 
 def _parse_occ(symbol: str) -> Optional[dict]:
     """Parse an OCC option symbol into root/expiration/side/strike.
 
-    Returns None if the symbol doesn't match the OCC format.
+    Thin wrapper over utils.occ.parse_occ that preserves this module's
+    historical output shape (``side`` key, ``expiration`` as ISO string).
     """
-    if not symbol:
+    p = _parse_occ_shared(symbol)
+    if p is None:
         return None
-    m = _OCC_RE.match(symbol.upper())
-    if not m:
-        return None
-    root, yymmdd, side, strike8 = m.groups()
     return {
-        "root": root,
-        "expiration": f"20{yymmdd[:2]}-{yymmdd[2:4]}-{yymmdd[4:6]}",
-        "side": side,  # 'P' or 'C'
-        "strike": int(strike8) / 1000,
+        "root": p["root"],
+        "expiration": p["expiration_str"],
+        "side": p["option_type"],
+        "strike": p["strike"],
     }
 
 

@@ -69,17 +69,15 @@ def _entry_decision(**overrides):
 @pytest.fixture
 def strategy(tmp_path):
     """IronCondorStrategy with mocked broker, writer, and tracker."""
-    with patch("strategies.iron_condor_strategy.settings") as mock_settings, \
-         patch("strategies.iron_condor_strategy.anthropic"):
+    with patch("strategies.iron_condor_strategy.settings") as mock_settings:
         mock_settings.SNAPSHOTS_DIR = tmp_path
-        mock_settings.ANTHROPIC_API_KEY = "test-key"
 
         broker = MagicMock()
         sw = MagicMock()
         tracker = MagicMock()
         tracker.get_open_spreads.return_value = []
+        tracker.get_active_spreads.return_value = []
 
-        # Patch prompt loading
         with patch.object(IronCondorStrategy, "__init__", lambda self, *a, **k: None):
             s = IronCondorStrategy.__new__(IronCondorStrategy)
             s.broker = broker
@@ -87,12 +85,13 @@ def strategy(tmp_path):
             s.spread_tracker = tracker
             s.state = IronCondorState.IDLE
             s.open_spread_id = None
-            s._client = MagicMock()
-            s._model = "test"
-            s._system_prompt = "system"
-            s._idle_prompt = "idle"
-            s._open_prompt = "open"
+            s.pending_order_id = None
+            s.cb_status_at_entry = None
             s._state_path = tmp_path / "iron_condor_state.json"
+            # Mock advisor — strategies now REQUIRE an advisor in run_cycle.
+            advisor = MagicMock()
+            advisor.ask_spread.return_value = {"action": "SKIP", "reasoning": "default mock"}
+            s._advisor = advisor
 
         return s
 
@@ -105,47 +104,45 @@ def strategy(tmp_path):
 class TestIdleEntry:
     def test_open_when_all_conditions_met(self, strategy):
         """Claude returns OPEN and conditions pass."""
-        mock_resp = MagicMock()
-        mock_resp.content = [MagicMock(text=json.dumps(_entry_decision()))]
-        strategy._client.messages.create.return_value = mock_resp
+        strategy._advisor.ask_spread.return_value = _entry_decision()
 
         ctx = _base_context()
-        result = strategy.run_cycle(ctx)
+        result = strategy.run_cycle(ctx, advisor=strategy._advisor)
 
         assert result["action"] == "OPEN"
         assert result["total_credit"] == 2.20
 
     def test_skip_when_ivr_too_low(self, strategy):
         ctx = _base_context(iv_rank=30)
-        result = strategy.run_cycle(ctx)
+        result = strategy.run_cycle(ctx, advisor=strategy._advisor)
 
         assert result["action"] == "SKIP"
         assert "IV rank" in result["reasoning"]
 
     def test_skip_when_earnings_too_close(self, strategy):
         ctx = _base_context(fundamentals={"days_to_earnings": 20})
-        result = strategy.run_cycle(ctx)
+        result = strategy.run_cycle(ctx, advisor=strategy._advisor)
 
         assert result["action"] == "SKIP"
         assert "Earnings" in result["reasoning"]
 
     def test_skip_when_regime_is_bear(self, strategy):
         ctx = _base_context(confirmed_market_regime="BEAR")
-        result = strategy.run_cycle(ctx)
+        result = strategy.run_cycle(ctx, advisor=strategy._advisor)
 
         assert result["action"] == "SKIP"
         assert "BEAR" in result["reasoning"]
 
     def test_skip_when_vix_too_low(self, strategy):
         ctx = _base_context(macro={"vix": 12})
-        result = strategy.run_cycle(ctx)
+        result = strategy.run_cycle(ctx, advisor=strategy._advisor)
 
         assert result["action"] == "SKIP"
         assert "VIX" in result["reasoning"]
 
     def test_skip_when_vix_too_high(self, strategy):
         ctx = _base_context(macro={"vix": 40})
-        result = strategy.run_cycle(ctx)
+        result = strategy.run_cycle(ctx, advisor=strategy._advisor)
 
         assert result["action"] == "SKIP"
         assert "VIX" in result["reasoning"]
@@ -154,7 +151,7 @@ class TestIdleEntry:
         ctx = _base_context(
             spread_candidates={"iron_condor": {"iron_condor_legs": None}},
         )
-        result = strategy.run_cycle(ctx)
+        result = strategy.run_cycle(ctx, advisor=strategy._advisor)
 
         assert result["action"] == "SKIP"
         assert "candidates" in result["reasoning"].lower()
@@ -164,7 +161,7 @@ class TestIdleEntry:
             {"spread_id": "abc", "status": "open"},
         ]
         ctx = _base_context()
-        result = strategy.run_cycle(ctx)
+        result = strategy.run_cycle(ctx, advisor=strategy._advisor)
 
         assert result["action"] == "SKIP"
         assert "open iron condor" in result["reasoning"].lower()
@@ -216,7 +213,7 @@ class TestOpenManagement:
         self._setup_open(strategy, pnl_target_pct=55)
 
         ctx = _base_context()
-        result = strategy.run_cycle(ctx)
+        result = strategy.run_cycle(ctx, advisor=strategy._advisor)
 
         assert result["action"] == "CLOSE"
         assert "50%" in result["reasoning"] or "captured" in result["reasoning"].lower()
@@ -231,7 +228,7 @@ class TestOpenManagement:
         strategy.spread_tracker.get_open_spreads.return_value[0]["expiration"] = exp
 
         ctx = _base_context()
-        result = strategy.run_cycle(ctx)
+        result = strategy.run_cycle(ctx, advisor=strategy._advisor)
 
         assert result["action"] == "CLOSE"
         assert "DTE" in result["reasoning"] or "gamma" in result["reasoning"].lower()
@@ -246,7 +243,7 @@ class TestOpenManagement:
 
         # Underlying below short put strike (breach)
         ctx = _base_context(technicals={"current_price": 525.0})
-        result = strategy.run_cycle(ctx)
+        result = strategy.run_cycle(ctx, advisor=strategy._advisor)
 
         assert result["action"] == "HOLD"
         assert "theta" in result["reasoning"].lower()
@@ -255,7 +252,7 @@ class TestOpenManagement:
         self._setup_open(strategy, pnl_target_pct=30)
 
         ctx = _base_context()
-        result = strategy.run_cycle(ctx)
+        result = strategy.run_cycle(ctx, advisor=strategy._advisor)
 
         assert result["action"] == "HOLD"
 

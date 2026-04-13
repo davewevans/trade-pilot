@@ -49,7 +49,23 @@ def run() -> None:
     # ── Circuit breaker ─────────────────────────────────────
     cb = CircuitBreaker()
     account = broker.get_account()
-    equity = float(account.get("portfolio_value", 0))
+    # Aggregate equity across all trading accounts so the circuit breaker
+    # sees the real portfolio risk (not just one account's equity).
+    from jobs.startup_snapshot import ACCOUNT_BROKER_MAP
+    total_equity = 0.0
+    aggregation_ok = True
+    for acct_name, strategy_key in ACCOUNT_BROKER_MAP.items():
+        try:
+            acct_broker = make_broker(strategy_key)
+            acct = acct_broker.get_account()
+            total_equity += float(acct.get("portfolio_value", 0))
+        except Exception as e:
+            logger.warning("Failed to get equity for %s account: %s", acct_name, e)
+            aggregation_ok = False
+            break
+    if not aggregation_ok or total_equity <= 0:
+        total_equity = float(account.get("portfolio_value", 0))
+    equity = total_equity
     cb_status = cb.update(equity)
 
     try:

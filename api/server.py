@@ -416,8 +416,7 @@ async def auth_login(request: Request):
         max_age=_SESSION_TTL_SECONDS,
         httponly=True,
         samesite="lax",
-        # Secure flag is omitted so local http://localhost works; Render
-        # serves the same cookie over HTTPS, where browsers accept it.
+        secure=bool(getattr(settings, "RENDER", False)),
         path="/",
     )
     return response

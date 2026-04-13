@@ -116,10 +116,8 @@ class CircuitBreaker:
             "last_updated": self.last_updated,
             "halted_reason": self.halted_reason,
         }
-        self._snapshots_dir.mkdir(parents=True, exist_ok=True)
-        self._state_path.write_text(
-            json.dumps(data, indent=2), encoding="utf-8",
-        )
+        from utils.fileio import atomic_json_write
+        atomic_json_write(self._state_path, data)
 
     # ── public API ──────────────────────────────────────────
 

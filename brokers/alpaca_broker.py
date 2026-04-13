@@ -2,6 +2,8 @@
 
 import logging
 
+from utils.retry import retry_on_transient
+
 import requests as http_requests
 from alpaca.data.historical.option import OptionHistoricalDataClient
 from alpaca.data.requests import OptionSnapshotRequest
@@ -78,6 +80,7 @@ class AlpacaBroker(BaseBroker):
 
     # ── account ──────────────────────────────────────────────
 
+    @retry_on_transient()
     def get_account(self) -> dict:
         """Return account info including buying power and options trading level."""
         account = self.client.get_account()
@@ -141,6 +144,7 @@ class AlpacaBroker(BaseBroker):
 
     # ── orders ───────────────────────────────────────────────
 
+    @retry_on_transient()
     def place_order(
         self,
         symbol: str,
@@ -183,6 +187,7 @@ class AlpacaBroker(BaseBroker):
         )
         return data
 
+    @retry_on_transient()
     def get_orders(self, status: str | None = "open", limit: int = 50) -> list[dict]:
         """Return open or recent orders, filtered to options only."""
         query_status = _STATUS_MAP.get(status, QueryOrderStatus.OPEN)
@@ -198,6 +203,7 @@ class AlpacaBroker(BaseBroker):
         """Cancel an open order by ID."""
         self.client.cancel_order_by_id(order_id)
 
+    @retry_on_transient()
     def get_order(self, order_id: str) -> dict:
         """Fetch a single order by ID. Used to confirm fills."""
         order = self.client.get_order_by_id(order_id)
@@ -205,6 +211,7 @@ class AlpacaBroker(BaseBroker):
 
     # ── positions ────────────────────────────────────────────
 
+    @retry_on_transient()
     def get_positions(self) -> list[dict]:
         """Return all open option positions."""
         positions = self.client.get_all_positions()
@@ -214,6 +221,7 @@ class AlpacaBroker(BaseBroker):
             if p.asset_class == AssetClass.US_OPTION
         ]
 
+    @retry_on_transient()
     def get_equity_positions(self) -> list[dict]:
         """Return all open equity (stock) positions."""
         positions = self.client.get_all_positions()
@@ -223,6 +231,7 @@ class AlpacaBroker(BaseBroker):
             if p.asset_class == AssetClass.US_EQUITY
         ]
 
+    @retry_on_transient()
     def get_all_positions(self) -> list[dict]:
         """Return all open positions (equity + options)."""
         positions = self.client.get_all_positions()
@@ -245,6 +254,7 @@ class AlpacaBroker(BaseBroker):
 
     # ── multi-leg orders ──────────────────────────────────────
 
+    @retry_on_transient()
     def place_mleg_order(
         self,
         legs: list[dict],
@@ -323,6 +333,7 @@ class AlpacaBroker(BaseBroker):
         )
         return data
 
+    @retry_on_transient()
     def close_mleg_position(
         self,
         open_legs: list[dict],
@@ -355,6 +366,7 @@ class AlpacaBroker(BaseBroker):
 
     # ── option chain with filters ───────────────────────────
 
+    @retry_on_transient()
     def get_option_chain_with_greeks(
         self,
         underlying_symbol: str,
@@ -432,6 +444,7 @@ class AlpacaBroker(BaseBroker):
 
     # ── option snapshots (greeks + quotes) ──────────────────
 
+    @retry_on_transient()
     def get_option_snapshots(self, symbols: list[str]) -> dict[str, dict]:
         """Fetch real-time snapshots (bid/ask, Greeks, IV) for option symbols.
 
@@ -486,6 +499,7 @@ class AlpacaBroker(BaseBroker):
 
     # ── clock ────────────────────────────────────────────────
 
+    @retry_on_transient()
     def get_clock(self) -> dict:
         """Return the current market clock from Alpaca."""
         clock = self.client.get_clock()

@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 
 from config import settings
 from jobs._report import append_section
-from utils.market_hours import parse_dte_from_occ
+from utils.occ import dte_from_occ, extract_option_type, extract_strike
 
 logger = logging.getLogger(__name__)
 
@@ -18,10 +18,11 @@ _ET = ZoneInfo(settings.TIMEZONE)
 
 
 def run() -> None:
-    """Check for 0-DTE positions and close ITM short options."""
+    """Check for 0-DTE positions and close ITM short options across all accounts."""
     logger.info("=== EXPIRY GUARD JOB STARTING ===")
 
-    from brokers.broker_factory import get_broker
+    from brokers.broker_factory import get_broker, make_broker
+    from jobs.startup_snapshot import ACCOUNT_BROKER_MAP
 
     broker = get_broker()
 
@@ -30,7 +31,20 @@ def run() -> None:
         logger.info("Market is closed. Exiting early.")
         return
 
-    positions = broker.get_positions()
+    # Aggregate option positions across all accounts, tagging each with its account.
+    account_brokers: dict[str, object] = {}
+    positions: list[dict] = []
+    for acct_name, strategy_key in ACCOUNT_BROKER_MAP.items():
+        try:
+            acct_broker = make_broker(strategy_key)
+            account_brokers[acct_name] = acct_broker
+            acct_positions = acct_broker.get_positions()
+            for p in acct_positions:
+                p["_account"] = acct_name
+            positions.extend(acct_positions)
+        except Exception as e:
+            logger.warning("Failed to get positions for %s: %s", acct_name, e)
+
     if not positions:
         logger.info("No open positions.")
         logger.info("=== EXPIRY GUARD JOB COMPLETE ===")
@@ -40,31 +54,21 @@ def run() -> None:
 
     for pos in positions:
         symbol = pos.get("symbol", "")
+        acct_name = pos.get("_account")
+        pos_broker = account_brokers.get(acct_name, broker)
         qty = float(pos.get("qty", 0))
 
-        dte = parse_dte_from_occ(symbol)
+        dte = dte_from_occ(symbol)
         if dte is None or dte != 0:
             continue
 
         # This position expires today
         current_price = float(pos.get("current_price", 0) or 0)
-        # Extract strike from last 8 digits of OCC symbol
-        try:
-            strike = int(symbol[-8:]) / 1000
-        except (ValueError, IndexError):
-            logger.warning("Cannot parse strike from %s", symbol)
+        strike = extract_strike(symbol)
+        opt_type = extract_option_type(symbol)
+        if strike is None or opt_type is None:
+            logger.warning("Cannot parse OCC symbol %s", symbol)
             continue
-
-        # Determine if C or P
-        is_put = "P" in symbol[len(symbol) - 9:len(symbol) - 8].upper() if len(symbol) > 9 else False
-        # Better: parse type from OCC
-        opt_type = None
-        for i, ch in enumerate(symbol):
-            if ch.isdigit():
-                type_idx = i + 6
-                if type_idx < len(symbol):
-                    opt_type = symbol[type_idx].upper()
-                break
 
         is_short = qty < 0
         is_itm = False
@@ -87,14 +91,16 @@ def run() -> None:
                     logger.info("DRY RUN - would close %s (qty=%s)", symbol, qty)
                     report_lines.append(f"DRY RUN: would close {symbol}")
                 else:
-                    broker.place_order(
+                    pos_broker.place_order(
                         symbol=symbol,
                         qty=abs(int(qty)),
                         side="buy",  # buy to close a short
                         order_type="market",
                         time_in_force="day",
                     )
-                    report_lines.append(f"CLOSED: {symbol} (ITM short, expiring today)")
+                    report_lines.append(
+                        f"CLOSED: {symbol} (ITM short, expiring today, acct={acct_name})"
+                    )
             except Exception:
                 logger.exception("Failed to close expiring position %s", symbol)
                 report_lines.append(f"FAILED to close: {symbol}")

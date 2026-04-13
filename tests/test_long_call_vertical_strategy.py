@@ -99,14 +99,15 @@ def strategy(tmp_path):
         s.state_writer = MagicMock()
         s.spread_tracker = MagicMock()
         s.spread_tracker.get_open_spreads.return_value = []
+        s.spread_tracker.get_active_spreads.return_value = []
         s.state = LongCallVerticalState.IDLE
         s.open_spread_id = None
-        s._client = MagicMock()
-        s._model = "test"
-        s._system_prompt = "system"
-        s._idle_prompt = "idle"
-        s._open_prompt = "open"
+        s.pending_order_id = None
+        s.cb_status_at_entry = None
         s._state_path = tmp_path / "lcv_state.json"
+        advisor = MagicMock()
+        advisor.ask_spread.return_value = {"action": "SKIP", "reasoning": "default mock"}
+        s._advisor = advisor
     return s
 
 
@@ -117,49 +118,47 @@ def strategy(tmp_path):
 
 class TestIdleEntry:
     def test_open_when_all_conditions_met(self, strategy):
-        mock_resp = MagicMock()
-        mock_resp.content = [MagicMock(text=json.dumps(_entry_decision()))]
-        strategy._client.messages.create.return_value = mock_resp
+        strategy._advisor.ask_spread.return_value = _entry_decision()
 
-        result = strategy.run_cycle(_base_context())
+        result = strategy.run_cycle(_base_context(), advisor=strategy._advisor)
         assert result["action"] == "OPEN"
 
     def test_skip_when_regime_is_neutral(self, strategy):
-        result = strategy.run_cycle(_base_context(confirmed_market_regime="NEUTRAL"))
+        result = strategy.run_cycle(_base_context(confirmed_market_regime="NEUTRAL"), advisor=strategy._advisor)
         assert result["action"] == "SKIP"
         assert "NEUTRAL" in result["reasoning"]
 
     def test_skip_when_regime_is_bear(self, strategy):
-        result = strategy.run_cycle(_base_context(confirmed_market_regime="BEAR"))
+        result = strategy.run_cycle(_base_context(confirmed_market_regime="BEAR"), advisor=strategy._advisor)
         assert result["action"] == "SKIP"
         assert "BEAR" in result["reasoning"]
 
     def test_skip_when_iv_is_moderate(self, strategy):
-        result = strategy.run_cycle(_base_context(iv_environment="MODERATE"))
+        result = strategy.run_cycle(_base_context(iv_environment="MODERATE"), advisor=strategy._advisor)
         assert result["action"] == "SKIP"
         assert "MODERATE" in result["reasoning"]
 
     def test_skip_when_iv_is_high(self, strategy):
-        result = strategy.run_cycle(_base_context(iv_environment="HIGH"))
+        result = strategy.run_cycle(_base_context(iv_environment="HIGH"), advisor=strategy._advisor)
         assert result["action"] == "SKIP"
         assert "HIGH" in result["reasoning"]
 
     def test_skip_when_ivr_too_high(self, strategy):
-        result = strategy.run_cycle(_base_context(iv_rank=35))
+        result = strategy.run_cycle(_base_context(iv_rank=35), advisor=strategy._advisor)
         assert result["action"] == "SKIP"
         assert "IV rank" in result["reasoning"]
 
     def test_skip_when_below_50sma(self, strategy):
         result = strategy.run_cycle(_base_context(
             technicals={"current_price": 185.0, "above_sma_50": False},
-        ))
+        ), advisor=strategy._advisor)
         assert result["action"] == "SKIP"
         assert "50-day SMA" in result["reasoning"]
 
     def test_skip_when_no_cahold_signal(self, strategy):
         result = strategy.run_cycle(_base_context(
             support_bounce_signal={"cahold_detected": False},
-        ))
+        ), advisor=strategy._advisor)
         assert result["action"] == "SKIP"
         assert "CAHOLD" in result["reasoning"]
 
@@ -167,14 +166,14 @@ class TestIdleEntry:
         ctx = _base_context(
             spread_candidates={"long_call_vertical": {"best_candidate": None}},
         )
-        result = strategy.run_cycle(ctx)
+        result = strategy.run_cycle(ctx, advisor=strategy._advisor)
         assert result["action"] == "SKIP"
         assert "candidates" in result["reasoning"].lower()
 
     def test_skip_when_debit_too_high(self, strategy):
         ctx = _base_context()
         ctx["spread_candidates"]["long_call_vertical"]["best_candidate"]["net_debit"] = 2.50
-        result = strategy.run_cycle(ctx)
+        result = strategy.run_cycle(ctx, advisor=strategy._advisor)
         assert result["action"] == "SKIP"
         assert "debit" in result["reasoning"].lower()
 
@@ -182,7 +181,7 @@ class TestIdleEntry:
         strategy.spread_tracker.get_open_spreads.return_value = [
             {"spread_id": "abc", "status": "open"},
         ]
-        result = strategy.run_cycle(_base_context())
+        result = strategy.run_cycle(_base_context(), advisor=strategy._advisor)
         assert result["action"] == "SKIP"
         assert "open long call vertical" in result["reasoning"].lower()
 
@@ -222,13 +221,13 @@ class TestOpenManagement:
 
     def test_close_at_75_pct_gain(self, strategy):
         self._setup_open(strategy, gain_pct=80)
-        result = strategy.run_cycle(_base_context())
+        result = strategy.run_cycle(_base_context(), advisor=strategy._advisor)
         assert result["action"] == "CLOSE"
         assert "75%" in result["reasoning"]
 
     def test_close_when_dte_20(self, strategy):
         self._setup_open(strategy, gain_pct=20, dte=18)
-        result = strategy.run_cycle(_base_context())
+        result = strategy.run_cycle(_base_context(), advisor=strategy._advisor)
         assert result["action"] == "CLOSE"
         assert "DTE" in result["reasoning"] or "theta" in result["reasoning"].lower()
 
@@ -258,21 +257,22 @@ class TestOpenManagement:
             "AAPL260615C00190000": {"mid": 0.0},
         }
 
-        result = strategy.run_cycle(_base_context())
+        result = strategy.run_cycle(_base_context(), advisor=strategy._advisor)
         assert result["action"] == "CLOSE"
         assert "stop loss" in result["reasoning"].lower() or "fallen" in result["reasoning"].lower()
 
     def test_hold_when_position_ok(self, strategy):
         self._setup_open(strategy, gain_pct=40, dte=30)
-        result = strategy.run_cycle(_base_context())
+        result = strategy.run_cycle(_base_context(), advisor=strategy._advisor)
         assert result["action"] == "HOLD"
 
     def test_resets_to_idle_if_spread_not_found(self, strategy):
         strategy.state = LongCallVerticalState.OPEN
         strategy.open_spread_id = "missing"
         strategy.spread_tracker.get_open_spreads.return_value = []
+        s.spread_tracker.get_active_spreads.return_value = []
 
-        result = strategy.run_cycle(_base_context())
+        result = strategy.run_cycle(_base_context(), advisor=strategy._advisor)
         assert strategy.state == LongCallVerticalState.IDLE
 
 
@@ -388,7 +388,8 @@ class TestExecution:
 
         result = strategy.execute_entry(_entry_decision(underlying="AAPL"))
         assert result is True
-        assert strategy.state == LongCallVerticalState.OPEN
+        assert strategy.state == LongCallVerticalState.PENDING_OPEN
+        assert strategy.pending_order_id == "order-lcv"
 
         call_args = strategy.broker.place_mleg_order.call_args
         legs = call_args[1]["legs"] if "legs" in call_args[1] else call_args[0][0]

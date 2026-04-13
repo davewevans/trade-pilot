@@ -87,14 +87,15 @@ def strategy(tmp_path):
         s.state_writer = MagicMock()
         s.spread_tracker = MagicMock()
         s.spread_tracker.get_open_spreads.return_value = []
+        s.spread_tracker.get_active_spreads.return_value = []
         s.state = BullPutSpreadState.IDLE
         s.open_spread_id = None
-        s._client = MagicMock()
-        s._model = "test"
-        s._system_prompt = "system"
-        s._idle_prompt = "idle"
-        s._open_prompt = "open"
+        s.pending_order_id = None
+        s.cb_status_at_entry = None
         s._state_path = tmp_path / "bps_state.json"
+        advisor = MagicMock()
+        advisor.ask_spread.return_value = {"action": "SKIP", "reasoning": "default mock"}
+        s._advisor = advisor
     return s
 
 
@@ -105,66 +106,62 @@ def strategy(tmp_path):
 
 class TestIdleEntry:
     def test_open_when_all_conditions_met(self, strategy):
-        mock_resp = MagicMock()
-        mock_resp.content = [MagicMock(text=json.dumps(_entry_decision()))]
-        strategy._client.messages.create.return_value = mock_resp
+        strategy._advisor.ask_spread.return_value = _entry_decision()
 
-        result = strategy.run_cycle(_base_context())
+        result = strategy.run_cycle(_base_context(), advisor=strategy._advisor)
         assert result["action"] == "OPEN"
 
     def test_skip_when_regime_is_bear(self, strategy):
-        result = strategy.run_cycle(_base_context(confirmed_market_regime="BEAR"))
+        result = strategy.run_cycle(_base_context(confirmed_market_regime="BEAR"), advisor=strategy._advisor)
         assert result["action"] == "SKIP"
         assert "BEAR" in result["reasoning"]
 
     def test_skip_when_regime_is_crash(self, strategy):
-        result = strategy.run_cycle(_base_context(confirmed_market_regime="CRASH"))
+        result = strategy.run_cycle(_base_context(confirmed_market_regime="CRASH"), advisor=strategy._advisor)
         assert result["action"] == "SKIP"
 
     def test_allows_bull_regime(self, strategy):
-        mock_resp = MagicMock()
-        mock_resp.content = [MagicMock(text=json.dumps(_entry_decision()))]
-        strategy._client.messages.create.return_value = mock_resp
+        strategy._advisor.ask_spread.return_value = _entry_decision()
 
-        result = strategy.run_cycle(_base_context(confirmed_market_regime="BULL"))
+        result = strategy.run_cycle(_base_context(confirmed_market_regime="BULL"), advisor=strategy._advisor)
         assert result["action"] == "OPEN"
 
     def test_skip_when_ivr_too_low(self, strategy):
-        result = strategy.run_cycle(_base_context(iv_rank=25))
+        result = strategy.run_cycle(_base_context(iv_rank=25), advisor=strategy._advisor)
         assert result["action"] == "SKIP"
         assert "IV rank" in result["reasoning"]
 
     def test_skip_when_below_50sma(self, strategy):
         result = strategy.run_cycle(_base_context(
             technicals={"current_price": 540.0, "above_sma_50": False},
-        ))
+        ), advisor=strategy._advisor)
         assert result["action"] == "SKIP"
         assert "50-day SMA" in result["reasoning"]
 
     def test_skip_when_earnings_too_close(self, strategy):
         result = strategy.run_cycle(_base_context(
             fundamentals={"days_to_earnings": 20},
-        ))
+        ), advisor=strategy._advisor)
         assert result["action"] == "SKIP"
         assert "Earnings" in result["reasoning"]
 
     def test_skip_when_no_candidates(self, strategy):
         ctx = _base_context(spread_candidates={"bull_put_spread": {"best_candidate": None}})
-        result = strategy.run_cycle(ctx)
+        result = strategy.run_cycle(ctx, advisor=strategy._advisor)
         assert result["action"] == "SKIP"
         assert "candidates" in result["reasoning"].lower()
 
     def test_skip_when_credit_too_low(self, strategy):
         ctx = _base_context()
         ctx["spread_candidates"]["bull_put_spread"]["best_candidate"]["net_credit"] = 0.30
-        result = strategy.run_cycle(ctx)
+        result = strategy.run_cycle(ctx, advisor=strategy._advisor)
         assert result["action"] == "SKIP"
         assert "credit" in result["reasoning"].lower()
 
     def test_skip_when_ratio_too_low(self, strategy):
         ctx = _base_context()
         ctx["spread_candidates"]["bull_put_spread"]["best_candidate"]["credit_to_width_ratio"] = 0.10
-        result = strategy.run_cycle(ctx)
+        result = strategy.run_cycle(ctx, advisor=strategy._advisor)
         assert result["action"] == "SKIP"
         assert "ratio" in result["reasoning"].lower()
 
@@ -172,7 +169,7 @@ class TestIdleEntry:
         strategy.spread_tracker.get_open_spreads.return_value = [
             {"spread_id": "abc", "status": "open"},
         ]
-        result = strategy.run_cycle(_base_context())
+        result = strategy.run_cycle(_base_context(), advisor=strategy._advisor)
         assert result["action"] == "SKIP"
         assert "open bull put spread" in result["reasoning"].lower()
 
@@ -210,13 +207,13 @@ class TestOpenManagement:
 
     def test_close_at_50_pct_profit(self, strategy):
         self._setup_open(strategy, pnl_target_pct=55)
-        result = strategy.run_cycle(_base_context())
+        result = strategy.run_cycle(_base_context(), advisor=strategy._advisor)
         assert result["action"] == "CLOSE"
         assert "50%" in result["reasoning"]
 
     def test_close_when_dte_10(self, strategy):
         self._setup_open(strategy, pnl_target_pct=20, dte=8)
-        result = strategy.run_cycle(_base_context())
+        result = strategy.run_cycle(_base_context(), advisor=strategy._advisor)
         assert result["action"] == "CLOSE"
         assert "DTE" in result["reasoning"]
 
@@ -224,27 +221,28 @@ class TestOpenManagement:
         self._setup_open(strategy, pnl_target_pct=10, dte=12)
         # Underlying below short put strike
         ctx = _base_context(technicals={"current_price": 525.0, "above_sma_50": True})
-        result = strategy.run_cycle(ctx)
+        result = strategy.run_cycle(ctx, advisor=strategy._advisor)
         assert result["action"] == "CLOSE"
         assert "breached" in result["reasoning"].lower()
 
     def test_hold_when_position_ok(self, strategy):
         self._setup_open(strategy, pnl_target_pct=30, dte=25)
-        result = strategy.run_cycle(_base_context())
+        result = strategy.run_cycle(_base_context(), advisor=strategy._advisor)
         assert result["action"] == "HOLD"
 
     def test_hold_when_breached_but_dte_gte_15(self, strategy):
         self._setup_open(strategy, pnl_target_pct=10, dte=20)
         ctx = _base_context(technicals={"current_price": 525.0, "above_sma_50": True})
-        result = strategy.run_cycle(ctx)
+        result = strategy.run_cycle(ctx, advisor=strategy._advisor)
         assert result["action"] == "HOLD"
 
     def test_resets_to_idle_if_spread_not_found(self, strategy):
         strategy.state = BullPutSpreadState.OPEN
         strategy.open_spread_id = "missing-id"
         strategy.spread_tracker.get_open_spreads.return_value = []
+        s.spread_tracker.get_active_spreads.return_value = []
 
-        result = strategy.run_cycle(_base_context())
+        result = strategy.run_cycle(_base_context(), advisor=strategy._advisor)
         assert strategy.state == BullPutSpreadState.IDLE
         assert strategy.open_spread_id is None
 
@@ -339,7 +337,8 @@ class TestExecution:
         result = strategy.execute_entry(_entry_decision(underlying="SPY"))
 
         assert result is True
-        assert strategy.state == BullPutSpreadState.OPEN
+        assert strategy.state == BullPutSpreadState.PENDING_OPEN
+        assert strategy.pending_order_id == "order-789"
         assert strategy.open_spread_id == "spread-new"
 
         call_args = strategy.broker.place_mleg_order.call_args

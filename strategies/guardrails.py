@@ -319,6 +319,17 @@ class Guardrails:
             if not (_OCC_PUT_RE.match(sym) or _OCC_CALL_RE.match(sym)):
                 return False, f"Invalid OCC symbol for {key}: {sym!r}"
 
+        # Expiration consistency across all 4 legs
+        from utils.occ import extract_expiration
+        exps = set()
+        for key in ("put_short_symbol", "put_long_symbol",
+                     "call_short_symbol", "call_long_symbol"):
+            exp = extract_expiration(decision.get(key, ""))
+            if exp:
+                exps.add(exp)
+        if len(exps) > 1:
+            return False, f"Iron condor legs have mismatched expirations: {exps}"
+
         # No duplicate condors on same underlying
         underlying = self._extract_root(decision.get("put_short_symbol", ""))
         if open_condors:
@@ -331,6 +342,11 @@ class Guardrails:
         dte_earnings = fund.get("days_to_earnings")
         if dte_earnings is not None and dte_earnings <= 30:
             return False, f"Earnings in {dte_earnings} days (hard block: need > 30)"
+
+        # IV Rank minimum (code-level enforcement of documented IVR >= 50 rule)
+        ivr = context.get("iv_rank") or (context.get("volatility") or {}).get("iv_rank_1y")
+        if ivr is not None and ivr < 50:
+            return False, f"IV rank {ivr} < 50 minimum for iron condor entry"
 
         return True, ""
 
@@ -372,6 +388,13 @@ class Guardrails:
             sym = decision.get(key, "")
             if not _OCC_CALL_RE.match(sym):
                 return False, f"Invalid OCC call symbol for {key}: {sym!r}"
+
+        # Expiration consistency across legs
+        from utils.occ import extract_expiration
+        long_exp = extract_expiration(decision.get("long_call_symbol", ""))
+        short_exp = extract_expiration(decision.get("short_call_symbol", ""))
+        if long_exp and short_exp and long_exp != short_exp:
+            return False, f"Leg expirations don't match: {long_exp} vs {short_exp}"
 
         # Regime must be BULL
         regime = context.get("confirmed_market_regime", "")
@@ -436,6 +459,13 @@ class Guardrails:
             if not _OCC_CALL_RE.match(sym):
                 return False, f"Invalid OCC call symbol for {key}: {sym!r}"
 
+        # Expiration consistency across legs
+        from utils.occ import extract_expiration
+        short_exp = extract_expiration(decision.get("short_call_symbol", ""))
+        long_exp = extract_expiration(decision.get("long_call_symbol", ""))
+        if short_exp and long_exp and short_exp != long_exp:
+            return False, f"Leg expirations don't match: {short_exp} vs {long_exp}"
+
         underlying = self._extract_root(decision.get("short_call_symbol", ""))
         if open_spreads:
             for s in open_spreads:
@@ -493,6 +523,13 @@ class Guardrails:
             if not _OCC_PUT_RE.match(sym):
                 return False, f"Invalid OCC put symbol for {key}: {sym!r}"
 
+        # Expiration consistency across legs
+        from utils.occ import extract_expiration
+        short_exp = extract_expiration(decision.get("short_put_symbol", ""))
+        long_exp = extract_expiration(decision.get("long_put_symbol", ""))
+        if short_exp and long_exp and short_exp != long_exp:
+            return False, f"Leg expirations don't match: {short_exp} vs {long_exp}"
+
         # No duplicate on same underlying
         underlying = self._extract_root(decision.get("short_put_symbol", ""))
         if open_spreads:
@@ -514,14 +551,12 @@ class Guardrails:
 
     @staticmethod
     def _extract_strike(occ_symbol: str) -> float:
-        """Extract the strike price from an OCC symbol.
-
-        The last 8 digits represent strike * 1000 (e.g. 00540000 = $540.00).
-        """
-        return int(occ_symbol[-8:]) / 1000
+        """Extract the strike price from an OCC symbol."""
+        from utils.occ import extract_strike
+        return extract_strike(occ_symbol) or 0.0
 
     @staticmethod
     def _extract_root(occ_symbol: str) -> str:
-        """Extract the root ticker from an OCC symbol (e.g. 'SPY' from 'SPY260417P00540000')."""
-        match = _OCC_ROOT_RE.match(occ_symbol.upper())
-        return match.group(1) if match else ""
+        """Extract the root ticker from an OCC symbol."""
+        from utils.occ import extract_root
+        return extract_root(occ_symbol) or ""

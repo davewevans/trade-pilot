@@ -39,21 +39,12 @@ def run() -> None:
     for pos in positions:
         symbol = pos.get("symbol", "")
         try:
-            # Parse expiration from OCC symbol: ROOT(≤6) + YYMMDD + C/P + strike(8)
-            # Find the first digit run of 6 for the date
-            digits_start = None
-            for i, ch in enumerate(symbol):
-                if ch.isdigit():
-                    digits_start = i
-                    break
-
-            if digits_start is None or len(symbol) < digits_start + 6:
+            from utils.occ import dte_from_occ, extract_expiration
+            exp_date = extract_expiration(symbol)
+            dte = dte_from_occ(symbol, as_of=today)
+            if exp_date is None or dte is None:
                 logger.warning("Cannot parse expiration from %s — skipping", symbol)
                 continue
-
-            date_part = symbol[digits_start : digits_start + 6]
-            exp_date = datetime.strptime(date_part, "%y%m%d").date()
-            dte = (exp_date - today).days
 
             if dte == 0:
                 msg = (

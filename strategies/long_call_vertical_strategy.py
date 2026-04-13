@@ -13,16 +13,10 @@ import json
 import logging
 from datetime import datetime
 from enum import Enum
-from pathlib import Path
-
-import anthropic
 
 from config import settings
 
 logger = logging.getLogger(__name__)
-
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent
-_PROMPTS_DIR = _PROJECT_ROOT / "prompts"
 
 
 class LongCallVerticalState(str, Enum):
@@ -46,12 +40,6 @@ class LongCallVerticalStrategy:
         self.state = LongCallVerticalState.IDLE
         self.open_spread_id: str | None = None
         self.pending_order_id: str | None = None
-        self._client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
-        self._model = "claude-sonnet-4-6"
-
-        self._system_prompt = (_PROMPTS_DIR / "system.md").read_text(encoding="utf-8")
-        self._idle_prompt = (_PROMPTS_DIR / "long_call_vertical_idle.md").read_text(encoding="utf-8")
-        self._open_prompt = (_PROMPTS_DIR / "long_call_vertical_open.md").read_text(encoding="utf-8")
 
         self._state_path = settings.SNAPSHOTS_DIR / "long_call_vertical_state.json"
         self._load_state()
@@ -70,13 +58,13 @@ class LongCallVerticalStrategy:
             logger.exception("Failed to load long call vertical state — starting IDLE")
 
     def _save_state(self) -> None:
-        self._state_path.parent.mkdir(parents=True, exist_ok=True)
-        self._state_path.write_text(json.dumps({
+        from utils.fileio import atomic_json_write
+        atomic_json_write(self._state_path, {
             "state": self.state.value,
             "open_spread_id": self.open_spread_id,
             "pending_order_id": self.pending_order_id,
             "updated_at": datetime.now().isoformat(timespec="seconds"),
-        }, indent=2), encoding="utf-8")
+        })
 
     def reconcile_pending(self) -> None:
         """Resolve PENDING_OPEN / PENDING_CLOSE against broker order status."""
@@ -88,7 +76,9 @@ class LongCallVerticalStrategy:
 
     # ── main cycle ──────────────────────────────────────────
 
-    def run_cycle(self, context: dict, advisor=None) -> dict:
+    def run_cycle(self, context: dict, advisor) -> dict:
+        if advisor is None:
+            raise ValueError("advisor is required")
         if self.state in (
             LongCallVerticalState.PENDING_OPEN, LongCallVerticalState.PENDING_CLOSE,
         ):
@@ -124,10 +114,8 @@ class LongCallVerticalStrategy:
                 "skip_reason": "bad_debit",
             }
 
-        if advisor is not None:
-            enriched = {**context, "best_candidate": best}
-            return advisor.ask_spread(enriched, "long_call_vertical", "idle")
-        return self._ask_claude_entry(context, best)
+        enriched = {**context, "best_candidate": best}
+        return advisor.ask_spread(enriched, "long_call_vertical", "idle")
 
     def _check_entry_conditions(self, context: dict) -> str | None:
         regime = context.get("confirmed_market_regime", "NEUTRAL")
@@ -168,35 +156,6 @@ class LongCallVerticalStrategy:
 
         return None
 
-    def _ask_claude_entry(self, context: dict, best_candidate: dict) -> dict:
-        context_json = json.dumps({
-            **context,
-            "best_candidate": best_candidate,
-        }, indent=2, default=str)
-
-        user_content = (
-            f"{self._idle_prompt}\n\n"
-            f"<market_context>\n{context_json}\n</market_context>\n\n"
-            f"Make your decision."
-        )
-
-        try:
-            response = self._client.messages.create(
-                model=self._model,
-                max_tokens=1024,
-                system=[{
-                    "type": "text",
-                    "text": self._system_prompt,
-                    "cache_control": {"type": "ephemeral"},
-                }],
-                messages=[{"role": "user", "content": user_content}],
-            )
-            raw = response.content[0].text.strip()
-            return self._parse_response(raw)
-        except Exception:
-            logger.exception("Claude API call failed for long call vertical entry")
-            return {"action": "SKIP", "reasoning": "Claude API error", "skip_reason": "api_error"}
-
     # ── management evaluation ───────────────────────────────
 
     def _evaluate_management(self, context: dict) -> dict:
@@ -224,11 +183,23 @@ class LongCallVerticalStrategy:
         buy_symbols = [l["symbol"] for l in legs if l.get("side", "").lower() == "buy"]
         sell_symbols = [l["symbol"] for l in legs if l.get("side", "").lower() == "sell"]
 
+        all_symbols = buy_symbols + sell_symbols
         snapshots = {}
         try:
-            snapshots = self.broker.get_option_snapshots(buy_symbols + sell_symbols)
+            snapshots = self.broker.get_option_snapshots(all_symbols)
         except Exception:
             logger.warning("Failed to fetch snapshots for long call vertical management")
+
+        missing = [s for s in all_symbols if s not in snapshots or snapshots[s].get("mid") is None]
+        if missing:
+            logger.warning(
+                "%s management: missing snapshots for %s — defaulting to HOLD",
+                type(self).__name__, missing,
+            )
+            return {
+                "action": "HOLD",
+                "reasoning": f"Cannot evaluate: missing price data for {len(missing)} leg(s)",
+            }
 
         buy_value = sum((snapshots.get(s, {}).get("mid") or 0) for s in buy_symbols)
         sell_value = sum((snapshots.get(s, {}).get("mid") or 0) for s in sell_symbols)
@@ -385,25 +356,3 @@ class LongCallVerticalStrategy:
         )
         return True
 
-    # ── parsing ─────────────────────────────────────────────
-
-    @staticmethod
-    def _parse_response(raw_text: str) -> dict:
-        cleaned = raw_text
-        if cleaned.startswith("```"):
-            first_nl = cleaned.index("\n")
-            cleaned = cleaned[first_nl + 1:]
-        if cleaned.endswith("```"):
-            cleaned = cleaned[:-3]
-        cleaned = cleaned.strip()
-
-        try:
-            data = json.loads(cleaned)
-        except json.JSONDecodeError:
-            logger.error("Claude returned invalid JSON for long call vertical:\n%s", raw_text)
-            return {"action": "SKIP", "reasoning": "Invalid JSON response", "skip_reason": "parse_error"}
-
-        if "action" not in data:
-            return {"action": "SKIP", "reasoning": "Missing action field", "skip_reason": "parse_error"}
-
-        return data

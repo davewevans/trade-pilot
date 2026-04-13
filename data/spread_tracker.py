@@ -59,11 +59,8 @@ class SpreadTracker:
             self._spreads = []
 
     def _save(self) -> None:
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._path.write_text(
-            json.dumps(self._spreads, indent=2, default=str),
-            encoding="utf-8",
-        )
+        from utils.fileio import atomic_json_write
+        atomic_json_write(self._path, self._spreads)
 
     # ── public API ──────────────────────────────────────────
 
@@ -307,6 +304,22 @@ class SpreadTracker:
                 )
 
         return closed_ids
+
+    def prune_old_spreads(self, max_age_days: int = 30) -> int:
+        """Remove terminal (CLOSED/CANCELED) spreads older than *max_age_days*."""
+        from datetime import timedelta
+        cutoff = (datetime.now() - timedelta(days=max_age_days)).isoformat()
+        before = len(self._spreads)
+        self._spreads = [
+            s for s in self._spreads
+            if s.get("status") not in (STATUS_CLOSED, STATUS_CANCELED)
+            or (s.get("closed_at") or s.get("registered_at", "")) > cutoff
+        ]
+        pruned = before - len(self._spreads)
+        if pruned > 0:
+            self._save()
+            logger.info("Pruned %d old spreads (older than %d days)", pruned, max_age_days)
+        return pruned
 
     def to_snapshot(self) -> list[dict]:
         """Return all spreads in a format suitable for StateWriter."""

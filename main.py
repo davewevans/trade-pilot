@@ -93,18 +93,46 @@ def execute_decision(broker, decision: dict) -> dict | None:
             limit_price=decision.get("limit_price"),
         )
 
-    elif action == "roll":
-        # Roll = cancel existing + open new position
-        open_orders = broker.get_orders(status="open")
-        for order in open_orders:
-            if order.get("symbol", "").upper().startswith(
-                decision["symbol"][:6] if decision.get("symbol") else ""
-            ):
-                broker.cancel_order(order["id"])
-                logger.info("Cancelled order %s for roll", order["id"])
-                break
-
+    elif action == "close":
+        # Buy-to-close the existing short option position.
         result = broker.place_order(
+            symbol=decision["symbol"],
+            qty=decision["qty"],
+            side="buy",
+            order_type=decision.get("order_type", "limit"),
+            time_in_force="day",
+            limit_price=decision.get("limit_price"),
+        )
+
+    elif action == "roll":
+        # Roll = buy-to-close existing short option, then sell-to-open replacement.
+        existing_symbol = decision.get("existing_symbol")
+        if not existing_symbol:
+            logger.error(
+                "Roll action missing 'existing_symbol' — aborting to avoid "
+                "opening a second short without closing the first"
+            )
+            return None
+
+        close_limit = decision.get("close_limit_price") or decision.get("limit_price")
+        close_result = broker.place_order(
+            symbol=existing_symbol,
+            qty=decision["qty"],
+            side="buy",
+            order_type="limit",
+            time_in_force="day",
+            limit_price=close_limit,
+        )
+        close_id = (close_result or {}).get("id")
+        if not close_id:
+            logger.error(
+                "Roll: buy-to-close failed for %s — NOT placing replacement sell order",
+                existing_symbol,
+            )
+            return None
+        logger.info("Roll: buy-to-close %s submitted (order %s)", existing_symbol, close_id)
+
+        open_result = broker.place_order(
             symbol=decision["symbol"],
             qty=decision["qty"],
             side="sell",
@@ -112,6 +140,9 @@ def execute_decision(broker, decision: dict) -> dict | None:
             time_in_force="day",
             limit_price=decision.get("limit_price"),
         )
+        open_id = (open_result or {}).get("id")
+        logger.info("Roll: sell-to-open %s submitted (order %s)", decision["symbol"], open_id)
+        result = open_result
 
     else:
         logger.warning("Unhandled action: %s", action)

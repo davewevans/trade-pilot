@@ -28,8 +28,23 @@ def run() -> None:
         return
 
     account = broker.get_account()
-    equity = float(account.get("portfolio_value", 0))
     positions = broker.get_positions()
+
+    # Aggregate equity across all accounts for the circuit breaker.
+    from jobs.startup_snapshot import ACCOUNT_BROKER_MAP
+    from brokers.broker_factory import make_broker
+    total_equity = 0.0
+    aggregation_ok = True
+    for acct_name, strategy_key in ACCOUNT_BROKER_MAP.items():
+        try:
+            acct_broker = make_broker(strategy_key)
+            acct = acct_broker.get_account()
+            total_equity += float(acct.get("portfolio_value", 0))
+        except Exception as e:
+            logger.warning("Failed to get equity for %s account: %s", acct_name, e)
+            aggregation_ok = False
+            break
+    equity = total_equity if (aggregation_ok and total_equity > 0) else float(account.get("portfolio_value", 0))
 
     # ── Circuit breaker update ──────────────────────────────
     cb = CircuitBreaker()
@@ -66,12 +81,9 @@ def run() -> None:
         logger.warning("Failed to write portfolio snapshot: %s", e)
 
     # ── Per-account snapshots (powers individual account cards) ──
-    from jobs.startup_snapshot import ACCOUNT_BROKER_MAP
-    from brokers.broker_factory import make_broker as _make_broker
-
     for acct_name, strategy_key in ACCOUNT_BROKER_MAP.items():
         try:
-            acct_broker = _make_broker(strategy_key)
+            acct_broker = make_broker(strategy_key)
             acct_data = acct_broker.get_account()
             acct_positions = acct_broker.get_positions()
             sw.write_account_snapshot(acct_name, acct_data, acct_positions)

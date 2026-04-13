@@ -16,7 +16,7 @@ def run() -> None:
     logger.info("=== POSITION CHECK JOB STARTING ===")
 
     from ai.claude_advisor import ClaudeAdvisor
-    from brokers.broker_factory import get_broker
+    from brokers.broker_factory import get_broker, make_broker
     from data.context_builder import ContextBuilder
     from data.state_writer import StateWriter
     from data.trade_journal import TradeJournal
@@ -25,7 +25,11 @@ def run() -> None:
     from strategies.guardrails import Guardrails
     from strategies.wheel_strategy import WheelStrategy
 
-    broker = get_broker()
+    # Wheel positions live in the wheel-specific account.
+    try:
+        broker = make_broker("wheel")
+    except ValueError:
+        broker = get_broker()  # fallback to default if wheel creds not configured
     sw = StateWriter()
 
     # ── Market-open check ───────────────────────────────────
@@ -177,6 +181,13 @@ def run() -> None:
                     logger.info("DRY RUN - would execute: %s", json.dumps(decision, default=str))
                     report_lines.append(f"**{underlying}** — DRY RUN: {action}")
                     continue
+
+                # For rolls, provide the existing position's OCC so
+                # execute_decision can buy-to-close it before opening the new one.
+                if action == "roll":
+                    decision["existing_symbol"] = pos.get("symbol") or symbol_occ
+                elif action == "close" and not decision.get("symbol"):
+                    decision["symbol"] = pos.get("symbol") or symbol_occ
 
                 result = execute_decision(broker, decision)
                 order_id = result.get("id") if result else None
