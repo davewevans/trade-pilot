@@ -153,9 +153,31 @@ def run() -> None:
     report_lines: list[str] = []
     size_multiplier = cb.get_position_size_multiplier()
 
-    if size_multiplier == 0.0:
-        logger.warning("Circuit breaker: position size multiplier is 0 — no new positions")
-        report_lines.append("**Circuit breaker RED** — no new positions allowed")
+    # Circuit-breaker gates for NEW entries only. Management actions
+    # (wheel `roll`, spread CLOSE) are NEVER blocked here — once a
+    # position is open we still need to be able to close it.
+    #   1.0 → normal
+    #   0.5 → YELLOW: spreads blocked entirely (qty=1 → 0); wheel
+    #         entries require high Claude confidence (>= 0.75)
+    #   0.0 → RED:    all new entries blocked
+    block_all_new_entries = (size_multiplier == 0.0)
+    reduced_risk = (size_multiplier == 0.5)
+    WHEEL_YELLOW_CONFIDENCE_FLOOR = 0.75
+    WHEEL_ENTRY_ACTIONS = ("sell_put", "sell_call")
+
+    if block_all_new_entries:
+        logger.warning("Circuit breaker RED — no new entries this cycle (management still allowed)")
+        report_lines.append("**Circuit breaker RED** — no new entries allowed (existing positions managed normally)")
+    elif reduced_risk:
+        logger.warning(
+            "Circuit breaker YELLOW (multiplier=0.5) — spread entries blocked; "
+            "wheel entries require confidence >= %.2f",
+            WHEEL_YELLOW_CONFIDENCE_FLOOR,
+        )
+        report_lines.append(
+            f"**Circuit breaker YELLOW** — spread entries blocked; "
+            f"wheel entries gated at confidence >= {WHEEL_YELLOW_CONFIDENCE_FLOOR}"
+        )
 
     # ── Wheel strategy (always runs, per symbol) ────────────
     for symbol in settings.WATCHLIST:
@@ -263,6 +285,39 @@ def run() -> None:
                 logger.info("DRY RUN - would execute: %s", json.dumps(decision, default=str))
                 report_lines.append(f"**{symbol}** -- DRY RUN: {decision.get('action')}")
                 continue
+
+            # ── Circuit-breaker entry gate ──────────────────
+            # Only gate NEW entries (sell_put / sell_call). `roll` is
+            # management of an existing short option and must remain
+            # available so we can defend or close existing positions.
+            decision_action = decision.get("action")
+            if decision_action in WHEEL_ENTRY_ACTIONS:
+                cb_skip_reason = None
+                if block_all_new_entries:
+                    cb_skip_reason = "circuit breaker RED — new entries blocked"
+                elif reduced_risk:
+                    conf = decision.get("confidence") or 0
+                    try:
+                        conf = float(conf)
+                    except (TypeError, ValueError):
+                        conf = 0
+                    if conf < WHEEL_YELLOW_CONFIDENCE_FLOOR:
+                        cb_skip_reason = (
+                            f"circuit breaker YELLOW — confidence {conf:.2f} "
+                            f"< {WHEEL_YELLOW_CONFIDENCE_FLOOR} required"
+                        )
+                if cb_skip_reason:
+                    logger.warning("%s CB GATED: %s", symbol, cb_skip_reason)
+                    journal.append({
+                        "symbol": decision.get("symbol"), "underlying": symbol,
+                        "wheel_state": state.value, "action": "skip",
+                        "reasoning": cb_skip_reason, "status": "skipped",
+                        "skip_reason": cb_skip_reason,
+                        "strategy_type": "wheel_csp" if state.value == "IDLE" else "wheel_cc",
+                        "confidence": decision.get("confidence"),
+                    })
+                    report_lines.append(f"**{symbol}** -- SKIPPED ({cb_skip_reason})")
+                    continue
 
             result = execute_decision(broker, decision)
             order_id = result.get("id") if result else None
@@ -399,13 +454,26 @@ def run() -> None:
                     })
 
                 if action == "OPEN":
-                    _handle_spread_open(
-                        strategy_name, strat, decision, guardrails,
-                        spread_ctx, account, tracker, settings, report_lines,
-                    )
-                    # Re-poll order status immediately so a same-cycle fast
-                    # fill flips PENDING_OPEN → OPEN before the next loop.
-                    reconcile_pending_spreads([strat])
+                    # Circuit-breaker entry gate. Spreads always trade qty=1,
+                    # so YELLOW (multiplier 0.5 → 0 contracts) and RED both
+                    # block new OPENs. CLOSE is intentionally not gated below
+                    # so existing risk can always be taken off the table.
+                    if block_all_new_entries or reduced_risk:
+                        cb_reason = (
+                            "circuit breaker RED — new entries blocked"
+                            if block_all_new_entries
+                            else "circuit breaker YELLOW — spread entries blocked (qty 1→0)"
+                        )
+                        logger.warning("%s CB GATED: %s", strategy_name, cb_reason)
+                        report_lines.append(f"**{strategy_name}** -- SKIPPED ({cb_reason})")
+                    else:
+                        _handle_spread_open(
+                            strategy_name, strat, decision, guardrails,
+                            spread_ctx, account, tracker, settings, report_lines,
+                        )
+                        # Re-poll order status immediately so a same-cycle fast
+                        # fill flips PENDING_OPEN → OPEN before the next loop.
+                        reconcile_pending_spreads([strat])
                 elif action == "CLOSE" and decision.get("spread_id"):
                     _handle_spread_close(
                         strategy_name, strat, decision, settings, report_lines,
