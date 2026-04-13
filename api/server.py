@@ -20,7 +20,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from config import settings
@@ -1112,20 +1112,27 @@ async def update_watchlist(request: Request):
     return data
 
 
-# ── Static frontend ────────────────────────────────────────
-# Mounted at the end so all /api/* routes take precedence.
-# Skipped if `api/static/` is empty (pre-build dev environment).
-
-from fastapi.staticfiles import StaticFiles
+# ── Static frontend (SPA catch-all) ────────────────────────
+# Defined as a route (not a mount) so that unknown paths like
+# /reasoning fall back to index.html instead of 404-ing.
+# All /api/* routes defined above take precedence over this
+# catch-all because FastAPI checks explicit routes first.
 
 _STATIC_DIR = Path(__file__).parent / "static"
-if _STATIC_DIR.exists() and any(
+_STATIC_READY = _STATIC_DIR.exists() and any(
     p.name != ".gitkeep" for p in _STATIC_DIR.iterdir()
-):
-    app.mount("/", StaticFiles(directory=str(_STATIC_DIR), html=True), name="frontend")
-else:
+)
+
+if not _STATIC_READY:
     logger.info(
-        "Frontend static dir empty (%s) — skipping mount. "
+        "Frontend static dir empty (%s) — skipping SPA route. "
         "Run `cd frontend && npm run build` to populate.",
         _STATIC_DIR,
     )
+else:
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def serve_spa(full_path: str):
+        candidate = _STATIC_DIR / full_path
+        if candidate.exists() and candidate.is_file():
+            return FileResponse(candidate)
+        return FileResponse(_STATIC_DIR / "index.html")
