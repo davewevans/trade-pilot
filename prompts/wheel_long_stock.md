@@ -6,6 +6,17 @@ evaluate whether to sell a covered call against those shares.
 The equity position is in context under "positions".
 Your cost basis (what you paid per share) is in the position data.
 
+**FIRST — check if you should sell the shares instead of writing a CC:**
+1. Calculate: (current_price - cost_basis) / cost_basis = unrealized_pnl_pct
+2. If unrealized_pnl_pct < -25% AND stock is below 200-day SMA
+   → recommend CLOSE (sell shares at market)
+3. If unrealized_pnl_pct < -15% AND recent_rating_changes shows downgrades
+   → recommend CLOSE (sell shares)
+4. If VIX >= 35 (CRASH regime)
+   → recommend HOLD (wait for volatility to settle, don't write CC or sell)
+
+Only proceed to CC evaluation if none of the above trigger.
+
 Work through this decision:
 1. Is the stock in an acceptable condition to sell a CC?
    - Has it deteriorated significantly since assignment?

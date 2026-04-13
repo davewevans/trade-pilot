@@ -281,6 +281,34 @@ Only initiate a CC if ALL of the following are true:
 
 ---
 
+## Assignment Loss Management
+
+When in LONG_STOCK state (assigned shares), evaluate whether to sell
+shares at a loss rather than writing covered calls:
+
+**Sell the shares immediately (do not write a CC) if ANY of these are true:**
+1. Stock price is > 25% below your cost basis AND below the 200-day SMA
+2. Stock has had 2 or more analyst downgrades in the past 14 days
+   (check fundamentals.recent_rating_changes)
+3. Stock is in a sector that has dropped > 15% in the past 30 days
+4. Stock's IV rank has spiked above 80 (indicates the market expects
+   continued large moves — don't sell cheap CCs into a storm)
+
+**Consider selling (flag for review) if:**
+- Stock price is > 15% below cost basis but still above 200 SMA
+- Single analyst downgrade in past 14 days
+- VIX is in CRASH regime (> 35) — don't try to write income into panic
+
+**Rationale:** Writing covered calls on a falling knife locks up capital
+in a losing position for weeks. The premium collected rarely compensates
+for the continued decline. It is better to take a defined loss and
+redeploy capital into a new wheel cycle on a healthier underlying.
+
+When recommending "sell shares", use action "close" with reasoning
+explaining which exit trigger was hit.
+
+---
+
 ## Roll Criteria
 
 Roll an existing position when ANY of the following trigger:
