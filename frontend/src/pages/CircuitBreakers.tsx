@@ -1,3 +1,6 @@
+import { useEffect, useState } from 'react'
+import { api } from '../api/client'
+
 type Threshold = {
   level: string
   trigger: string
@@ -141,16 +144,92 @@ function ResetCard({
 }
 
 export function CircuitBreakers() {
+  const [status, setStatus] = useState<string | null>(null)
+  const [halted, setHalted] = useState<boolean>(false)
+  const [resetting, setResetting] = useState(false)
+  const [resetMsg, setResetMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    Promise.all([
+      api.circuitBreakers().catch(() => null),
+      api.health().catch(() => null),
+    ]).then(([cb, h]) => {
+      if (cancelled) return
+      setStatus(cb?.status ?? null)
+      setHalted(Boolean(h?.halted))
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const showReset = halted || status === 'RED' || status === 'HALTED'
+
+  async function handleReset() {
+    if (
+      !window.confirm(
+        'This will reset the circuit breaker and allow the bot to resume trading. Continue?',
+      )
+    ) {
+      return
+    }
+    setResetting(true)
+    setResetMsg(null)
+    try {
+      const r = await api.resetCircuitBreaker()
+      setResetMsg({
+        type: 'success',
+        text: `Reset complete. Deleted: ${r.deleted.length ? r.deleted.join(', ') : 'nothing (already clear)'}. Reloading…`,
+      })
+      setTimeout(() => window.location.reload(), 1200)
+    } catch (err) {
+      setResetMsg({
+        type: 'error',
+        text: err instanceof Error ? err.message : 'Reset failed',
+      })
+      setResetting(false)
+    }
+  }
+
   return (
     <div className="max-w-5xl">
-      <div className="mb-6">
-        <h1 className="text-2xl font-semibold" style={{ color: 'var(--text-primary)' }}>
-          Circuit Breakers
-        </h1>
-        <p className="text-sm mt-1" style={{ color: 'var(--text-secondary)' }}>
-          Portfolio-level safety rules. The last line of defense before real capital is at risk.
-        </p>
+      <div className="mb-6 flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold" style={{ color: 'var(--text-primary)' }}>
+            Circuit Breakers
+          </h1>
+          <p className="text-sm mt-1" style={{ color: 'var(--text-secondary)' }}>
+            Portfolio-level safety rules. The last line of defense before real capital is at risk.
+          </p>
+        </div>
+        {showReset && (
+          <button
+            type="button"
+            onClick={handleReset}
+            disabled={resetting}
+            className="text-xs px-3 py-1.5 rounded border whitespace-nowrap disabled:opacity-50"
+            style={{ color: 'var(--red)', borderColor: 'var(--red)', backgroundColor: 'transparent' }}
+          >
+            {resetting ? 'Resetting…' : 'Reset Circuit Breaker'}
+          </button>
+        )}
       </div>
+      {resetMsg && (
+        <div
+          className="mb-4 p-3 rounded text-xs"
+          style={{
+            backgroundColor:
+              resetMsg.type === 'success'
+                ? 'color-mix(in srgb, var(--green) 10%, transparent)'
+                : 'color-mix(in srgb, var(--red) 10%, transparent)',
+            color: 'var(--text-secondary)',
+            borderLeft: `3px solid ${resetMsg.type === 'success' ? 'var(--green)' : 'var(--red)'}`,
+          }}
+        >
+          {resetMsg.text}
+        </div>
+      )}
 
       {/* Section 1 */}
       <SectionHeader>What Is a Circuit Breaker?</SectionHeader>

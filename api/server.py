@@ -505,6 +505,20 @@ def circuit_breakers():
     return data
 
 
+@app.post("/api/admin/reset-circuit-breaker")
+async def reset_circuit_breaker():
+    """Reset the circuit breaker — delete lock file and state."""
+    deleted = []
+    if LOCK_PATH.exists():
+        LOCK_PATH.unlink()
+        deleted.append("HALTED.lock")
+    state_path = SNAPSHOTS / "circuit_breaker_state.json"
+    if state_path.exists():
+        state_path.unlink()
+        deleted.append("circuit_breaker_state.json")
+    return {"status": "reset", "deleted": deleted}
+
+
 @app.get("/api/portfolio/{account_name}")
 def portfolio_by_account(account_name: str):
     """Return portfolio snapshot for a specific account.

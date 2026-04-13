@@ -3,6 +3,24 @@ import { api } from '../../api/client'
 import type { CircuitBreaker, HealthStatus } from '../../types'
 import { Badge } from '../shared/Badge'
 
+async function resetCircuitBreaker() {
+  if (
+    !window.confirm(
+      'This will reset the circuit breaker and allow the bot to resume trading. Continue?',
+    )
+  ) {
+    return
+  }
+  try {
+    await api.resetCircuitBreaker()
+    window.location.reload()
+  } catch (err) {
+    window.alert(
+      `Reset failed: ${err instanceof Error ? err.message : String(err)}`,
+    )
+  }
+}
+
 export function TopBar() {
   const [health, setHealth] = useState<HealthStatus | null>(null)
   const [cb, setCb] = useState<CircuitBreaker | null>(null)
@@ -65,6 +83,17 @@ export function TopBar() {
           <div className="flex items-center gap-2">
             <span className="uppercase tracking-wider opacity-75">Circuit:</span>
             <Badge variant="circuit" value={cb.status}>{cb.status}</Badge>
+            {(health?.halted || cb.status === 'RED' || cb.status === 'HALTED') && (
+              <button
+                type="button"
+                onClick={resetCircuitBreaker}
+                className="text-xs underline underline-offset-2 hover:opacity-80"
+                style={{ color: 'var(--red)' }}
+                title="Reset circuit breaker"
+              >
+                Reset
+              </button>
+            )}
           </div>
         )}
         {health?.timestamp && (

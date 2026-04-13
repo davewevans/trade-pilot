@@ -115,6 +115,15 @@ export const api = {
 
   circuitBreakers: () => get<CircuitBreaker>('/api/circuit-breakers'),
 
+  resetCircuitBreaker: async (): Promise<{ status: string; deleted: string[] }> => {
+    const res = await fetch(`${BASE}/api/admin/reset-circuit-breaker`, {
+      method: 'POST',
+      credentials: 'include',
+    })
+    if (!res.ok) throw new Error(`API error ${res.status}: reset-circuit-breaker`)
+    return (await res.json()) as { status: string; deleted: string[] }
+  },
+
   context: () => get<ContextResponse>('/api/context'),
 
   equityHistory: () => get<EquityHistory>('/api/equity-history'),

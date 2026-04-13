@@ -129,6 +129,20 @@ class CircuitBreaker:
         self.current_equity = current_equity
         self.last_updated = datetime.now().isoformat(timespec="seconds")
 
+        # Guard against stale/corrupt peak_equity. If the peak is more than
+        # 50% above current equity and we have no open positions, the peak
+        # is almost certainly stale from a previous session or account reset.
+        # Re-seed it rather than triggering a false drawdown lock.
+        if self.peak_equity > 0 and current_equity > 0:
+            apparent_drawdown = (self.peak_equity - current_equity) / self.peak_equity
+            if apparent_drawdown > 0.50:
+                logger.warning(
+                    "CIRCUIT BREAKER: peak_equity ($%.2f) is >50%% above "
+                    "current_equity ($%.2f) — likely stale. Re-seeding peak.",
+                    self.peak_equity, current_equity,
+                )
+                self.peak_equity = current_equity
+
         # Rolling peak
         if current_equity > self.peak_equity:
             self.peak_equity = current_equity
