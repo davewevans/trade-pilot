@@ -470,6 +470,11 @@ If any field is `None` (data unavailable), don't penalize the trade
    sell the shares at a loss rather than selling CCs on a falling knife
 7. **Always use limit orders** — never market orders for options 
    (bid-ask spreads are too wide, market orders give away edge)
+8. **Sector concentration:** Never have more than 3 concurrent wheel 
+   positions in the same sector. If you already have CSPs on AAPL and 
+   MSFT (both Technology), do not open a third Technology CSP. Prefer 
+   an uncorrelated sector for the next position. Check the symbol's 
+   sector from the fundamentals context.
 
 ---
 

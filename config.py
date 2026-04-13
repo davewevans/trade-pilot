@@ -76,7 +76,7 @@ class Settings:
         self.WATCHLIST: list[str] = (
             [s.strip() for s in watchlist_env.split(",") if s.strip()]
             if watchlist_env
-            else ["AAPL", "SPY"]
+            else ["AAPL", "SPY", "MSFT", "AMD", "JPM", "XOM"]
         )
 
         # Spread strategies evaluate these symbols (superset of wheel WATCHLIST).
@@ -109,6 +109,21 @@ class Settings:
             log.info("Running in PRODUCTION (Render)")
         else:
             log.info("Running in LOCAL mode")
+
+    # Sector mapping for correlation awareness.
+    # Used by the guardrails (sector concentration) and reporting to flag
+    # sector concentration across wheel positions.
+    SYMBOL_SECTORS: dict[str, str] = {
+        "AAPL": "Technology", "MSFT": "Technology", "GOOGL": "Technology",
+        "AMZN": "Technology", "META": "Technology", "NVDA": "Technology",
+        "AMD": "Technology", "QQQ": "Index",
+        "SPY": "Index", "IWM": "Index",
+        "JPM": "Financials", "GS": "Financials", "BAC": "Financials",
+        "XOM": "Energy", "CVX": "Energy",
+        "JNJ": "Healthcare", "UNH": "Healthcare",
+        "PG": "Consumer Staples", "KO": "Consumer Staples",
+        "TSLA": "Consumer Discretionary",
+    }
 
     # Maps each strategy to its account's env var names.
     # Three strategies share the default account (ALPACA_API_KEY).

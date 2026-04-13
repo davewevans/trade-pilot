@@ -201,6 +201,29 @@ class Guardrails:
                     f"Earnings in {days_until} days — must be > 21 days away to sell a CSP",
                 )
 
+        # Sector concentration check: cap simultaneous short puts in one
+        # sector so a single sector drawdown can't take out multiple wheels.
+        from config import settings
+        sector = settings.SYMBOL_SECTORS.get(root, "Unknown")
+        if sector != "Unknown":
+            same_sector_count = 0
+            for pos in positions:
+                pos_sym = (pos.get("symbol") or "").upper()
+                pos_root = self._extract_root(pos_sym)
+                pos_sector = settings.SYMBOL_SECTORS.get(pos_root, "")
+                if (
+                    pos_sector == sector
+                    and "P" in pos_sym
+                    and float(pos.get("qty") or 0) < 0
+                ):
+                    same_sector_count += 1
+            if same_sector_count >= 3:
+                return (
+                    False,
+                    f"Already have {same_sector_count} short-put positions in "
+                    f"{sector} sector (max 3)",
+                )
+
         return True, ""
 
     # ── sell_call ────────────────────────────────────────────
