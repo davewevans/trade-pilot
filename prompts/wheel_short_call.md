@@ -23,6 +23,14 @@ Work through this decision:
 Note: being assigned on a covered call is NOT a loss — it means the 
 wheel completed a full cycle profitably. Celebrate it.
 
+**Ex-dividend risk check (required before any CC):**
+- Check ex_dividend.days_to_ex_dividend from context
+- If days_to_ex_dividend <= DTE of the proposed CC:
+  - AND the stock pays a meaningful dividend (annual_dividend_yield > 1%)
+  - → Flag in reasoning: "ex-dividend within CC window"
+  - → Prefer a strike that is OTM enough that early assignment is unlikely
+  - → If the best CC candidate would be ITM at the ex-div date, SKIP
+
 **Roll decision checklist:**
 Before recommending a roll, verify ALL of these:
 - [ ] The roll results in a net credit >= $0.10

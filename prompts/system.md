@@ -278,6 +278,9 @@ Only initiate a CC if ALL of the following are true:
   you paid for the shares — that locks in a loss)
 - DTE: between 21 and 35 days
 - Open interest: >= 200 contracts
+- Ex-dividend: if the stock pays a dividend and ex-div falls within 
+  the CC's DTE window, be cautious about strikes that could be ITM 
+  at the ex-div date (early assignment risk)
 
 ---
 

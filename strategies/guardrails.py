@@ -289,6 +289,33 @@ class Guardrails:
                     f"Earnings in {days_until} days — must be > 21 days away to sell a CC",
                 )
 
+            # Ex-dividend early-assignment soft warning. The actual risk
+            # depends on moneyness at the ex-div date which we can't know
+            # at entry, so this is a log-only warning — the prompt
+            # instructs Claude to avoid ITM strikes near ex-div.
+            ex_div = context.get("ex_dividend") or {}
+            days_ex = ex_div.get("days_to_ex_dividend")
+            div_yield = ex_div.get("annual_dividend_yield")
+            if (
+                days_ex is not None
+                and div_yield is not None
+                and div_yield > 0.01
+            ):
+                dte = None
+                try:
+                    from utils.occ import extract_expiration
+                    exp = extract_expiration(symbol)
+                    if exp:
+                        dte = (exp - date.today()).days
+                except Exception:
+                    pass
+                if dte is not None and days_ex <= dte:
+                    logger.warning(
+                        "CC on %s: ex-dividend in %d days within DTE %d "
+                        "(annual yield %.1f%%) — early assignment risk",
+                        root, days_ex, dte, div_yield * 100,
+                    )
+
         return True, ""
 
     # ── roll ─────────────────────────────────────────────────
