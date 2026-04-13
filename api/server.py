@@ -39,7 +39,7 @@ if not DASHBOARD_PASSWORD:
         "Render environment variable before starting the API."
     )
 
-_SESSION_TTL_SECONDS = 60  # 7 days
+_SESSION_TTL_SECONDS = 7 * 24 * 60 * 60  # 7 days
 _SESSION_COOKIE = "session"
 
 # Signing key derived from the password — stateless, survives restarts.
