@@ -136,4 +136,5 @@ export interface CircuitBreaker {
   weekly_pnl: number
   weekly_pnl_pct: number
   current_drawdown_pct: number
+  dry_run?: boolean
 }

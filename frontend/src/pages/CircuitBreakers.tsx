@@ -146,6 +146,7 @@ function ResetCard({
 export function CircuitBreakers() {
   const [status, setStatus] = useState<string | null>(null)
   const [halted, setHalted] = useState<boolean>(false)
+  const [dryRun, setDryRun] = useState<boolean>(false)
   const [resetting, setResetting] = useState(false)
   const [resetMsg, setResetMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
 
@@ -158,13 +159,14 @@ export function CircuitBreakers() {
       if (cancelled) return
       setStatus(cb?.status ?? null)
       setHalted(Boolean(h?.halted))
+      setDryRun(Boolean(cb?.dry_run))
     })
     return () => {
       cancelled = true
     }
   }, [])
 
-  const showReset = halted || status === 'RED' || status === 'HALTED'
+  const showReset = !dryRun && (halted || status === 'RED' || status === 'HALTED')
 
   async function handleReset() {
     if (

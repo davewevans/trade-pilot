@@ -45,17 +45,22 @@ export function TopBar() {
     }
   }, [])
 
+  const dryRun = Boolean(cb?.dry_run)
+  const effectiveHalted = Boolean(health?.halted) && !dryRun
+
   const dotColor = !health
     ? 'var(--text-muted)'
-    : health.halted
+    : effectiveHalted
       ? 'var(--red)'
       : 'var(--green)'
 
   const dotTitle = !health
     ? 'API unreachable'
-    : health.halted
+    : effectiveHalted
       ? 'Halted'
-      : 'Healthy'
+      : dryRun
+        ? 'Healthy (dry run)'
+        : 'Healthy'
 
   return (
     <header
@@ -76,14 +81,19 @@ export function TopBar() {
           aria-hidden="true"
         />
         <span className="font-semibold tracking-wide">trade-pilot</span>
-        {health?.halted && <Badge variant="circuit" value="RED">HALTED</Badge>}
+        {effectiveHalted && <Badge variant="circuit" value="RED">HALTED</Badge>}
       </div>
       <div className="flex items-center gap-4 text-xs" style={{ color: 'var(--text-secondary)' }}>
         {cb && (
           <div className="flex items-center gap-2">
             <span className="uppercase tracking-wider opacity-75">Circuit:</span>
             <Badge variant="circuit" value={cb.status}>{cb.status}</Badge>
-            {(health?.halted || cb.status === 'RED' || cb.status === 'HALTED') && (
+            {dryRun && (
+              <span className="opacity-75" title="Circuit breaker is bypassed in DRY_RUN mode">
+                (dry run)
+              </span>
+            )}
+            {!dryRun && (effectiveHalted || cb.status === 'RED') && (
               <button
                 type="button"
                 onClick={resetCircuitBreaker}

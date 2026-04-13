@@ -173,6 +173,30 @@ class CircuitBreaker:
             else 0.0
         )
 
+        # In DRY_RUN mode, calculate and log metrics for observability but
+        # never trigger YELLOW/RED/HALTED. The bot isn't placing trades, so
+        # there's no risk to manage — and blocking decisions defeats the
+        # purpose of a dry run.
+        try:
+            from config import settings as _settings
+            _dry_run = bool(getattr(_settings, "DRY_RUN", False))
+        except Exception:
+            _dry_run = False
+
+        if _dry_run:
+            self._status = CircuitBreakerStatus(
+                status="GREEN",
+                daily_pnl=round(daily_pnl, 2),
+                daily_pnl_pct=round(daily_pnl_pct, 2),
+                weekly_pnl=round(weekly_pnl, 2),
+                weekly_pnl_pct=round(weekly_pnl_pct, 2),
+                drawdown_pct=round(drawdown_pct, 2),
+                active_rules=[],
+                halted=False,
+            )
+            self._save_state()
+            return self._status
+
         # Evaluate thresholds
         active_rules: list[str] = []
 
@@ -235,7 +259,19 @@ class CircuitBreaker:
         return self._status
 
     def is_halted(self) -> bool:
-        """Return True if ``HALTED.lock`` exists (manual delete to resume)."""
+        """Return True if ``HALTED.lock`` exists (manual delete to resume).
+
+        In DRY_RUN mode this always returns False — the lock file may still
+        exist (and be written by update() if a threshold is crossed), but it
+        does not gate decisions. That way the lock's presence when switching
+        to live trading is a signal to investigate before going live.
+        """
+        try:
+            from config import settings as _settings
+            if getattr(_settings, "DRY_RUN", False):
+                return False
+        except Exception:
+            pass
         if self._lock_path.exists():
             logger.warning(
                 "TRADING HALTED — lock file exists at %s. "

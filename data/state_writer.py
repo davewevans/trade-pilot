@@ -15,6 +15,15 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
+def _dry_run_active() -> bool:
+    """Check DRY_RUN via settings, falling back to env var."""
+    try:
+        from config import settings
+        return bool(getattr(settings, "DRY_RUN", False))
+    except Exception:
+        return os.getenv("DRY_RUN", "false").lower() == "true"
+
+
 def _tag_strategy_type(
     symbol: str,
     wheel_symbols: set[str],
@@ -387,6 +396,7 @@ class StateWriter:
                 "status": status_dict.get("status", "GREEN"),
                 "active_rules": status_dict.get("active_rules", []),
                 "halted": bool(status_dict.get("halted", False)),
+                "dry_run": _dry_run_active(),
             }
 
             path = self.dir / "circuit_breakers.json"
