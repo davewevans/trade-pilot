@@ -7,6 +7,7 @@ import { ReasoningExplorer } from './pages/ReasoningExplorer'
 import { Guardrails } from './pages/Guardrails'
 import { Strategies } from './pages/Strategies'
 import { HowItWorks } from './pages/HowItWorks'
+import { OptionsBasics } from './pages/OptionsBasics'
 import { SkipReasons } from './pages/SkipReasons'
 import { CircuitBreakers } from './pages/CircuitBreakers'
 import { Glossary } from './pages/Glossary'
@@ -27,6 +28,7 @@ export function App() {
           <Route path="/guardrails" element={<Guardrails />} />
           <Route path="/strategies" element={<Strategies />} />
           <Route path="/how-it-works" element={<HowItWorks />} />
+          <Route path="/options-basics" element={<OptionsBasics />} />
           <Route path="/skip-reasons" element={<SkipReasons />} />
           <Route path="/circuit-breakers" element={<CircuitBreakers />} />
           <Route path="/market-regimes" element={<MarketRegimes />} />
