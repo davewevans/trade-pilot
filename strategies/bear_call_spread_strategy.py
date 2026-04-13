@@ -183,6 +183,12 @@ class BearCallSpreadStrategy:
         if not has_bearish_setup and regime != "BEAR":
             return "No bearish technical setup (above 50-SMA and RSI < 60)"
 
+        iv_hv = (context.get("volatility") or {}).get("iv_hv_ratio")
+        if iv_hv is not None and iv_hv < 0.90:
+            return (
+                f"IV/HV ratio {iv_hv:.2f} < 0.90 — options underpriced for premium selling"
+            )
+
         # Already have an active spread (includes PENDING states).
         if self.spread_tracker:
             symbol = context.get("symbol", "")

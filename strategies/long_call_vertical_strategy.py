@@ -164,6 +164,12 @@ class LongCallVerticalStrategy:
         if ivr is not None and ivr >= 30:
             return f"IV rank {ivr} >= 30 (need < 30 for debit spread)"
 
+        iv_hv = (context.get("volatility") or {}).get("iv_hv_ratio")
+        if iv_hv is not None and iv_hv > 1.30:
+            return (
+                f"IV/HV ratio {iv_hv:.2f} > 1.30 — options overpriced for debit strategy"
+            )
+
         tech = context.get("technicals") or {}
         if tech.get("above_sma_50") is not True:
             return "Underlying not above 50-day SMA"

@@ -182,6 +182,12 @@ class BullPutSpreadStrategy:
         if dte_earnings is not None and dte_earnings <= 25:
             return f"Earnings in {dte_earnings} days (need > 25)"
 
+        iv_hv = (context.get("volatility") or {}).get("iv_hv_ratio")
+        if iv_hv is not None and iv_hv < 0.90:
+            return (
+                f"IV/HV ratio {iv_hv:.2f} < 0.90 — options underpriced for premium selling"
+            )
+
         # Already have an active spread on same underlying (includes
         # PENDING_OPEN / PENDING_CLOSE — must not double-submit).
         if self.spread_tracker:

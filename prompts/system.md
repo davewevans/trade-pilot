@@ -399,6 +399,23 @@ Recommend "skip" or "hold" when:
 - IV Rank 60-100: expensive options, excellent time to sell
 - We always prefer to sell high IV and buy it back when IV drops
 
+**IV/HV Ratio — Are Options Cheap or Expensive?**
+
+`iv_hv_ratio` compares what the options market is pricing (IV) versus what the stock is actually doing (HV — historical volatility over the last 20 days). A ratio > 1.0 means options are pricing in more movement than has actually been happening.
+
+- `iv_hv_ratio > 1.3`: Options are expensive — excellent for selling premium. You're being paid for more risk than actually exists. This is the sweet spot for CSPs and credit spreads.
+- `iv_hv_ratio 1.0–1.3`: Normal range — options are fairly priced. Standard entry criteria apply.
+- `iv_hv_ratio < 1.0`: Options are cheap — the stock is moving more than options prices reflect. BAD for selling premium (you're being underpaid for the actual risk). GOOD for buying premium (debit spreads, long call vertical).
+- `iv_hv_ratio_1y_avg`: Compare the current ratio to the stock's yearly average. If the current ratio is significantly above the average, options are unusually rich right now — a stronger sell signal.
+
+When evaluating a **credit spread or CSP entry**:
+- `iv_hv_ratio > 1.3`: mild bullish factor — conditions strongly favor sellers
+- `iv_hv_ratio < 0.9`: skip credit entries even if IVR qualifies — the premiums don't compensate for the actual realised risk (the pre-checks will already reject, but this tells you why)
+
+When evaluating a **debit spread (long call vertical)**:
+- `iv_hv_ratio < 0.9`: favorable — you're buying options at a discount to realised vol
+- `iv_hv_ratio > 1.3`: unfavorable — options are expensive relative to what the stock is doing; the pre-checks will reject but this explains the reasoning
+
 ---
 
 ## Technical Analysis Rules
