@@ -6,22 +6,217 @@ Runs independently from the scheduler.  Start with::
     uvicorn api.server:app     # alternative
 """
 
+import hmac
 import json
 import logging
+import os
+import secrets
 import sqlite3
+import time
 from collections import Counter
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from config import settings
 from database.repositories import DecisionRepository, TradeRepository
 
 logger = logging.getLogger(__name__)
+
+
+# ── Auth: password + in-memory session store ────────────────
+# Password is mandatory. We refuse to start without one rather than
+# defaulting to "" (which would silently disable the gate).
+DASHBOARD_PASSWORD = os.environ.get("DASHBOARD_PASSWORD", "").strip()
+if not DASHBOARD_PASSWORD:
+    raise RuntimeError(
+        "DASHBOARD_PASSWORD is not set. Define it in .env (local) or as a "
+        "Render environment variable before starting the API."
+    )
+
+_SESSION_TTL_SECONDS = 8 * 60 * 60  # 8 hours
+_SESSION_COOKIE = "session"
+# token -> unix-epoch expiry. In-memory only: a restart logs everyone out,
+# which is acceptable for a single-user dashboard.
+_SESSIONS: dict[str, float] = {}
+
+# Paths that bypass auth entirely.
+#   /auth/login   — needed to acquire a session
+#   /auth/logout  — clearing your own cookie shouldn't require a valid one
+#   /health, /api/health — Render health probes (and any external monitor)
+_AUTH_EXEMPT_PATHS = frozenset({
+    "/auth/login", "/auth/logout", "/health", "/api/health",
+})
+
+
+def _prune_expired_sessions() -> None:
+    now = time.time()
+    expired = [t for t, exp in _SESSIONS.items() if exp <= now]
+    for t in expired:
+        _SESSIONS.pop(t, None)
+
+
+def _issue_session() -> tuple[str, float]:
+    """Mint a new session token. Returns (token, expires_at_epoch)."""
+    _prune_expired_sessions()
+    token = secrets.token_urlsafe(32)
+    expires_at = time.time() + _SESSION_TTL_SECONDS
+    _SESSIONS[token] = expires_at
+    return token, expires_at
+
+
+def _extract_token(request: Request) -> str | None:
+    """Pull session token from cookie OR `Authorization: Bearer <token>`."""
+    cookie_tok = request.cookies.get(_SESSION_COOKIE)
+    if cookie_tok:
+        return cookie_tok
+    auth_header = request.headers.get("authorization") or ""
+    if auth_header.lower().startswith("bearer "):
+        return auth_header[7:].strip() or None
+    return None
+
+
+def _is_authenticated(request: Request) -> bool:
+    token = _extract_token(request)
+    if not token:
+        return False
+    expiry = _SESSIONS.get(token)
+    if expiry is None:
+        return False
+    if expiry <= time.time():
+        _SESSIONS.pop(token, None)
+        return False
+    return True
+
+
+# Inline login page. Self-contained: no external assets, no scripts beyond
+# a single fetch() to /auth/login, includes the noindex meta required for
+# all HTML this app serves.
+_LOGIN_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>trade-pilot</title>
+  <style>
+    html, body { height: 100%; margin: 0; }
+    body { background: #0e1116; color: #e6e6e6;
+           font-family: system-ui, -apple-system, sans-serif;
+           display: flex; align-items: center; justify-content: center; }
+    form { background: #161b22; padding: 2rem; border-radius: 8px;
+           min-width: 280px; box-shadow: 0 4px 24px rgba(0,0,0,0.4); }
+    h1   { margin: 0 0 1rem; font-size: 1.05rem; font-weight: 600; }
+    input[type=password] { width: 100%; padding: 0.6rem; box-sizing: border-box;
+           border: 1px solid #30363d; background: #0d1117; color: #e6e6e6;
+           border-radius: 4px; font-size: 0.95rem; }
+    button { margin-top: 0.75rem; width: 100%; padding: 0.6rem; border: 0;
+             background: #238636; color: white; border-radius: 4px;
+             cursor: pointer; font-size: 0.95rem; }
+    button:hover { background: #2ea043; }
+    .err  { color: #f85149; font-size: 0.85rem; margin-top: 0.5rem; min-height: 1em; }
+  </style>
+</head>
+<body>
+  <form id="f" autocomplete="off">
+    <h1>trade-pilot</h1>
+    <input id="p" type="password" placeholder="Password" autofocus required>
+    <button type="submit">Sign in</button>
+    <div id="e" class="err" role="alert"></div>
+  </form>
+  <script>
+    document.getElementById('f').addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      const err = document.getElementById('e');
+      err.textContent = '';
+      try {
+        const r = await fetch('/auth/login', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({password: document.getElementById('p').value}),
+          credentials: 'same-origin',
+        });
+        if (r.ok) {
+          window.location.href = '/';
+        } else {
+          const j = await r.json().catch(() => ({}));
+          err.textContent = j.error || 'Invalid password';
+        }
+      } catch (_e) {
+        err.textContent = 'Network error';
+      }
+    });
+  </script>
+</body>
+</html>"""
+
+
+def _login_page() -> HTMLResponse:
+    return HTMLResponse(_LOGIN_HTML, status_code=200)
+
+
+class AuthMiddleware(BaseHTTPMiddleware):
+    """Gate every request not in _AUTH_EXEMPT_PATHS, then post-process HTML.
+
+    Behaviour:
+      * Exempt path           → pass through.
+      * Authenticated         → pass through.
+      * Unauthenticated /api/* → 401 JSON.
+      * Unauthenticated other  → serve the inline login page (covers
+        GET / per spec, plus any deep-link the user may have bookmarked).
+
+    Post-processing for any HTML response (login page, SPA index.html
+    served by StaticFiles, etc.):
+      * Inject `<meta name="robots" content="noindex, nofollow">` if not
+        already present.
+      * Set the equivalent `X-Robots-Tag` header as a belt-and-braces.
+    """
+
+    async def dispatch(self, request: Request, call_next):
+        path = request.url.path
+
+        if path in _AUTH_EXEMPT_PATHS or _is_authenticated(request):
+            response = await call_next(request)
+        elif path.startswith("/api/"):
+            response = JSONResponse(
+                status_code=401, content={"error": "unauthorized"},
+            )
+        else:
+            response = _login_page()
+
+        return await self._add_noindex(response)
+
+    @staticmethod
+    async def _add_noindex(response: Response) -> Response:
+        ct = response.headers.get("content-type", "")
+        if "text/html" not in ct.lower():
+            return response
+
+        # BaseHTTPMiddleware gives us a streaming response; buffer it so
+        # we can inject the meta tag once.
+        body = b""
+        async for chunk in response.body_iterator:
+            body += chunk
+        if b"<head>" in body and b'name="robots"' not in body:
+            body = body.replace(
+                b"<head>",
+                b'<head><meta name="robots" content="noindex, nofollow">',
+                1,
+            )
+        headers = dict(response.headers)
+        headers.pop("content-length", None)
+        headers["x-robots-tag"] = "noindex, nofollow"
+        return Response(
+            content=body,
+            status_code=response.status_code,
+            headers=headers,
+            media_type=response.media_type,
+        )
 
 
 # Per-leg cash flow sign convention for the trades table. Used when
@@ -99,13 +294,21 @@ async def lifespan(application: FastAPI):
 
 app = FastAPI(title="trade-pilot", version="0.1.0", lifespan=lifespan)
 
-# ── CORS (allow all origins during development) ────────────
+# ── CORS ──────────────────────────────────────────────────
+# This service is consumed by its own bundled SPA on the same origin —
+# no third-party browser client should be able to call it. Empty
+# allow_origins disables cross-origin access entirely.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[],
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Auth middleware is added LAST so it executes FIRST per Starlette's
+# stacking order (last-added wraps the others). That way unauthenticated
+# requests short-circuit before hitting any business logic.
+app.add_middleware(AuthMiddleware)
 
 # ── paths ───────────────────────────────────────────────────
 SNAPSHOTS = settings.SNAPSHOTS_DIR
@@ -166,6 +369,65 @@ def _read_jsonl(path: Path) -> list[dict]:
 
 
 # ── endpoints ───────────────────────────────────────────────
+
+
+@app.post("/auth/login")
+async def auth_login(request: Request):
+    """Validate password and issue a session cookie + JSON token."""
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(status_code=400, content={"error": "invalid JSON body"})
+
+    submitted = (body or {}).get("password", "")
+    if not isinstance(submitted, str):
+        return JSONResponse(status_code=400, content={"error": "password must be a string"})
+
+    # Constant-time comparison to avoid timing oracles on the password.
+    if not hmac.compare_digest(submitted.encode("utf-8"), DASHBOARD_PASSWORD.encode("utf-8")):
+        return JSONResponse(status_code=401, content={"error": "invalid password"})
+
+    token, expires_at = _issue_session()
+    response = JSONResponse(
+        status_code=200,
+        content={"token": token, "expires_at": int(expires_at)},
+    )
+    response.set_cookie(
+        key=_SESSION_COOKIE,
+        value=token,
+        max_age=_SESSION_TTL_SECONDS,
+        httponly=True,
+        samesite="lax",
+        # Secure flag is omitted so local http://localhost works; Render
+        # serves the same cookie over HTTPS, where browsers accept it.
+        path="/",
+    )
+    return response
+
+
+@app.get("/auth/logout")
+def auth_logout(request: Request):
+    """Invalidate the caller's session token (if any) and clear the cookie."""
+    token = _extract_token(request)
+    if token:
+        _SESSIONS.pop(token, None)
+    response = JSONResponse(status_code=200, content={"ok": True})
+    response.delete_cookie(_SESSION_COOKIE, path="/")
+    return response
+
+
+@app.get("/health")
+def health_public():
+    """Public health probe for Render (and any external monitor).
+
+    Mirrors /api/health but lives at /health to match the conventional
+    Render health-check path. Both are exempt from auth.
+    """
+    return {
+        "status": "ok",
+        "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "halted": LOCK_PATH.exists(),
+    }
 
 
 @app.get("/api/health")
