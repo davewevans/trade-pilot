@@ -51,6 +51,7 @@ _SESSIONS: dict[str, float] = {}
 #   /health, /api/health — Render health probes (and any external monitor)
 _AUTH_EXEMPT_PATHS = frozenset({
     "/auth/login", "/auth/logout", "/health", "/api/health",
+    "/favicon.svg", "/favicon.ico",
 })
 
 
