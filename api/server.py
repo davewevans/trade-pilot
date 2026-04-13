@@ -198,10 +198,15 @@ class AuthMiddleware(BaseHTTPMiddleware):
             return response
 
         # BaseHTTPMiddleware gives us a streaming response; buffer it so
-        # we can inject the meta tag once.
-        body = b""
-        async for chunk in response.body_iterator:
-            body += chunk
+        # we can inject the meta tag once. Non-streaming responses (e.g.
+        # HTMLResponse / JSONResponse constructed directly in dispatch)
+        # expose `.body` instead of `.body_iterator`.
+        if hasattr(response, "body_iterator"):
+            body = b""
+            async for chunk in response.body_iterator:
+                body += chunk
+        else:
+            body = response.body
         if b"<head>" in body and b'name="robots"' not in body:
             body = body.replace(
                 b"<head>",
