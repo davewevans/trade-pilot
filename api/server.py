@@ -12,7 +12,9 @@ import logging
 import os
 import secrets
 import sqlite3
+import threading
 import time
+import uuid
 from collections import Counter
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -1082,6 +1084,159 @@ def get_watchlist():
         "spreads": list(settings.SPREAD_WATCHLIST),
         "updated_at": None,
     }
+
+
+# ── Backtest job store ───────────────────────────────────────────────────────
+# Jobs run in background threads. Results are stored in memory until retrieved.
+# Keys: job_id (str) → dict with status/progress/result fields.
+
+_BACKTEST_JOBS: dict[str, dict] = {}
+_BACKTEST_JOBS_LOCK = threading.Lock()
+
+
+def _run_backtest_job(job_id: str, params_dict: dict) -> None:
+    """Background thread target: run the backtest and store result."""
+    from backtesting.engine import BacktestEngine, BacktestParams
+    from dataclasses import asdict
+
+    log_lines: list[str] = []
+
+    def progress(msg: str) -> None:
+        log_lines.append(msg)
+        with _BACKTEST_JOBS_LOCK:
+            if job_id in _BACKTEST_JOBS:
+                _BACKTEST_JOBS[job_id]["progress"] = msg
+                _BACKTEST_JOBS[job_id]["log"] = list(log_lines)
+
+    with _BACKTEST_JOBS_LOCK:
+        _BACKTEST_JOBS[job_id]["status"] = "running"
+
+    try:
+        params = BacktestParams(
+            strategy=params_dict.get("strategy", "bull_put_spread"),
+            symbols=params_dict.get("symbols", ["SPY"]),
+            start_date=params_dict.get("start_date", "2023-01-01"),
+            end_date=params_dict.get("end_date", "2023-12-31"),
+            delta=float(params_dict.get("delta", 0.30)),
+            dte_min=int(params_dict.get("dte_min", 21)),
+            dte_max=int(params_dict.get("dte_max", 45)),
+            ivr_threshold=float(params_dict.get("ivr_threshold", 30.0)),
+            profit_close_pct=float(params_dict.get("profit_close_pct", 0.50)),
+            contracts=int(params_dict.get("contracts", 1)),
+            spread_width_strikes=int(params_dict.get("spread_width_strikes", 5)),
+        )
+
+        engine = BacktestEngine()
+        result = engine.run(params, progress_cb=progress)
+
+        # Serialize trades
+        trades_out = []
+        for t in result.trades:
+            trades_out.append(asdict(t))
+
+        with _BACKTEST_JOBS_LOCK:
+            _BACKTEST_JOBS[job_id].update({
+                "status": "complete",
+                "result": {
+                    "params": result.params,
+                    "total_pnl": result.total_pnl,
+                    "win_rate": result.win_rate,
+                    "avg_trade_pnl": result.avg_trade_pnl,
+                    "max_drawdown": result.max_drawdown,
+                    "avg_duration_days": result.avg_duration_days,
+                    "total_trades": result.total_trades,
+                    "winning_trades": result.winning_trades,
+                    "monthly_returns": result.monthly_returns,
+                    "equity_curve": result.equity_curve,
+                    "trades": trades_out,
+                },
+            })
+
+    except Exception as exc:
+        logger.exception("Backtest job %s failed", job_id)
+        with _BACKTEST_JOBS_LOCK:
+            _BACKTEST_JOBS[job_id].update({
+                "status": "error",
+                "error": str(exc),
+            })
+
+
+@app.post("/api/backtest")
+async def start_backtest(request: Request):
+    """Start a backtest job. Returns a job_id for polling."""
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(status_code=400, content={"error": "invalid JSON body"})
+
+    # Validate required fields
+    strategy = body.get("strategy", "bull_put_spread")
+    from backtesting.engine import SUPPORTED_STRATEGIES
+    if strategy not in SUPPORTED_STRATEGIES:
+        return JSONResponse(
+            status_code=400,
+            content={"error": f"strategy must be one of: {SUPPORTED_STRATEGIES}"},
+        )
+
+    symbols = body.get("symbols", [])
+    if not symbols or not isinstance(symbols, list):
+        return JSONResponse(status_code=400, content={"error": "symbols must be a non-empty list"})
+
+    try:
+        start_date = body["start_date"]
+        end_date = body["end_date"]
+        from datetime import date as _date
+        _date.fromisoformat(start_date)
+        _date.fromisoformat(end_date)
+        if start_date >= end_date:
+            raise ValueError("start_date must be before end_date")
+    except (KeyError, ValueError) as e:
+        return JSONResponse(status_code=400, content={"error": f"Invalid date range: {e}"})
+
+    job_id = str(uuid.uuid4())
+    with _BACKTEST_JOBS_LOCK:
+        _BACKTEST_JOBS[job_id] = {
+            "job_id": job_id,
+            "status": "queued",
+            "progress": "Starting...",
+            "log": [],
+            "result": None,
+            "error": None,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+    t = threading.Thread(
+        target=_run_backtest_job,
+        args=(job_id, body),
+        daemon=True,
+        name=f"backtest-{job_id[:8]}",
+    )
+    t.start()
+
+    return {"job_id": job_id, "status": "queued"}
+
+
+@app.get("/api/backtest/{job_id}")
+def get_backtest_result(job_id: str):
+    """Poll for backtest job status and results."""
+    with _BACKTEST_JOBS_LOCK:
+        job = _BACKTEST_JOBS.get(job_id)
+
+    if job is None:
+        return JSONResponse(status_code=404, content={"error": "job not found"})
+
+    # Return everything except full trade list until complete (to keep response light)
+    response = {
+        "job_id": job["job_id"],
+        "status": job["status"],
+        "progress": job["progress"],
+        "error": job.get("error"),
+        "created_at": job.get("created_at"),
+    }
+    if job["status"] == "complete" and job.get("result"):
+        response["result"] = job["result"]
+
+    return response
 
 
 @app.post("/api/watchlist")

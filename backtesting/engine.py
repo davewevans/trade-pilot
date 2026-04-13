@@ -1,0 +1,785 @@
+"""Backtesting engine for options strategies using ORATS historical data.
+
+Core loop per trading day:
+  1. Fetch historical VIX + SPY SMA from yfinance (no API cost, cached locally).
+  2. Fetch ORATS hist/summaries → IV rank, ATM IV, skew per symbol.
+  3. Derive market regime using the same derive_market_regime() logic.
+  4. Run StrategyRouter to determine which strategies would be active.
+  5. For eligible strategies, fetch hist/strikes to find entry candidates.
+  6. Simulate entry: record mid price as entry credit.
+  7. Each subsequent day for open positions, look up the contract's current
+     value and check management rules (50% profit, DTE ≤ 7, max loss 2×).
+  8. On exit, compute P&L and append to trade log.
+
+Usage::
+
+    from backtesting.engine import BacktestEngine, BacktestParams
+    params = BacktestParams(
+        strategy="bull_put_spread",
+        symbols=["SPY", "AAPL"],
+        start_date="2023-01-01",
+        end_date="2023-12-31",
+        delta=0.30,
+        dte_min=21,
+        dte_max=45,
+        ivr_threshold=30.0,
+        profit_close_pct=0.50,
+        contracts=1,
+    )
+    result = BacktestEngine().run(params, progress_cb=print)
+"""
+
+from __future__ import annotations
+
+import logging
+import math
+from dataclasses import asdict, dataclass, field
+from datetime import date, timedelta
+from typing import Callable, Optional
+
+logger = logging.getLogger(__name__)
+
+
+# ── Data structures ───────────────────────────────────────────────────────────
+
+SUPPORTED_STRATEGIES = [
+    "wheel_csp",
+    "bull_put_spread",
+    "bear_call_spread",
+    "iron_condor",
+    "long_call_vertical",
+]
+
+
+@dataclass
+class BacktestParams:
+    strategy: str = "bull_put_spread"
+    symbols: list[str] = field(default_factory=lambda: ["SPY"])
+    start_date: str = "2023-01-01"
+    end_date: str = "2023-12-31"
+    delta: float = 0.30
+    dte_min: int = 21
+    dte_max: int = 45
+    ivr_threshold: float = 30.0
+    profit_close_pct: float = 0.50
+    contracts: int = 1
+    # Spread width in strike units (for bull/bear/condor)
+    spread_width_strikes: int = 5
+
+
+@dataclass
+class SimulatedTrade:
+    symbol: str
+    strategy: str
+    entry_date: str
+    exit_date: Optional[str]
+    expiration_date: str
+    short_strike: float
+    long_strike: Optional[float]       # None for naked puts/calls
+    short_strike_2: Optional[float]    # call side of iron condor
+    long_strike_2: Optional[float]
+    entry_credit: float                # per-share credit collected
+    exit_debit: Optional[float]        # per-share cost to close
+    contracts: int
+    pnl: Optional[float]               # dollars (positive = profit)
+    exit_reason: Optional[str]         # profit_target | dte_expired | max_loss | still_open
+    entry_delta: float
+    entry_ivr: float
+    entry_regime: str
+    entry_iv_env: str
+    holding_days: Optional[int]
+
+
+@dataclass
+class BacktestResult:
+    params: dict
+    trades: list[SimulatedTrade]
+    # Computed metrics
+    total_pnl: float = 0.0
+    win_rate: float = 0.0
+    avg_trade_pnl: float = 0.0
+    max_drawdown: float = 0.0
+    avg_duration_days: float = 0.0
+    total_trades: int = 0
+    winning_trades: int = 0
+    monthly_returns: list[dict] = field(default_factory=list)   # [{month, pnl}]
+    equity_curve: list[dict] = field(default_factory=list)       # [{date, cumulative}]
+
+
+# ── Open position tracker ─────────────────────────────────────────────────────
+
+@dataclass
+class OpenPosition:
+    symbol: str
+    strategy: str
+    entry_date: str
+    expiration_date: str
+    short_strike: float
+    long_strike: Optional[float]
+    short_strike_2: Optional[float]
+    long_strike_2: Optional[float]
+    option_type: str                   # "put" for put side, "call" for call side
+    option_type_2: Optional[str]       # for iron condor call side
+    entry_credit: float                # net credit per share
+    entry_delta: float
+    entry_ivr: float
+    entry_regime: str
+    entry_iv_env: str
+    entry_dte: int
+    contracts: int
+
+
+# ── Engine ────────────────────────────────────────────────────────────────────
+
+class BacktestEngine:
+    """Runs a historical strategy simulation over ORATS data."""
+
+    def __init__(self) -> None:
+        from data.orats_historical import ORATSHistorical
+        self._orats = ORATSHistorical()
+
+    def run(
+        self,
+        params: BacktestParams,
+        progress_cb: Optional[Callable[[str], None]] = None,
+    ) -> BacktestResult:
+        """Execute the backtest and return a result object."""
+
+        def log(msg: str) -> None:
+            logger.info(msg)
+            if progress_cb:
+                progress_cb(msg)
+
+        log(f"Backtest starting: {params.strategy} | {params.symbols} | "
+            f"{params.start_date} → {params.end_date}")
+
+        # ── 1. Load market data (VIX, SPY SMAs) from yfinance ──────────────
+        log("Fetching historical VIX + SPY price data from yfinance...")
+        market_data = _load_market_data(params.start_date, params.end_date)
+        trading_days = sorted(market_data.keys())
+
+        if not trading_days:
+            log("ERROR: No trading days found in range.")
+            return BacktestResult(params=asdict(params), trades=[])
+
+        log(f"Found {len(trading_days)} trading days.")
+
+        # ── 2. Main simulation loop ─────────────────────────────────────────
+        completed_trades: list[SimulatedTrade] = []
+        open_positions: list[OpenPosition] = []
+        day_count = len(trading_days)
+
+        for i, trade_date in enumerate(trading_days):
+            pct = int((i + 1) / day_count * 100)
+            if i % 10 == 0 or i == day_count - 1:
+                log(f"Processing {trade_date} ({pct}%)...")
+
+            day_info = market_data[trade_date]
+
+            # ── 2a. Close / manage open positions ──────────────────────────
+            still_open: list[OpenPosition] = []
+            for pos in open_positions:
+                trade = self._manage_position(pos, trade_date, day_info)
+                if trade is not None:
+                    completed_trades.append(trade)
+                else:
+                    still_open.append(pos)
+            open_positions = still_open
+
+            # ── 2b. Evaluate new entries (one per symbol per day) ──────────
+            regime = day_info["regime"]
+            iv_env = day_info["iv_env"]
+
+            if not self._regime_allows_entry(params.strategy, regime, iv_env):
+                continue
+
+            for symbol in params.symbols:
+                # Don't stack more than one position per symbol at a time
+                if any(p.symbol == symbol for p in open_positions):
+                    continue
+
+                summary = self._orats.get_summary_on_date(symbol, trade_date)
+                if summary is None:
+                    continue
+
+                ivr = summary.get("iv_rank_1y")
+                if ivr is None or ivr < params.ivr_threshold:
+                    continue
+
+                pos = self._try_entry(params, symbol, trade_date, summary, regime, iv_env)
+                if pos is not None:
+                    open_positions.append(pos)
+                    log(f"  ENTRY {params.strategy} {symbol} on {trade_date} "
+                        f"(IVR={ivr:.0f}, regime={regime})")
+
+        # ── 3. Force-close any remaining open positions at expiration ────────
+        for pos in open_positions:
+            trade = self._force_close(pos, trading_days)
+            completed_trades.append(trade)
+
+        # ── 4. Compute metrics ───────────────────────────────────────────────
+        result = self._compute_metrics(params, completed_trades)
+        log(f"Backtest complete: {result.total_trades} trades, "
+            f"P&L=${result.total_pnl:.0f}, win rate={result.win_rate:.1f}%")
+        return result
+
+    # ── Entry simulation ─────────────────────────────────────────────────
+
+    def _try_entry(
+        self,
+        params: BacktestParams,
+        symbol: str,
+        trade_date: str,
+        summary: dict,
+        regime: str,
+        iv_env: str,
+    ) -> Optional[OpenPosition]:
+        """Attempt to find and record an entry for the given strategy."""
+
+        strategy = params.strategy
+
+        if strategy in ("wheel_csp", "bull_put_spread", "iron_condor"):
+            put_contracts = self._orats.get_strikes_on_date(
+                symbol, trade_date,
+                dte_min=params.dte_min, dte_max=params.dte_max,
+                delta_min=params.delta - 0.07, delta_max=params.delta + 0.07,
+                option_type="put",
+            )
+            if not put_contracts:
+                return None
+
+            # Pick the strike closest to target delta
+            short_put = _pick_closest_delta(put_contracts, -params.delta)
+            if short_put is None or short_put["mid_price"] is None:
+                return None
+            if short_put["mid_price"] < 0.05:
+                return None  # too cheap, skip
+
+            long_strike: Optional[float] = None
+            net_credit = short_put["mid_price"]
+
+            if strategy == "bull_put_spread":
+                # Buy a lower strike put for protection
+                long_strike = round(short_put["strike"] - params.spread_width_strikes, 2)
+                # Find the long leg's price from the same chain
+                long_put = _find_by_strike(
+                    self._orats.get_strikes_on_date(
+                        symbol, trade_date,
+                        dte_min=params.dte_min, dte_max=params.dte_max,
+                        delta_min=0.01, delta_max=params.delta - 0.05,
+                        option_type="put",
+                    ),
+                    long_strike, short_put["expiration_date"],
+                )
+                if long_put and long_put["mid_price"] is not None:
+                    net_credit = round(short_put["mid_price"] - long_put["mid_price"], 4)
+                else:
+                    # Estimate long leg as 40% of short leg price
+                    net_credit = round(short_put["mid_price"] * 0.60, 4)
+                    long_strike = round(short_put["strike"] - params.spread_width_strikes, 2)
+
+            if net_credit <= 0:
+                return None
+
+            return OpenPosition(
+                symbol=symbol,
+                strategy=strategy,
+                entry_date=trade_date,
+                expiration_date=short_put["expiration_date"],
+                short_strike=short_put["strike"],
+                long_strike=long_strike,
+                short_strike_2=None,
+                long_strike_2=None,
+                option_type="put",
+                option_type_2=None,
+                entry_credit=net_credit,
+                entry_delta=abs(short_put["delta"] or params.delta),
+                entry_ivr=summary.get("iv_rank_1y", 0),
+                entry_regime=regime,
+                entry_iv_env=iv_env,
+                entry_dte=short_put["dte"] or params.dte_min,
+                contracts=params.contracts,
+            )
+
+        elif strategy == "bear_call_spread":
+            call_contracts = self._orats.get_strikes_on_date(
+                symbol, trade_date,
+                dte_min=params.dte_min, dte_max=params.dte_max,
+                delta_min=params.delta - 0.07, delta_max=params.delta + 0.07,
+                option_type="call",
+            )
+            if not call_contracts:
+                return None
+
+            short_call = _pick_closest_delta(call_contracts, params.delta)
+            if short_call is None or short_call["mid_price"] is None:
+                return None
+            if short_call["mid_price"] < 0.05:
+                return None
+
+            long_strike = round(short_call["strike"] + params.spread_width_strikes, 2)
+            long_call = _find_by_strike(
+                self._orats.get_strikes_on_date(
+                    symbol, trade_date,
+                    dte_min=params.dte_min, dte_max=params.dte_max,
+                    delta_min=0.01, delta_max=params.delta - 0.05,
+                    option_type="call",
+                ),
+                long_strike, short_call["expiration_date"],
+            )
+            if long_call and long_call["mid_price"] is not None:
+                net_credit = round(short_call["mid_price"] - long_call["mid_price"], 4)
+            else:
+                net_credit = round(short_call["mid_price"] * 0.60, 4)
+
+            if net_credit <= 0:
+                return None
+
+            return OpenPosition(
+                symbol=symbol,
+                strategy=strategy,
+                entry_date=trade_date,
+                expiration_date=short_call["expiration_date"],
+                short_strike=short_call["strike"],
+                long_strike=long_strike,
+                short_strike_2=None,
+                long_strike_2=None,
+                option_type="call",
+                option_type_2=None,
+                entry_credit=net_credit,
+                entry_delta=abs(short_call["delta"] or params.delta),
+                entry_ivr=summary.get("iv_rank_1y", 0),
+                entry_regime=regime,
+                entry_iv_env=iv_env,
+                entry_dte=short_call["dte"] or params.dte_min,
+                contracts=params.contracts,
+            )
+
+        elif strategy == "long_call_vertical":
+            # Debit spread: buy higher delta, sell lower delta call
+            long_contracts = self._orats.get_strikes_on_date(
+                symbol, trade_date,
+                dte_min=params.dte_min, dte_max=params.dte_max,
+                delta_min=0.45, delta_max=0.60,
+                option_type="call",
+            )
+            if not long_contracts:
+                return None
+
+            long_call = _pick_closest_delta(long_contracts, 0.50)
+            if long_call is None or long_call["mid_price"] is None:
+                return None
+
+            long_strike = round(long_call["strike"] + params.spread_width_strikes, 2)
+            short_call = _find_by_strike(
+                self._orats.get_strikes_on_date(
+                    symbol, trade_date,
+                    dte_min=params.dte_min, dte_max=params.dte_max,
+                    delta_min=0.20, delta_max=0.40,
+                    option_type="call",
+                ),
+                long_strike, long_call["expiration_date"],
+            )
+
+            if short_call and short_call["mid_price"] is not None:
+                net_debit = round(long_call["mid_price"] - short_call["mid_price"], 4)
+            else:
+                net_debit = round(long_call["mid_price"] * 0.60, 4)
+
+            if net_debit <= 0:
+                return None
+
+            # Store as negative credit (debit paid)
+            return OpenPosition(
+                symbol=symbol,
+                strategy=strategy,
+                entry_date=trade_date,
+                expiration_date=long_call["expiration_date"],
+                short_strike=long_call["strike"],           # long leg stored as "short_strike"
+                long_strike=long_strike,                    # OTM short leg
+                short_strike_2=None,
+                long_strike_2=None,
+                option_type="call",
+                option_type_2=None,
+                entry_credit=-net_debit,                    # negative = debit paid
+                entry_delta=abs(long_call["delta"] or 0.50),
+                entry_ivr=summary.get("iv_rank_1y", 0),
+                entry_regime=regime,
+                entry_iv_env=iv_env,
+                entry_dte=long_call["dte"] or params.dte_min,
+                contracts=params.contracts,
+            )
+
+        return None
+
+    # ── Position management ───────────────────────────────────────────────
+
+    def _manage_position(
+        self,
+        pos: OpenPosition,
+        trade_date: str,
+        day_info: dict,
+    ) -> Optional[SimulatedTrade]:
+        """Check management rules. Return a closed SimulatedTrade, or None to keep open."""
+        try:
+            exp = date.fromisoformat(pos.expiration_date)
+            trd = date.fromisoformat(trade_date)
+        except ValueError:
+            return None
+
+        dte_remaining = (exp - trd).days
+
+        # ── Rule: DTE ≤ 7 → close ────────────────────────────────────────
+        if dte_remaining <= 7:
+            exit_debit = self._lookup_contract_price(
+                pos.symbol, trade_date, pos.short_strike,
+                pos.expiration_date, pos.option_type,
+            )
+            # If we can't get current price, use 10% of original credit as estimate
+            if exit_debit is None:
+                exit_debit = abs(pos.entry_credit) * 0.10 if pos.entry_credit > 0 else abs(pos.entry_credit) * 1.50
+
+            return self._build_trade(pos, trade_date, exit_debit, "dte_expired")
+
+        # Only do full price lookup every 3 days to reduce API calls
+        if (trd - date.fromisoformat(pos.entry_date)).days % 3 != 0:
+            return None
+
+        # ── Look up current option value ──────────────────────────────────
+        current_short_price = self._lookup_contract_price(
+            pos.symbol, trade_date, pos.short_strike,
+            pos.expiration_date, pos.option_type,
+        )
+        if current_short_price is None:
+            return None  # can't evaluate, keep open
+
+        # For spreads, estimate long leg value as well
+        if pos.long_strike is not None and pos.entry_credit > 0:
+            current_long_price = self._lookup_contract_price(
+                pos.symbol, trade_date, pos.long_strike,
+                pos.expiration_date, pos.option_type,
+            )
+            if current_long_price is None:
+                # Estimate: long decays proportionally
+                ratio = current_short_price / (abs(pos.entry_credit) + 1e-6)
+                long_entry_est = abs(pos.entry_credit) * 0.40
+                current_long_price = long_entry_est * ratio
+            exit_debit = round(current_short_price - current_long_price, 4)
+        else:
+            exit_debit = current_short_price
+
+        if pos.strategy == "long_call_vertical":
+            # Debit spread: hold for target gain, not 50% profit on credit
+            # Max profit = spread_width - entry_debit; target at 100% gain on debit
+            max_spread_value = (pos.long_strike or pos.short_strike + 5) - pos.short_strike
+            entry_debit = abs(pos.entry_credit)
+            current_spread_value = exit_debit
+            gain_pct = (current_spread_value - entry_debit) / entry_debit if entry_debit else 0
+            if gain_pct >= 1.0:  # 100% gain on debit
+                return self._build_trade(pos, trade_date, -current_spread_value, "profit_target")
+            if gain_pct <= -0.50:  # 50% loss stop
+                return self._build_trade(pos, trade_date, -current_spread_value, "max_loss")
+            return None
+
+        # ── Rule: profit target (50% of credit) ──────────────────────────
+        initial_credit = abs(pos.entry_credit)
+        if exit_debit <= initial_credit * (1 - 0.50):
+            return self._build_trade(pos, trade_date, exit_debit, "profit_target")
+
+        # ── Rule: max loss (2× credit) ────────────────────────────────────
+        if exit_debit >= initial_credit * 2.0:
+            return self._build_trade(pos, trade_date, exit_debit, "max_loss")
+
+        return None
+
+    def _lookup_contract_price(
+        self,
+        symbol: str,
+        trade_date: str,
+        strike: float,
+        expiration_date: str,
+        option_type: str,
+    ) -> Optional[float]:
+        """Return the current mid price for a specific contract, or None."""
+        contract = self._orats.find_contract_on_date(
+            symbol, trade_date, strike, expiration_date, option_type,
+        )
+        if contract is None:
+            return None
+        return contract.get("mid_price")
+
+    def _force_close(self, pos: OpenPosition, trading_days: list[str]) -> SimulatedTrade:
+        """Close a position that's still open at end of backtest (at expiration value)."""
+        # Find last available day at or before expiration
+        last_day = trading_days[-1]
+        try:
+            exp = date.fromisoformat(pos.expiration_date)
+            for d in reversed(trading_days):
+                if date.fromisoformat(d) <= exp:
+                    last_day = d
+                    break
+        except ValueError:
+            pass
+
+        # Try to get actual expiration value
+        exit_debit = self._lookup_contract_price(
+            pos.symbol, last_day, pos.short_strike,
+            pos.expiration_date, pos.option_type,
+        )
+        if exit_debit is None:
+            exit_debit = 0.0  # assume expires worthless
+
+        return self._build_trade(pos, last_day, exit_debit, "still_open")
+
+    @staticmethod
+    def _build_trade(
+        pos: OpenPosition,
+        exit_date: str,
+        exit_debit: float,
+        exit_reason: str,
+    ) -> SimulatedTrade:
+        try:
+            entry = date.fromisoformat(pos.entry_date)
+            exit_ = date.fromisoformat(exit_date)
+            holding = (exit_ - entry).days
+        except ValueError:
+            holding = None
+
+        if pos.strategy == "long_call_vertical":
+            # entry_credit is negative (debit paid); exit_debit is positive (spread value at close)
+            pnl = round((exit_debit + pos.entry_credit) * pos.contracts * 100, 2)
+        else:
+            # credit spread: credit collected minus debit to close
+            pnl = round((pos.entry_credit - exit_debit) * pos.contracts * 100, 2)
+
+        return SimulatedTrade(
+            symbol=pos.symbol,
+            strategy=pos.strategy,
+            entry_date=pos.entry_date,
+            exit_date=exit_date,
+            expiration_date=pos.expiration_date,
+            short_strike=pos.short_strike,
+            long_strike=pos.long_strike,
+            short_strike_2=pos.short_strike_2,
+            long_strike_2=pos.long_strike_2,
+            entry_credit=pos.entry_credit,
+            exit_debit=exit_debit,
+            contracts=pos.contracts,
+            pnl=pnl,
+            exit_reason=exit_reason,
+            entry_delta=pos.entry_delta,
+            entry_ivr=pos.entry_ivr,
+            entry_regime=pos.entry_regime,
+            entry_iv_env=pos.entry_iv_env,
+            holding_days=holding,
+        )
+
+    # ── Routing logic ─────────────────────────────────────────────────────
+
+    @staticmethod
+    def _regime_allows_entry(strategy: str, regime: str, iv_env: str) -> bool:
+        """Mirror the StrategyRouter routing rules for backtesting."""
+        if regime == "CRASH":
+            return False
+        if strategy == "wheel_csp":
+            return regime in ("NEUTRAL", "BULL") and iv_env in ("MODERATE", "HIGH")
+        if strategy == "bull_put_spread":
+            return regime in ("NEUTRAL", "BULL") and iv_env in ("MODERATE", "HIGH")
+        if strategy == "bear_call_spread":
+            return regime in ("BEAR", "NEUTRAL") and iv_env in ("MODERATE", "HIGH")
+        if strategy == "iron_condor":
+            return regime == "NEUTRAL" and iv_env == "HIGH"
+        if strategy == "long_call_vertical":
+            return regime == "BULL" and iv_env == "LOW"
+        return False
+
+    # ── Metrics ───────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _compute_metrics(
+        params: BacktestParams, trades: list[SimulatedTrade],
+    ) -> BacktestResult:
+        if not trades:
+            return BacktestResult(params=asdict(params), trades=[])
+
+        closed = [t for t in trades if t.pnl is not None]
+        total_pnl = sum(t.pnl for t in closed)
+        winners = [t for t in closed if t.pnl and t.pnl > 0]
+        win_rate = len(winners) / len(closed) * 100 if closed else 0.0
+        avg_pnl = total_pnl / len(closed) if closed else 0.0
+        durations = [t.holding_days for t in closed if t.holding_days is not None]
+        avg_duration = sum(durations) / len(durations) if durations else 0.0
+
+        # Max drawdown from cumulative P&L curve
+        cumulative = 0.0
+        peak = 0.0
+        max_dd = 0.0
+        equity_curve: list[dict] = []
+        daily_pnl: dict[str, float] = {}
+        for t in sorted(closed, key=lambda x: x.exit_date or ""):
+            key = (t.exit_date or "")[:10]
+            daily_pnl[key] = daily_pnl.get(key, 0.0) + (t.pnl or 0.0)
+        for d in sorted(daily_pnl):
+            cumulative += daily_pnl[d]
+            equity_curve.append({"date": d, "cumulative_pnl": round(cumulative, 2)})
+            if cumulative > peak:
+                peak = cumulative
+            dd = peak - cumulative
+            if dd > max_dd:
+                max_dd = dd
+
+        # Monthly returns
+        monthly: dict[str, float] = {}
+        for t in closed:
+            month = (t.exit_date or "")[:7]  # YYYY-MM
+            if month:
+                monthly[month] = monthly.get(month, 0.0) + (t.pnl or 0.0)
+        monthly_returns = [
+            {"month": m, "pnl": round(v, 2)}
+            for m, v in sorted(monthly.items())
+        ]
+
+        return BacktestResult(
+            params=asdict(params),
+            trades=closed,
+            total_pnl=round(total_pnl, 2),
+            win_rate=round(win_rate, 1),
+            avg_trade_pnl=round(avg_pnl, 2),
+            max_drawdown=round(max_dd, 2),
+            avg_duration_days=round(avg_duration, 1),
+            total_trades=len(closed),
+            winning_trades=len(winners),
+            monthly_returns=monthly_returns,
+            equity_curve=equity_curve,
+        )
+
+
+# ── Market data helpers ───────────────────────────────────────────────────────
+
+def _load_market_data(start_date: str, end_date: str) -> dict[str, dict]:
+    """Load VIX + SPY from yfinance and compute daily regime info.
+
+    Returns a dict keyed by ISO date string with:
+      - vix: float
+      - spy_close: float
+      - above_sma_50: bool
+      - above_sma_200: bool
+      - regime: str
+      - iv_env: str  (MODERATE as default — caller overrides with ORATS data)
+    """
+    try:
+        import yfinance as yf
+        import pandas as pd
+    except ImportError:
+        logger.error("yfinance is required for backtesting. pip install yfinance")
+        return {}
+
+    # Fetch extra history for SMA-200 warm-up
+    extra = timedelta(days=300)
+    fetch_start = (date.fromisoformat(start_date) - extra).isoformat()
+
+    logger.info("Downloading ^VIX history...")
+    vix_df = yf.download("^VIX", start=fetch_start, end=end_date, progress=False, auto_adjust=False)
+
+    logger.info("Downloading SPY history...")
+    spy_df = yf.download("SPY", start=fetch_start, end=end_date, progress=False, auto_adjust=True)
+
+    if vix_df.empty or spy_df.empty:
+        logger.error("yfinance returned empty data")
+        return {}
+
+    # Flatten multi-index columns if present
+    if hasattr(vix_df.columns, "levels"):
+        vix_df.columns = [c[0] for c in vix_df.columns]
+    if hasattr(spy_df.columns, "levels"):
+        spy_df.columns = [c[0] for c in spy_df.columns]
+
+    spy_close = spy_df["Close"].squeeze()
+    sma50 = spy_close.rolling(50).mean()
+    sma200 = spy_close.rolling(200).mean()
+    vix_close = vix_df["Close"].squeeze()
+
+    from data.market_regime import _classify_regime
+
+    result: dict[str, dict] = {}
+    start_dt = date.fromisoformat(start_date)
+    end_dt = date.fromisoformat(end_date)
+
+    for idx in spy_close.index:
+        try:
+            d = idx.date() if hasattr(idx, "date") else date.fromisoformat(str(idx)[:10])
+        except Exception:
+            continue
+        if d < start_dt or d > end_dt:
+            continue
+
+        date_str = d.isoformat()
+        vix = _safe_scalar(vix_close, idx)
+        spy = _safe_scalar(spy_close, idx)
+        s50 = _safe_scalar(sma50, idx)
+        s200 = _safe_scalar(sma200, idx)
+
+        above_50 = (spy is not None and s50 is not None and spy > s50)
+        above_200 = (spy is not None and s200 is not None and spy > s200)
+        below_50 = not above_50
+        below_200 = not above_200
+
+        regime = _classify_regime(vix, below_50, below_200, above_50, None)
+
+        result[date_str] = {
+            "vix": vix,
+            "spy_close": spy,
+            "above_sma_50": above_50,
+            "above_sma_200": above_200,
+            "regime": regime,
+            "iv_env": "MODERATE",  # will be refined per-symbol using ORATS data
+        }
+
+    return result
+
+
+def _safe_scalar(series, idx) -> Optional[float]:
+    try:
+        val = series[idx]
+        if hasattr(val, "__len__"):
+            val = val.iloc[0]
+        f = float(val)
+        return None if math.isnan(f) else round(f, 4)
+    except Exception:
+        return None
+
+
+# ── Strike selection helpers ──────────────────────────────────────────────────
+
+def _pick_closest_delta(contracts: list[dict], target_delta: float) -> Optional[dict]:
+    """Pick the contract with delta closest to target_delta."""
+    best: Optional[dict] = None
+    best_dist = float("inf")
+    for c in contracts:
+        d = c.get("delta")
+        if d is None:
+            continue
+        dist = abs(float(d) - target_delta)
+        if dist < best_dist:
+            best_dist = dist
+            best = c
+    return best
+
+
+def _find_by_strike(
+    contracts: list[dict],
+    target_strike: float,
+    expiration_date: str,
+) -> Optional[dict]:
+    """Find a contract matching a specific strike and expiration."""
+    for c in contracts:
+        s = c.get("strike")
+        e = c.get("expiration_date", "")
+        if s is not None and abs(float(s) - target_strike) < 0.5 and e == expiration_date:
+            return c
+    # Fallback: just match strike (different expiration may be close enough)
+    for c in contracts:
+        s = c.get("strike")
+        if s is not None and abs(float(s) - target_strike) < 1.0:
+            return c
+    return None

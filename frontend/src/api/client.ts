@@ -164,6 +164,26 @@ export const api = {
 
   sourceHealth: () => get<SourceHealthResponse>('/api/source-health'),
 
+  startBacktest: async (params: Record<string, unknown>): Promise<{ job_id: string; status: string }> => {
+    const res = await fetch(`${BASE}/api/backtest`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify(params),
+    })
+    if (res.status === 401) { _handleUnauthorized(); throw new Error('Unauthorized') }
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }))
+      throw new Error(err.error ?? `API error ${res.status}`)
+    }
+    return res.json()
+  },
+
+  getBacktestJob: (jobId: string) =>
+    get<{ job_id: string; status: string; progress: string; error?: string | null; result?: unknown }>(
+      `/api/backtest/${jobId}`,
+    ),
+
   watchlist: () =>
     get<{ wheel: string[]; iron_condor: string[]; spreads: string[]; updated_at: string | null }>('/api/watchlist'),
 
