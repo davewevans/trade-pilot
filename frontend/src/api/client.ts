@@ -64,8 +64,16 @@ async function fetchWithRetry(
   throw new Error(`fetchWithRetry exhausted retries for ${url}`)
 }
 
+function _handleUnauthorized() {
+  window.dispatchEvent(new Event('auth:expired'))
+}
+
 async function get<T>(path: string): Promise<T> {
   const res = await fetchWithRetry(`${BASE}${path}`)
+  if (res.status === 401) {
+    _handleUnauthorized()
+    throw new Error(`Unauthorized: ${path}`)
+  }
   if (!res.ok) throw new Error(`API error ${res.status}: ${path}`)
   return (await res.json()) as T
 }
@@ -120,6 +128,7 @@ export const api = {
       method: 'POST',
       credentials: 'include',
     })
+    if (res.status === 401) { _handleUnauthorized(); throw new Error('Unauthorized') }
     if (!res.ok) throw new Error(`API error ${res.status}: reset-circuit-breaker`)
     return (await res.json()) as { status: string; deleted: string[] }
   },
@@ -149,6 +158,7 @@ export const api = {
       credentials: 'include',
       body: JSON.stringify({ wheel, spreads }),
     })
+    if (res.status === 401) { _handleUnauthorized(); throw new Error('Unauthorized') }
     if (!res.ok) {
       const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }))
       throw new Error(err.error ?? `API error ${res.status}`)
