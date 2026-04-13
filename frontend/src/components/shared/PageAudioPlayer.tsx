@@ -251,8 +251,8 @@ export function PageAudioPlayer({ contentRef }: Props) {
     <div
       className="mt-10 rounded-lg border px-4 py-3 flex flex-wrap items-center gap-3 text-sm"
       style={{
-        backgroundColor: 'var(--bg-card)',
-        borderColor: 'var(--border)',
+        backgroundColor: 'color-mix(in srgb, var(--accent) 18%, #0a0b10)',
+        borderColor: 'color-mix(in srgb, var(--accent) 45%, transparent)',
         color: 'var(--text-secondary)',
         position: 'sticky',
         bottom: '1rem',
