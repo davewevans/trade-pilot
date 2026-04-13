@@ -1,3 +1,6 @@
+import { useRef } from 'react'
+import { PageAudioPlayer } from '../components/shared/PageAudioPlayer'
+
 function PageHeader({ title, subtitle }: { title: string; subtitle: string }) {
   return (
     <div className="mb-6">
@@ -186,8 +189,9 @@ function StepCard({
 }
 
 export function TradeLifecycle() {
+  const contentRef = useRef<HTMLDivElement>(null)
   return (
-    <div className="max-w-5xl">
+    <div ref={contentRef} className="max-w-5xl">
       <PageHeader
         title="Life of a Trade"
         subtitle="What happens after the bot opens a position — from entry to close, step by step."
@@ -568,6 +572,8 @@ export function TradeLifecycle() {
           This bot runs on paper trading accounts. No real capital is at risk.
         </p>
       </div>
+
+      <PageAudioPlayer contentRef={contentRef} />
     </div>
   )
 }

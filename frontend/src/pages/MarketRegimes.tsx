@@ -1,3 +1,6 @@
+import { useRef } from 'react'
+import { PageAudioPlayer } from '../components/shared/PageAudioPlayer'
+
 function SectionHeader({ children }: { children: React.ReactNode }) {
   return (
     <h2
@@ -195,8 +198,9 @@ const ROUTING_ROWS = [
 ]
 
 export function MarketRegimes() {
+  const contentRef = useRef<HTMLDivElement>(null)
   return (
-    <div className="max-w-5xl">
+    <div ref={contentRef} className="max-w-5xl">
       <div className="mb-6">
         <h1 className="text-2xl font-semibold" style={{ color: 'var(--text-primary)' }}>
           Market Regimes
@@ -368,6 +372,8 @@ export function MarketRegimes() {
         The Wheel and Iron Condor accounts are not affected by this routing table — they run their
         own internal checks independently of the Spreads account routing logic.
       </p>
+
+      <PageAudioPlayer contentRef={contentRef} />
     </div>
   )
 }

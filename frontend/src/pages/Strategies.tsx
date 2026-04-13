@@ -1,3 +1,6 @@
+import { useRef } from 'react'
+import { PageAudioPlayer } from '../components/shared/PageAudioPlayer'
+
 function PageHeader({ title, subtitle }: { title: string; subtitle: string }) {
   return (
     <div className="mb-6">
@@ -168,8 +171,9 @@ const ROUTING_ROWS = [
 ]
 
 export function Strategies() {
+  const contentRef = useRef<HTMLDivElement>(null)
   return (
-    <div className="max-w-5xl">
+    <div ref={contentRef} className="max-w-5xl">
       <PageHeader
         title="Strategies"
         subtitle="What each account does, in plain language."
@@ -475,6 +479,8 @@ export function Strategies() {
           to halt before this scenario fully materializes.
         </div>
       </div>
+
+      <PageAudioPlayer contentRef={contentRef} />
     </div>
   )
 }

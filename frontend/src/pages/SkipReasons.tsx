@@ -1,3 +1,6 @@
+import { useRef } from 'react'
+import { PageAudioPlayer } from '../components/shared/PageAudioPlayer'
+
 type Reason = {
   reason: string
   body: string
@@ -239,8 +242,9 @@ function CategoryBlock({ cat }: { cat: Category }) {
 }
 
 export function SkipReasons() {
+  const contentRef = useRef<HTMLDivElement>(null)
   return (
-    <div className="max-w-5xl">
+    <div ref={contentRef} className="max-w-5xl">
       <div className="mb-6">
         <h1 className="text-2xl font-semibold" style={{ color: 'var(--text-primary)' }}>
           Why Trades Get Skipped
@@ -278,6 +282,8 @@ export function SkipReasons() {
           </p>
         </div>
       </section>
+
+      <PageAudioPlayer contentRef={contentRef} />
     </div>
   )
 }

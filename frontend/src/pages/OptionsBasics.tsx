@@ -1,3 +1,6 @@
+import { useRef } from 'react'
+import { PageAudioPlayer } from '../components/shared/PageAudioPlayer'
+
 function PageHeader({ title, subtitle }: { title: string; subtitle: string }) {
   return (
     <div className="mb-6">
@@ -132,8 +135,9 @@ function Badge({
 }
 
 export function OptionsBasics() {
+  const contentRef = useRef<HTMLDivElement>(null)
   return (
-    <div className="max-w-5xl">
+    <div ref={contentRef} className="max-w-5xl">
       <PageHeader
         title="Options Basics"
         subtitle="Options trading explained without the jargon. Start here if you're new."
@@ -405,6 +409,8 @@ export function OptionsBasics() {
         This bot runs on paper trading accounts. No real capital is at risk. It's a learning tool
         built to understand options through building and observing.
       </p>
+
+      <PageAudioPlayer contentRef={contentRef} />
     </div>
   )
 }

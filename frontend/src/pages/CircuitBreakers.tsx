@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { api } from '../api/client'
+import { PageAudioPlayer } from '../components/shared/PageAudioPlayer'
 
 type Threshold = {
   level: string
@@ -149,6 +150,7 @@ export function CircuitBreakers() {
   const [dryRun, setDryRun] = useState<boolean>(false)
   const [resetting, setResetting] = useState(false)
   const [resetMsg, setResetMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+  const contentRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -195,7 +197,7 @@ export function CircuitBreakers() {
   }
 
   return (
-    <div className="max-w-5xl">
+    <div ref={contentRef} className="max-w-5xl">
       <div className="mb-6 flex items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold" style={{ color: 'var(--text-primary)' }}>
@@ -381,6 +383,8 @@ export function CircuitBreakers() {
         does not drop — only new highs update it. This means a portfolio that recovers from a 10%
         drawdown and then drops again will trigger the threshold again relative to the same (or new) peak.
       </div>
+
+      <PageAudioPlayer contentRef={contentRef} />
     </div>
   )
 }

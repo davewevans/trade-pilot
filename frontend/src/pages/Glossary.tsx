@@ -1,4 +1,5 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
+import { PageAudioPlayer } from '../components/shared/PageAudioPlayer'
 
 type Term = { term: string; def: string }
 type Section = { title: string; terms: Term[] }
@@ -114,6 +115,7 @@ function highlight(text: string, query: string): React.ReactNode {
 
 export function Glossary() {
   const [query, setQuery] = useState('')
+  const contentRef = useRef<HTMLDivElement>(null)
   const q = query.trim().toLowerCase()
 
   const filtered = useMemo(() => {
@@ -129,7 +131,7 @@ export function Glossary() {
   const totalMatches = filtered.reduce((n, s) => n + s.terms.length, 0)
 
   return (
-    <div className="max-w-5xl">
+    <div ref={contentRef} className="max-w-5xl">
       <div className="mb-6">
         <h1 className="text-2xl font-semibold" style={{ color: 'var(--text-primary)' }}>
           Glossary
@@ -203,6 +205,8 @@ export function Glossary() {
           </div>
         </section>
       ))}
+
+      <PageAudioPlayer contentRef={contentRef} />
     </div>
   )
 }

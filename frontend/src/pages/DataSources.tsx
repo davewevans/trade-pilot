@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { api, type SourceHealthEntry } from '../api/client'
+import { PageAudioPlayer } from '../components/shared/PageAudioPlayer'
 
 type Source = {
   name: string
@@ -473,13 +474,14 @@ const FALLBACK_CHAIN = [
 
 export function DataSources() {
   const [healthSources, setHealthSources] = useState<Record<string, SourceHealthEntry>>({})
+  const contentRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     api.sourceHealth().then((d) => setHealthSources(d.sources)).catch(() => {})
   }, [])
 
   return (
-    <div className="max-w-5xl">
+    <div ref={contentRef} className="max-w-5xl">
       <div className="mb-6">
         <h1 className="text-2xl font-semibold" style={{ color: 'var(--text-primary)' }}>
           Data Sources
@@ -533,6 +535,8 @@ export function DataSources() {
           ))}
         </div>
       </section>
+
+      <PageAudioPlayer contentRef={contentRef} />
     </div>
   )
 }

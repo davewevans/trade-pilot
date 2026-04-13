@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
+import { PageAudioPlayer } from '../components/shared/PageAudioPlayer'
 
 type QA = { q: string; a: string }
 type Group = { title: string; items: QA[] }
@@ -143,6 +144,7 @@ function QAItem({
 export function FAQ() {
   // Track open items by a "groupIdx:itemIdx" key — multiple can be open at once.
   const [openKeys, setOpenKeys] = useState<Set<string>>(new Set())
+  const contentRef = useRef<HTMLDivElement>(null)
 
   const toggle = (key: string) =>
     setOpenKeys((prev) => {
@@ -160,7 +162,7 @@ export function FAQ() {
   const collapseAll = () => setOpenKeys(new Set())
 
   return (
-    <div className="max-w-5xl">
+    <div ref={contentRef} className="max-w-5xl">
       <div className="mb-6 flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold" style={{ color: 'var(--text-primary)' }}>
@@ -221,6 +223,8 @@ export function FAQ() {
           </div>
         </section>
       ))}
+
+      <PageAudioPlayer contentRef={contentRef} />
     </div>
   )
 }

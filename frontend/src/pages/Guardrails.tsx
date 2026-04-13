@@ -1,3 +1,6 @@
+import { useRef } from 'react'
+import { PageAudioPlayer } from '../components/shared/PageAudioPlayer'
+
 type Rule = {
   title: string
   body: string
@@ -182,8 +185,9 @@ function CircuitColorCard({
 }
 
 export function Guardrails() {
+  const contentRef = useRef<HTMLDivElement>(null)
   return (
-    <div className="max-w-5xl">
+    <div ref={contentRef} className="max-w-5xl">
       <PageHeader
         title="Guardrails"
         subtitle="Safety rules that protect the portfolio. These are enforced in code — Claude cannot override them."
@@ -273,6 +277,8 @@ export function Guardrails() {
           description="All new positions halted. Existing positions still managed."
         />
       </div>
+
+      <PageAudioPlayer contentRef={contentRef} />
     </div>
   )
 }
