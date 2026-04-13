@@ -506,6 +506,10 @@ def circuit_breakers():
     data = _read_json(SNAPSHOTS / "circuit_breakers.json")
     if data is None:
         return JSONResponse(status_code=503, content={"error": "No circuit breaker data yet"})
+    # Override the stale on-disk dry_run flag with the live env var so the
+    # dashboard reflects a DRY_RUN change immediately after redeploy, without
+    # waiting for the scheduler to write a fresh snapshot.
+    data["dry_run"] = os.environ.get("DRY_RUN", "false").lower() == "true"
     return data
 
 
