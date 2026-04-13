@@ -242,7 +242,7 @@ export function Watchlist() {
   }
 
   return (
-    <div className="space-y-6 max-w-4xl">
+    <div className="space-y-6">
       <div className="flex items-start justify-between gap-4">
         <div>
           <h2 className="section-heading">Watchlist</h2>
@@ -263,7 +263,7 @@ export function Watchlist() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
         <WatchlistSection
           title="Wheel Watchlist"
           note="Stocks the bot might buy 100 shares of through the wheel strategy. Only add stocks you've researched and would be comfortable holding."
