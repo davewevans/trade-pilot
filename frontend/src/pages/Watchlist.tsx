@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { api } from '../api/client'
 
 const SYMBOL_SECTORS: Record<string, string> = {
@@ -195,9 +195,10 @@ export function Watchlist() {
   const [ironCondor, setIronCondor] = useState<string[]>([])
   const [spreads, setSpreads] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
-  const [saving, setSaving] = useState(false)
-  const [savedAt, setSavedAt] = useState<string | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
+  const [saveError, setSaveError] = useState<string | null>(null)
+  const initialized = useRef(false)
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
     api.watchlist()
@@ -205,24 +206,32 @@ export function Watchlist() {
         setWheel(data.wheel)
         setIronCondor(data.iron_condor)
         setSpreads(data.spreads)
-        setSavedAt(data.updated_at)
+        initialized.current = true
       })
-      .catch(() => setError('Failed to load watchlist'))
+      .catch(() => setSaveError('Failed to load watchlist'))
       .finally(() => setLoading(false))
   }, [])
 
-  const save = async () => {
-    setSaving(true)
-    setError(null)
-    try {
-      const data = await api.updateWatchlist(wheel, ironCondor, spreads)
-      setSavedAt(data.updated_at)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Save failed')
-    } finally {
-      setSaving(false)
+  // Auto-save 800ms after any list change, skipping the initial load
+  useEffect(() => {
+    if (!initialized.current) return
+    if (debounceRef.current) clearTimeout(debounceRef.current)
+    setSaveStatus('saving')
+    debounceRef.current = setTimeout(async () => {
+      try {
+        await api.updateWatchlist(wheel, ironCondor, spreads)
+        setSaveStatus('saved')
+        setSaveError(null)
+        setTimeout(() => setSaveStatus('idle'), 2500)
+      } catch (err) {
+        setSaveStatus('error')
+        setSaveError(err instanceof Error ? err.message : 'Save failed')
+      }
+    }, 800)
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current)
     }
-  }
+  }, [wheel, ironCondor, spreads])
 
   if (loading) {
     return (
@@ -234,16 +243,24 @@ export function Watchlist() {
 
   return (
     <div className="space-y-6 max-w-4xl">
-      <div>
-        <h2 className="section-heading">Watchlist</h2>
-        <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>
-          Changes take effect on the next scheduler cycle — no restart needed.
-          {savedAt && (
-            <span style={{ color: 'var(--text-muted)' }}>
-              {' '}Last saved {new Date(savedAt).toLocaleString()}.
-            </span>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h2 className="section-heading">Watchlist</h2>
+          <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>
+            Changes are saved automatically and take effect on the next scheduler cycle.
+          </p>
+        </div>
+        <div className="text-sm shrink-0 pt-1">
+          {saveStatus === 'saving' && (
+            <span style={{ color: 'var(--text-muted)' }}>Saving…</span>
           )}
-        </p>
+          {saveStatus === 'saved' && (
+            <span style={{ color: 'var(--green)' }}>Saved</span>
+          )}
+          {saveStatus === 'error' && (
+            <span style={{ color: 'var(--red)' }}>{saveError ?? 'Save failed'}</span>
+          )}
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -270,32 +287,9 @@ export function Watchlist() {
         />
       </div>
 
-      {error && (
-        <div
-          className="rounded px-4 py-2 text-sm"
-          style={{ backgroundColor: 'color-mix(in srgb, var(--red) 12%, var(--bg-card))', color: 'var(--red)', border: '1px solid color-mix(in srgb, var(--red) 30%, var(--border))' }}
-        >
-          {error}
-        </div>
-      )}
-
-      <div className="flex items-center gap-4">
-        <button
-          onClick={save}
-          disabled={saving}
-          className="px-5 py-2 rounded font-medium text-sm"
-          style={{
-            backgroundColor: saving ? 'var(--text-muted)' : 'var(--accent)',
-            color: '#fff',
-            cursor: saving ? 'default' : 'pointer',
-          }}
-        >
-          {saving ? 'Saving…' : 'Save watchlist'}
-        </button>
-        <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
-          {wheel.length} wheel · {ironCondor.length} iron condor · {spreads.length} spreads
-        </span>
-      </div>
+      <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+        {wheel.length} wheel · {ironCondor.length} iron condor · {spreads.length} spreads
+      </p>
     </div>
   )
 }
