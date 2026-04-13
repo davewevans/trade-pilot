@@ -5,6 +5,8 @@ import logging
 from datetime import datetime
 from pathlib import Path
 
+from version import VERSION
+
 logger = logging.getLogger(__name__)
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -38,7 +40,10 @@ class TradeJournal:
                 "long_call_vertical"
             skip_reason: if action is skip, the reason string
         """
-        record = {"timestamp": datetime.now().isoformat(timespec="seconds")}
+        record = {
+            "timestamp": datetime.now().isoformat(timespec="seconds"),
+            "version": VERSION,
+        }
         record.update(entry)
         with open(self.path, "a", encoding="utf-8") as f:
             f.write(json.dumps(record, default=str) + "\n")

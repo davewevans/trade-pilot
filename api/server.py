@@ -20,7 +20,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from config import settings
@@ -452,7 +452,27 @@ def health():
         # produces the wrong wall-clock when the server runs in UTC (Render).
         "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "halted": LOCK_PATH.exists(),
+        # Surfaced here so the dashboard's existing 30s health poll
+        # populates the version badge without needing a separate fetch.
+        "version": settings.VERSION,
+        "version_date": settings.VERSION_DATE,
     }
+
+
+_CHANGELOG_PATH = Path(__file__).resolve().parent.parent / "CHANGELOG.md"
+
+
+@app.get("/changelog")
+def changelog():
+    """Return CHANGELOG.md as plain text. Auth-gated by the middleware."""
+    try:
+        text = _CHANGELOG_PATH.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return PlainTextResponse(
+            "CHANGELOG.md not found on server.",
+            status_code=404,
+        )
+    return PlainTextResponse(text)
 
 
 @app.get("/api/portfolio")

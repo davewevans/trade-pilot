@@ -13,6 +13,13 @@ log = logging.getLogger(__name__)
 
 class Settings:
     def __init__(self):
+        # Re-exported from version.py so callers reference settings.VERSION
+        # rather than importing the version module everywhere.
+        from version import VERSION, VERSION_DATE, VERSION_NOTES
+        self.VERSION: str = VERSION
+        self.VERSION_DATE: str = VERSION_DATE
+        self.VERSION_NOTES: str = VERSION_NOTES
+
         self.BROKER: str = os.getenv("BROKER", "alpaca")
 
         self.ALPACA_API_KEY: str = self._require("ALPACA_API_KEY")

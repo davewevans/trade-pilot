@@ -78,6 +78,18 @@ export function TopBar() {
             })}
           </span>
         )}
+        {health?.version && (
+          <a
+            href="/changelog"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="font-mono opacity-75 hover:opacity-100 underline-offset-2 hover:underline"
+            title="View changelog"
+          >
+            trade-pilot v{health.version}
+            {health.version_date ? ` · ${health.version_date}` : ''}
+          </a>
+        )}
       </div>
     </header>
   )

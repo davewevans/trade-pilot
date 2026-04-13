@@ -124,6 +124,8 @@ export interface HealthStatus {
   status: string
   timestamp: string
   halted: boolean
+  version?: string
+  version_date?: string
 }
 
 export interface CircuitBreaker {
