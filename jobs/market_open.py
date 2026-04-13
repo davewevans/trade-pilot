@@ -351,6 +351,26 @@ def run() -> None:
             else:
                 logger.info("%s no order (action=%s)", symbol, decision.get("action"))
 
+            # Track premium for cost-basis calculation. We credit the limit
+            # price at submit time; reconciliation later may adjust on fill.
+            if (
+                result
+                and decision_action in ("sell_put", "sell_call")
+                and decision.get("limit_price") is not None
+            ):
+                wheel_strategy.total_premium_collected += abs(
+                    float(decision.get("limit_price"))
+                )
+                wheel_strategy.save_state()
+            elif result and decision_action == "roll":
+                wheel_strategy.roll_count += 1
+                # Roll credit (if any) comes through as a positive limit_price
+                # by convention; net debits should not occur per the prompt.
+                lp = decision.get("limit_price")
+                if lp is not None:
+                    wheel_strategy.total_premium_collected += float(lp)
+                wheel_strategy.save_state()
+
             if recorder is not None and order_id and cycle_id_db:
                 recorder.record_trade(
                     cycle_id=cycle_id_db,

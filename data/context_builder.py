@@ -219,6 +219,40 @@ class ContextBuilder:
         context["positions"] = self._fetch_positions(symbol)
         context["open_orders"] = self._fetch_orders(symbol)
 
+        # ── Wheel cost basis (LONG_STOCK / SHORT_CALL only) ─
+        # Surfaced from wheel_state.json so Claude can enforce the
+        # "CC strike must be above effective cost basis" rule.
+        if wheel_state in ("LONG_STOCK", "SHORT_CALL"):
+            try:
+                from strategies.wheel_strategy import STATE_FILE
+                import json as _json, os as _os
+                if _os.path.exists(STATE_FILE):
+                    with open(STATE_FILE, "r") as _f:
+                        _wstate = _json.load(_f)
+                    pos = (
+                        next(
+                            (
+                                p for p in (context["positions"] or [])
+                                if (p.get("symbol") or "").upper() == symbol.upper()
+                            ),
+                            None,
+                        )
+                        or {}
+                    )
+                    assignment_price = float(pos.get("avg_entry_price", 0) or 0)
+                    context["wheel_cost_basis"] = {
+                        "effective_cost_basis": _wstate.get("cost_basis"),
+                        "assignment_price": assignment_price,
+                        "total_premium_collected": float(
+                            _wstate.get("total_premium_collected", 0) or 0
+                        ),
+                        "roll_count": int(_wstate.get("roll_count", 0) or 0),
+                    }
+            except Exception:
+                logger.warning(
+                    "Failed to surface wheel cost basis for %s", symbol, exc_info=True,
+                )
+
         # ── Option chain (depends on technicals for price) ──
         current_price = None
         if context["technicals"] and "current_price" in context["technicals"]:

@@ -47,6 +47,11 @@ class WheelStrategy:
         self.symbol: str | None = None
         self.state: WheelState = WheelState.IDLE
         self.open_position: dict | None = None
+        # Effective cost basis tracking — see save_state/_load_state.
+        # cost_basis = assignment strike − total premium collected this cycle
+        self.cost_basis: float | None = None
+        self.total_premium_collected: float = 0.0
+        self.roll_count: int = 0
 
         self._load_state()
 
@@ -64,6 +69,11 @@ class WheelStrategy:
             self.symbol = data.get("symbol")
             self.state = WheelState(data.get("state", "IDLE"))
             self.open_position = data.get("open_position")
+            self.cost_basis = data.get("cost_basis")
+            self.total_premium_collected = float(
+                data.get("total_premium_collected", 0.0) or 0.0
+            )
+            self.roll_count = int(data.get("roll_count", 0) or 0)
             logger.info(
                 "Loaded state: symbol=%s state=%s", self.symbol, self.state.value
             )
@@ -77,6 +87,9 @@ class WheelStrategy:
             "symbol": self.symbol,
             "state": self.state.value,
             "open_position": self.open_position,
+            "cost_basis": self.cost_basis,
+            "total_premium_collected": self.total_premium_collected,
+            "roll_count": self.roll_count,
             "updated_at": datetime.now().isoformat(),
         }
         from pathlib import Path
@@ -138,15 +151,38 @@ class WheelStrategy:
             if qty >= 100:
                 self.state = WheelState.LONG_STOCK
                 self.open_position = stock_pos
+                # Recompute effective cost basis the first time we observe
+                # the assignment (i.e. when cost_basis is unset). On
+                # subsequent ticks we leave it untouched so manual edits
+                # or future roll-credit adjustments survive.
+                if self.cost_basis is None:
+                    assignment_price = float(
+                        stock_pos.get("avg_entry_price", 0) or 0
+                    )
+                    self.cost_basis = round(
+                        assignment_price - self.total_premium_collected, 4,
+                    )
+                    logger.info(
+                        "Reconciled state → LONG_STOCK (%s shares, "
+                        "cost_basis=%.2f, assignment=%.2f, "
+                        "premium_collected=%.2f)",
+                        qty, self.cost_basis, assignment_price,
+                        self.total_premium_collected,
+                    )
+                else:
+                    logger.info("Reconciled state → LONG_STOCK (%s shares)", qty)
                 self.save_state()
-                logger.info("Reconciled state → LONG_STOCK (%s shares)", qty)
                 return self.state
         except Exception:
             pass  # No stock position — that's fine
 
-        # No relevant positions found
+        # No relevant positions found — wheel cycle complete; reset
+        # cost-basis tracking so the next CSP starts from a clean slate.
         self.state = WheelState.IDLE
         self.open_position = None
+        self.cost_basis = None
+        self.total_premium_collected = 0.0
+        self.roll_count = 0
         self.save_state()
         logger.info("Reconciled state → IDLE (no positions for %s)", symbol)
         return self.state
@@ -237,6 +273,18 @@ class WheelStrategy:
                 ),
             },
             "iv_rank": iv_rank,
+            "wheel_cost_basis": (
+                {
+                    "effective_cost_basis": self.cost_basis,
+                    "assignment_price": float(
+                        (self.open_position or {}).get("avg_entry_price", 0) or 0
+                    ),
+                    "total_premium_collected": self.total_premium_collected,
+                    "roll_count": self.roll_count,
+                }
+                if current_state in (WheelState.LONG_STOCK, WheelState.SHORT_CALL)
+                else None
+            ),
             "metadata": {
                 "symbol": symbol,
                 "timestamp": datetime.now().isoformat(),

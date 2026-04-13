@@ -4,7 +4,15 @@ You currently own 100 shares from a put assignment. Your task is to
 evaluate whether to sell a covered call against those shares.
 
 The equity position is in context under "positions".
-Your cost basis (what you paid per share) is in the position data.
+
+Your effective cost basis is in context under "wheel_cost_basis":
+- effective_cost_basis: what you effectively paid per share (assignment
+  strike − all premiums collected this cycle)
+- assignment_price: the strike price at which you were assigned
+- total_premium_collected: all premium from CSP + any rolls
+- roll_count: how many times the position has been rolled
+
+The CC strike must be ABOVE effective_cost_basis, not just assignment_price.
 
 **FIRST — check if you should sell the shares instead of writing a CC:**
 1. Calculate: (current_price - cost_basis) / cost_basis = unrealized_pnl_pct
