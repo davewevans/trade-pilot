@@ -1,4 +1,9 @@
-"""Market open job — runs at 9:30 AM ET every weekday."""
+"""Market open job — runs at 10:00 AM ET every weekday.
+
+Shifted from 9:30 to 10:00: options bid-ask spreads and Greeks are
+unreliable in the first 30 minutes after the equity open, and our
+limit-at-mid orders fill more cleanly once the quotes settle.
+"""
 
 import json
 import logging
@@ -81,7 +86,7 @@ def run() -> None:
     if cb.is_halted():
         logger.warning("CIRCUIT BREAKER HALTED — skipping all trading decisions")
         append_section(
-            "Market Open Decisions (9:30 AM ET)",
+            "Market Open Decisions (10:00 AM ET)",
             "**HALTED** — Circuit breaker lock file active. No trades placed.",
         )
         logger.info("=== MARKET OPEN JOB COMPLETE (halted) ===")
@@ -590,7 +595,7 @@ def run() -> None:
                 logger.exception("%s strategy failed — continuing", strategy_name)
                 report_lines.append(f"**{strategy_name}** -- ERROR (see logs)")
 
-    append_section("Market Open Decisions (9:30 AM ET)", "\n".join(report_lines))
+    append_section("Market Open Decisions (10:00 AM ET)", "\n".join(report_lines))
     logger.info("=== MARKET OPEN JOB COMPLETE ===")
 
 

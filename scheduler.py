@@ -79,11 +79,19 @@ def register_jobs() -> None:
     """Register every job with the ``schedule`` library."""
 
     # Weekday jobs — all times ET
+    # NOTE: market_open runs at 10:00 instead of 9:30 because:
+    # - Options bid-ask spreads are 2-3x wider in the first 30 minutes
+    # - Quoted Greeks (especially delta) are unreliable at the open
+    # - Limit orders based on mid-price at 9:30 are more likely to be
+    #   unfavorable compared to 10:00 pricing.
+    # The wheel and spread strategies all use limit orders at the mid,
+    # so accurate mid-price matters for fill quality.
     weekday_jobs: list[tuple[str, object, str]] = [
         ("06:00", pre_market.run, "pre_market"),
-        ("09:30", market_open.run, "market_open"),
-        ("10:00", position_check.run, "position_check"),
-        ("12:00", position_check.run, "position_check"),
+        ("10:00", market_open.run, "market_open"),
+        ("10:45", position_check.run, "position_check"),
+        ("11:30", position_check.run, "position_check"),
+        ("12:30", position_check.run, "position_check"),
         ("14:00", position_check.run, "position_check"),
         ("15:00", expiry_guard.run, "expiry_guard"),
         ("15:15", pre_close.run, "pre_close"),

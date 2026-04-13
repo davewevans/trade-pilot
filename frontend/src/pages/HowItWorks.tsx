@@ -9,7 +9,7 @@ const STEPS: Step[] = [
   {
     num: 1,
     label: 'Scheduler Triggers',
-    oneLine: 'Market open (9:30 AM) or position check (10 AM, 12 PM, 2 PM ET)',
+    oneLine: 'Market open (10 AM) or position check (10:45, 11:30, 12:30, 2 PM ET)',
     body:
       'A background scheduler runs the bot on a fixed timetable. Nothing happens unless one of these times fires — there is no real-time event-driven trading. The pre-market job runs once at open; intraday checks run a few times during the session to manage existing positions and look for new entries.',
   },
