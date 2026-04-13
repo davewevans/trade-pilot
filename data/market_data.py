@@ -679,26 +679,45 @@ def get_fear_greed_index() -> dict:
     if _fear_greed_cache is not None and (time.monotonic() - _fear_greed_timestamp) < _FEAR_GREED_TTL:
         return _fear_greed_cache
 
-    try:
-        resp = _requests.get(
-            "https://production.dataviz.cnn.io/index/fearandgreed/graphdata",
-            headers={"User-Agent": "trade-pilot/1.0"},
-            timeout=10,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        fg = data["fear_and_greed"]
-        result = {
-            "score": round(float(fg["score"]), 2),
-            "rating": str(fg["rating"]),
-        }
-        _fear_greed_cache = result
-        _fear_greed_timestamp = time.monotonic()
-        logger.info("Fetched Fear & Greed Index: %.1f (%s)", result["score"], result["rating"])
-        return result
-    except Exception:
-        logger.warning("Failed to fetch Fear & Greed Index", exc_info=True)
-        return {"score": None, "rating": "Unknown"}
+    _CNN_HEADERS = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        ),
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": "https://www.cnn.com/markets/fear-and-greed",
+        "Origin": "https://www.cnn.com",
+    }
+
+    for url in [
+        "https://production.dataviz.cnn.io/index/fearandgreed/graphdata",
+        "https://production.dataviz.cnn.io/index/fearandgreed/current",
+    ]:
+        try:
+            resp = _requests.get(url, headers=_CNN_HEADERS, timeout=10)
+            if resp.status_code in (403, 418):
+                logger.warning(
+                    "Fear & Greed fetch blocked (%d) from %s — CNN may be blocking datacenter IPs",
+                    resp.status_code, url,
+                )
+                continue
+            resp.raise_for_status()
+            data = resp.json()
+            fg = data.get("fear_and_greed") or data
+            result = {
+                "score": round(float(fg["score"]), 2),
+                "rating": str(fg["rating"]),
+            }
+            _fear_greed_cache = result
+            _fear_greed_timestamp = time.monotonic()
+            logger.info("Fetched Fear & Greed Index: %.1f (%s)", result["score"], result["rating"])
+            return result
+        except Exception:
+            logger.warning("Failed to fetch Fear & Greed Index from %s", url, exc_info=True)
+
+    return {"score": None, "rating": "Unknown"}
 
 
 def get_risk_free_rate() -> float:
