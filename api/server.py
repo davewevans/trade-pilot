@@ -29,7 +29,7 @@ from database.repositories import DecisionRepository, TradeRepository
 logger = logging.getLogger(__name__)
 
 
-# ── Auth: password + in-memory session store ────────────────
+# ── Auth: password + stateless HMAC-signed tokens ───────────
 # Password is mandatory. We refuse to start without one rather than
 # defaulting to "" (which would silently disable the gate).
 DASHBOARD_PASSWORD = os.environ.get("DASHBOARD_PASSWORD", "").strip()
@@ -41,9 +41,13 @@ if not DASHBOARD_PASSWORD:
 
 _SESSION_TTL_SECONDS = 7 * 24 * 60 * 60  # 7 days
 _SESSION_COOKIE = "session"
-# token -> unix-epoch expiry. In-memory only: a restart logs everyone out,
-# which is acceptable for a single-user dashboard.
-_SESSIONS: dict[str, float] = {}
+
+# Signing key derived from the password — stateless, survives restarts.
+_SIGNING_KEY = hmac.new(
+    DASHBOARD_PASSWORD.encode(),
+    b"trade-pilot-session-v1",
+    "sha256",
+).digest()
 
 # Paths that bypass auth entirely.
 #   /auth/login   — needed to acquire a session
@@ -55,20 +59,17 @@ _AUTH_EXEMPT_PATHS = frozenset({
 })
 
 
-def _prune_expired_sessions() -> None:
-    now = time.time()
-    expired = [t for t, exp in _SESSIONS.items() if exp <= now]
-    for t in expired:
-        _SESSIONS.pop(t, None)
-
-
 def _issue_session() -> tuple[str, float]:
-    """Mint a new session token. Returns (token, expires_at_epoch)."""
-    _prune_expired_sessions()
-    token = secrets.token_urlsafe(32)
-    expires_at = time.time() + _SESSION_TTL_SECONDS
-    _SESSIONS[token] = expires_at
-    return token, expires_at
+    """Mint a signed token. Returns (token, expires_at_epoch).
+
+    Token format: ``<expires_at_int>.<nonce>.<hex_signature>``
+    The nonce makes each token unique even if issued at the same second.
+    """
+    expires_at = int(time.time()) + _SESSION_TTL_SECONDS
+    nonce = secrets.token_hex(8)
+    payload = f"{expires_at}.{nonce}".encode()
+    sig = hmac.new(_SIGNING_KEY, payload, "sha256").hexdigest()
+    return f"{expires_at}.{nonce}.{sig}", float(expires_at)
 
 
 def _extract_token(request: Request) -> str | None:
@@ -86,13 +87,19 @@ def _is_authenticated(request: Request) -> bool:
     token = _extract_token(request)
     if not token:
         return False
-    expiry = _SESSIONS.get(token)
-    if expiry is None:
+    parts = token.split(".")
+    if len(parts) != 3:
         return False
-    if expiry <= time.time():
-        _SESSIONS.pop(token, None)
+    expires_str, nonce, sig = parts
+    try:
+        expires_at = int(expires_str)
+    except ValueError:
         return False
-    return True
+    if expires_at <= time.time():
+        return False
+    payload = f"{expires_str}.{nonce}".encode()
+    expected = hmac.new(_SIGNING_KEY, payload, "sha256").hexdigest()
+    return hmac.compare_digest(expected, sig)
 
 
 # Inline login page. Self-contained: no external assets, no scripts beyond
@@ -426,10 +433,7 @@ async def auth_login(request: Request):
 
 @app.get("/auth/logout")
 def auth_logout(request: Request):
-    """Invalidate the caller's session token (if any) and clear the cookie."""
-    token = _extract_token(request)
-    if token:
-        _SESSIONS.pop(token, None)
+    """Clear the session cookie. Token validity is not server-side checked."""
     response = JSONResponse(status_code=200, content={"ok": True})
     response.delete_cookie(_SESSION_COOKIE, path="/")
     return response
