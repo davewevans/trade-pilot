@@ -38,6 +38,9 @@ export function Sidebar() {
       <NavLink to="/reasoning" className={linkClass} style={({ isActive }) => linkStyle(isActive)}>
         Reasoning
       </NavLink>
+      <NavLink to="/watchlist" className={linkClass} style={({ isActive }) => linkStyle(isActive)}>
+        Watchlist
+      </NavLink>
 
       <div
         className="text-[10px] uppercase tracking-wider mt-6 mb-2 px-3"

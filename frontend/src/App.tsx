@@ -16,6 +16,7 @@ import { MarketRegimes } from './pages/MarketRegimes'
 import { FAQ } from './pages/FAQ'
 import { About } from './pages/About'
 import { DataSources } from './pages/DataSources'
+import { Watchlist } from './pages/Watchlist'
 
 export function App() {
   return (
@@ -23,6 +24,7 @@ export function App() {
       <AppShell>
         <Routes>
           <Route path="/" element={<Dashboard />} />
+          <Route path="/watchlist" element={<Watchlist />} />
           <Route path="/account/:account" element={<AccountDetail />} />
           <Route path="/decisions" element={<DecisionLog />} />
           <Route path="/reasoning" element={<ReasoningExplorer />} />

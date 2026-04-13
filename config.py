@@ -1,5 +1,6 @@
 """Loads .env configuration and exposes project settings."""
 
+import json
 import logging
 import os
 from pathlib import Path
@@ -72,21 +73,7 @@ class Settings:
 
         self.TIMEZONE: str = "America/New_York"
 
-        watchlist_env = os.getenv("WATCHLIST", "")
-        self.WATCHLIST: list[str] = (
-            [s.strip() for s in watchlist_env.split(",") if s.strip()]
-            if watchlist_env
-            else ["AAPL", "SPY", "MSFT", "AMD", "JPM", "XOM"]
-        )
-
-        # Spread strategies evaluate these symbols (superset of wheel WATCHLIST).
-        # If not set, falls back to WATCHLIST.
-        spread_watchlist_env = os.getenv("SPREAD_WATCHLIST", "")
-        self.SPREAD_WATCHLIST: list[str] = (
-            [s.strip() for s in spread_watchlist_env.split(",") if s.strip()]
-            if spread_watchlist_env
-            else list(self.WATCHLIST)
-        )
+        self._load_watchlist()
 
         self.DRY_RUN: bool = os.getenv("DRY_RUN", "false").lower() == "true"
 
@@ -109,6 +96,34 @@ class Settings:
             log.info("Running in PRODUCTION (Render)")
         else:
             log.info("Running in LOCAL mode")
+
+    def _load_watchlist(self) -> None:
+        """Load WATCHLIST and SPREAD_WATCHLIST from data/watchlist.json."""
+        watchlist_path = self.DATA_DIR / "watchlist.json"
+        if watchlist_path.exists():
+            try:
+                data = json.loads(watchlist_path.read_text(encoding="utf-8"))
+                self.WATCHLIST: list[str] = data.get("wheel", ["AAPL", "SPY"])
+                self.SPREAD_WATCHLIST: list[str] = data.get("spreads", list(self.WATCHLIST))
+                log.info(
+                    "Loaded watchlist from %s: %d wheel, %d spreads",
+                    watchlist_path,
+                    len(self.WATCHLIST),
+                    len(self.SPREAD_WATCHLIST),
+                )
+                return
+            except Exception:
+                log.exception("Failed to parse watchlist.json — using built-in defaults")
+
+        # watchlist.json missing or unreadable — seed from built-in defaults
+        log.warning("watchlist.json not found at %s; using built-in defaults", watchlist_path)
+        self.WATCHLIST = ["AAPL", "SPY", "MSFT", "AMD", "JPM", "XOM"]
+        self.SPREAD_WATCHLIST = [
+            "AAPL", "MSFT", "AMD", "GOOGL", "AMZN", "META", "NVDA", "TSLA",
+            "JPM", "GS", "BAC", "XOM", "CVX", "JNJ", "UNH", "PFE",
+            "SPY", "QQQ", "IWM", "DIS", "NFLX", "CRM", "ORCL", "ADBE",
+            "HD", "LOW", "COST", "BA", "CAT", "DE",
+        ]
 
     # Sector mapping for correlation awareness.
     # Used by the guardrails (sector concentration) and reporting to flag

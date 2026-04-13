@@ -138,6 +138,23 @@ export const api = {
     get<Record<string, { state: string; spread_id?: string }>>(
       '/api/strategy-states',
     ),
+
+  watchlist: () =>
+    get<{ wheel: string[]; spreads: string[]; updated_at: string | null }>('/api/watchlist'),
+
+  updateWatchlist: async (wheel: string[], spreads: string[]) => {
+    const res = await fetch(`${BASE}/api/watchlist`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ wheel, spreads }),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }))
+      throw new Error(err.error ?? `API error ${res.status}`)
+    }
+    return res.json() as Promise<{ wheel: string[]; spreads: string[]; updated_at: string | null }>
+  },
 }
 
 export const ACCOUNTS: AccountSummary[] = [

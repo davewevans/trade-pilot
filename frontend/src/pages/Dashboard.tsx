@@ -123,6 +123,7 @@ export function Dashboard() {
   const [context, setContext] = useState<ContextResponse | null>(null)
   const [cb, setCb] = useState<CircuitBreaker | null>(null)
   const [accounts, setAccounts] = useState<Record<string, Portfolio | null>>({})
+  const [watchlistCounts, setWatchlistCounts] = useState<{ wheel: number; spreads: number } | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -136,6 +137,9 @@ export function Dashboard() {
       api.accounts().then((a) => { if (!cancelled) setAccounts(a) }).catch(() => {
         if (!cancelled) setAccounts({})
       })
+      api.watchlist().then((w) => {
+        if (!cancelled) setWatchlistCounts({ wheel: w.wheel.length, spreads: w.spreads.length })
+      }).catch(() => {})
     }
     load()
     const id = setInterval(load, 60_000)
@@ -163,6 +167,22 @@ export function Dashboard() {
             />
           ))}
         </div>
+        {watchlistCounts && (
+          <p className="mt-2 text-xs" style={{ color: 'var(--text-muted)' }}>
+            Watching{' '}
+            <span style={{ color: 'var(--text-secondary)' }}>
+              {watchlistCounts.wheel} stocks
+            </span>{' '}
+            for wheel,{' '}
+            <span style={{ color: 'var(--text-secondary)' }}>
+              {watchlistCounts.spreads} names
+            </span>{' '}
+            for spreads —{' '}
+            <Link to="/watchlist" style={{ color: 'var(--accent)' }}>
+              manage watchlist
+            </Link>
+          </p>
+        )}
       </div>
 
       <div>

@@ -1,0 +1,20 @@
+{
+  "wheel": [
+    "AAPL", "MSFT", "AMD", "GOOGL", "AMZN",
+    "JPM", "GS",
+    "XOM", "CVX",
+    "JNJ", "UNH",
+    "SPY"
+  ],
+  "spreads": [
+    "AAPL", "MSFT", "AMD", "GOOGL", "AMZN", "META", "NVDA", "TSLA",
+    "JPM", "GS", "BAC",
+    "XOM", "CVX",
+    "JNJ", "UNH", "PFE",
+    "SPY", "QQQ", "IWM",
+    "DIS", "NFLX", "CRM", "ORCL", "ADBE",
+    "HD", "LOW", "COST",
+    "BA", "CAT", "DE"
+  ],
+  "updated_at": null
+}

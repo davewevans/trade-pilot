@@ -1052,6 +1052,55 @@ def regime_history():
     return data
 
 
+@app.get("/api/watchlist")
+def get_watchlist():
+    """Return the current wheel and spreads watchlists."""
+    path = DATA_DIR / "watchlist.json"
+    if path.exists():
+        data = _read_json(path)
+        if data is not None:
+            return data
+    return {
+        "wheel": list(settings.WATCHLIST),
+        "spreads": list(settings.SPREAD_WATCHLIST),
+        "updated_at": None,
+    }
+
+
+@app.post("/api/watchlist")
+async def update_watchlist(request: Request):
+    """Overwrite the watchlist file and hot-reload into settings."""
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(status_code=400, content={"error": "invalid JSON body"})
+
+    wheel = body.get("wheel", [])
+    spreads = body.get("spreads", [])
+
+    if not isinstance(wheel, list) or not isinstance(spreads, list):
+        return JSONResponse(status_code=400, content={"error": "wheel and spreads must be arrays"})
+
+    for sym in wheel + spreads:
+        if not isinstance(sym, str) or not sym.isalpha() or not sym.isupper() or len(sym) > 6:
+            return JSONResponse(status_code=400, content={"error": f"Invalid symbol: {sym!r}"})
+
+    data = {
+        "wheel": wheel,
+        "spreads": spreads,
+        "updated_at": datetime.now().isoformat(),
+    }
+    path = DATA_DIR / "watchlist.json"
+    path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+    # Hot-reload so the next scheduler cycle uses the new lists
+    settings.WATCHLIST = wheel
+    settings.SPREAD_WATCHLIST = spreads
+
+    logger.info("Watchlist updated: %d wheel, %d spreads", len(wheel), len(spreads))
+    return data
+
+
 # ── Static frontend ────────────────────────────────────────
 # Mounted at the end so all /api/* routes take precedence.
 # Skipped if `api/static/` is empty (pre-build dev environment).
