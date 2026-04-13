@@ -16,6 +16,7 @@ import pandas as pd
 import yfinance as yf
 from alpaca.data.historical import OptionHistoricalDataClient, StockHistoricalDataClient
 from alpaca.data.live import OptionDataStream
+from alpaca.data.enums import DataFeed
 from alpaca.data.requests import (
     OptionChainRequest,
     OptionLatestQuoteRequest,
@@ -564,6 +565,7 @@ def get_stock_technicals(symbol: str) -> dict:
         timeframe=TimeFrame.Day,
         start=start,
         end=end,
+        feed=DataFeed.IEX,
     )
     bars = _stock_client.get_stock_bars(request)
     df = bars.df
