@@ -159,11 +159,12 @@ function CondorDiagram() {
 }
 
 const ROUTING_ROWS = [
-  { regime: 'NEUTRAL or BULL', iv: 'HIGH', strategy: 'Iron Condor*' },
-  { regime: 'NEUTRAL or BULL', iv: 'MODERATE', strategy: 'Bull Put Spread' },
-  { regime: 'BEAR', iv: 'MODERATE or HIGH', strategy: 'Bear Call Spread' },
-  { regime: 'BULL', iv: 'LOW', strategy: 'Long Call Vertical' },
+  { regime: 'NEUTRAL', iv: 'HIGH (IVR ≥ 50)', strategy: 'Iron Condor' },
+  { regime: 'NEUTRAL or BULL', iv: 'MODERATE or HIGH', strategy: 'Bull Put Spread' },
+  { regime: 'BEAR or NEUTRAL', iv: 'MODERATE or HIGH', strategy: 'Bear Call Spread' },
+  { regime: 'BULL', iv: 'LOW (IVR < 30)', strategy: 'Long Call Vertical' },
   { regime: 'CRASH', iv: 'Any', strategy: 'No new positions' },
+  { regime: 'EUPHORIA', iv: 'Any', strategy: 'Wheel only (cautious)' },
 ]
 
 export function Strategies() {
@@ -201,6 +202,7 @@ export function Strategies() {
               'Target delta: -0.20 to -0.30',
               'Time to expiration: 21–35 days',
               'IV Rank must be ≥ 30 (we sell when options are expensive)',
+              'Max 3 positions per sector (forces diversification)',
             ]}
           >
             We sell someone the right to sell us 100 shares of a stock at a specific price (the strike).
@@ -223,11 +225,51 @@ export function Strategies() {
           </SubCard>
         </div>
 
+        <div
+          className="mt-3 p-3 rounded text-xs"
+          style={{
+            backgroundColor: 'color-mix(in srgb, var(--accent) 8%, transparent)',
+            color: 'var(--text-secondary)',
+            borderLeft: '3px solid var(--accent)',
+          }}
+        >
+          <strong>Cost basis tracking:</strong> The bot tracks effective cost basis across the full wheel cycle — not just
+          the assignment price, but assignment price minus all CSP and roll premiums collected. Covered call strikes
+          are always set above this effective cost basis, never just the raw assignment price.
+        </div>
+
+        <div
+          className="mt-3 p-3 rounded text-xs"
+          style={{
+            backgroundColor: 'color-mix(in srgb, var(--accent) 8%, transparent)',
+            color: 'var(--text-secondary)',
+            borderLeft: '3px solid var(--accent)',
+          }}
+        >
+          <strong>Sector diversification:</strong> The bot limits concurrent wheel positions to a maximum of 3 per sector.
+          The watchlist spans multiple sectors (technology, financials, energy, index) to avoid correlated losses
+          when a single sector sells off.
+        </div>
+
         <Subheading>How the bot manages positions</Subheading>
         <ul className="space-y-1.5 text-sm" style={{ color: 'var(--text-secondary)' }}>
-          <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> If a position moves against us (delta doubles), the bot rolls to a better strike.</li>
-          <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> If we've captured 50% of the premium, the bot closes early to take profit.</li>
-          <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> If expiration is within 7 days and the position is risky, the bot rolls out.</li>
+          <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> <strong>50% profit close:</strong> If we've captured 50% of the premium, the bot closes early — this captures ~70% of the theta income with far less gamma risk.</li>
+          <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> <strong>Roll on delta doubling:</strong> If delta doubles from entry (e.g., -0.25 → -0.50), the bot rolls to a better strike — but ONLY for a net credit of at least $0.10. No rolling for a debit.</li>
+          <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> <strong>DTE ≤ 7 exit:</strong> If expiration is within 7 days and the position is at risk, the bot rolls out. If profitable, it closes.</li>
+          <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> <strong>Max 2 rolls per position:</strong> After two rolls, if still at risk, the position is closed rather than continuing to roll indefinitely.</li>
+        </ul>
+
+        <Subheading>When the bot sells assigned shares at a loss</Subheading>
+        <Prose>
+          Assignment is not a failure — it's the wheel working as designed. But if the stock deteriorates significantly
+          after assignment, holding and writing covered calls on a falling position locks up capital unproductively.
+          The bot has concrete exit triggers:
+        </Prose>
+        <ul className="space-y-1.5 text-sm" style={{ color: 'var(--text-secondary)' }}>
+          <li className="flex gap-2"><span style={{ color: 'var(--red, #ef4444)' }}>•</span> Stock drops &gt; 25% below cost basis AND falls below the 200-day SMA → sell shares</li>
+          <li className="flex gap-2"><span style={{ color: 'var(--red, #ef4444)' }}>•</span> Two or more analyst downgrades in the past 14 days → sell shares</li>
+          <li className="flex gap-2"><span style={{ color: 'var(--yellow, #eab308)' }}>•</span> Stock drops &gt; 15% below cost basis with a single downgrade → flagged for review</li>
+          <li className="flex gap-2"><span style={{ color: 'var(--yellow, #eab308)' }}>•</span> VIX in CRASH regime (&gt; 35) → hold (don't write CCs or sell into panic — wait for clarity)</li>
         </ul>
       </AccountSection>
 
@@ -247,9 +289,12 @@ export function Strategies() {
 
         <Subheading>When the bot uses this strategy</Subheading>
         <ul className="space-y-1.5 text-sm" style={{ color: 'var(--text-secondary)' }}>
-          <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> High IV environment (volatility is expensive, we sell it)</li>
-          <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Neutral market regime (no strong directional trend)</li>
-          <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Earnings must be &gt; 30 days away</li>
+          <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> High IV environment only (IV Rank ≥ 50 — options are expensive, we sell the premium)</li>
+          <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Neutral market regime only — never in trending markets</li>
+          <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> VIX between 18 and 35 (enough premium to justify 4 legs, not extreme panic)</li>
+          <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Earnings must be &gt; 30 days away (extra buffer for a 4-leg position)</li>
+          <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Both short strikes placed outside the 1× implied move (using ORATS data)</li>
+          <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Combined credit ≥ $1.25 (covers transaction costs on 8 legs: 4 to open, 4 to close)</li>
         </ul>
 
         <Subheading>Risk profile</Subheading>
@@ -262,6 +307,15 @@ export function Strategies() {
             Short put strike minus premium / short call strike plus premium.
           </SubCard>
         </div>
+
+        <Subheading>How the bot manages this position</Subheading>
+        <ul className="space-y-1.5 text-sm" style={{ color: 'var(--text-secondary)' }}>
+          <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> <strong>Treated as a single unit</strong> — the bot never rolls or adjusts one side independently. If either side is threatened, the entire condor is closed.</li>
+          <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> <strong>50% profit close:</strong> Close when combined spread value drops to ≤ 50% of original credit.</li>
+          <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> <strong>200% stop loss:</strong> Close when combined value reaches ≥ 200% of original credit.</li>
+          <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> <strong>Delta doubling:</strong> If either short leg's delta doubles from entry, close the condor (one side is being tested).</li>
+          <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> <strong>DTE ≤ 7:</strong> Close regardless — gamma risk on both wings is too high.</li>
+        </ul>
       </AccountSection>
 
       {/* --- Spreads --- */}
@@ -300,9 +354,6 @@ export function Strategies() {
             </tbody>
           </table>
         </div>
-        <p className="text-xs mt-2" style={{ color: 'var(--text-muted)' }}>
-          *Iron Condor here uses the spreads account logic; the dedicated Iron Condor account runs independently.
-        </p>
         <div
           className="mt-3 p-3 rounded text-xs"
           style={{
@@ -319,42 +370,111 @@ export function Strategies() {
           <SubCard
             title="Bull Put Spread (Bullish / Neutral)"
             bullets={[
-              'Max loss capped (spread width minus premium)',
-              'Used in moderate IV, neutral-to-bullish conditions',
-              'DTE: 20–45 days',
+              'Max loss capped at spread width minus credit received',
+              'Used in MODERATE or HIGH IV, NEUTRAL or BULL regime',
+              'DTE: 21–35 days',
+              'Minimum credit: $0.75 (covers transaction costs)',
+              'Credit-to-width ratio ≥ 15%',
             ]}
           >
             We sell a put and buy a cheaper put below it. We profit if the stock stays above our short
             strike. The long put below limits our maximum loss. A defined-risk way to collect premium when
-            we're neutral to slightly bullish.
+            we're neutral to slightly bullish. Management: 50% profit close, 200% stop loss, close at DTE ≤ 7.
           </SubCard>
           <SubCard
             title="Bear Call Spread (Bearish / Neutral)"
             bullets={[
               'Mirror image of the bull put spread, on the call side',
-              'Used in moderate-to-high IV, bearish conditions',
-              'DTE: 20–45 days',
-              'Ex-dividend dates checked to avoid early assignment',
+              'Used in MODERATE or HIGH IV, BEAR or NEUTRAL regime',
+              'DTE: 21–35 days',
+              'Minimum credit: $0.75',
+              'Ex-dividend and earnings dates checked before entry',
             ]}
           >
             We sell a call and buy a cheaper call above it. We profit if the stock stays below our short
-            strike. Used when we expect the market to be flat to slightly bearish.
+            strike. Used when we expect the market to be flat to slightly bearish. Requires bearish technical
+            confirmation — stock at resistance, below 50-day SMA, or RSI overbought.
           </SubCard>
           <SubCard
             title="Long Call Vertical (Bullish, Low IV)"
             bullets={[
               'Debit strategy — we pay premium upfront',
               'Profit and risk both capped',
-              'Only deployed in BULL regime + LOW IV (very selective)',
-              'DTE: 25–65 days',
+              'Only in BULL regime + LOW IV + confirmed support bounce (CAHOLD)',
+              'DTE: 30–45 days',
+              'Max debit: $2.00 per spread',
             ]}
           >
             Unlike the other two, this is a debit strategy — we pay to open it. We buy a call and sell a
-            higher-strike call above it. We profit if the stock rises above our long strike. Used
-            specifically when IV is low (options are cheap) and the market is clearly bullish.
+            higher-strike call above it. We profit if the stock rises above our long strike plus the debit paid.
+            Only deployed when options are cheap (low IV) and the market is clearly bullish with a technical
+            support bounce signal. Tighter management: 100% profit target (spread doubles), 40% stop loss,
+            close if 60% of time has elapsed without meaningful gain.
           </SubCard>
         </div>
+
+        <div
+          className="mt-3 p-3 rounded text-xs"
+          style={{
+            backgroundColor: 'color-mix(in srgb, var(--accent) 8%, transparent)',
+            color: 'var(--text-secondary)',
+            borderLeft: '3px solid var(--accent)',
+          }}
+        >
+          <strong>Multi-underlying scanning:</strong> Each spread strategy scans the full watchlist to find the best
+          candidate — it's not locked to a single stock. The bot evaluates every eligible symbol, scores the candidates,
+          and only opens the strongest setup. At most one new spread opens per cycle.
+        </div>
       </AccountSection>
+
+      {/* --- Portfolio Risk --- */}
+      <div className="mt-8">
+        <Subheading>Portfolio-Level Risk Controls</Subheading>
+        <Prose>
+          Individual strategy parameters don't tell the full story. The bot also enforces portfolio-wide limits:
+        </Prose>
+        <div className="grid gap-3 md:grid-cols-2 mt-3">
+          <SubCard title="Position Sizing Caps">
+            <ul className="space-y-1 text-xs" style={{ color: 'var(--text-secondary)' }}>
+              <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Wheel: max 10% of buying power per CSP, max 5 concurrent positions</li>
+              <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Iron Condor: max loss ≤ 5% of buying power</li>
+              <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Credit spreads: max loss ≤ 2% of buying power per spread</li>
+              <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Debit spreads: max risk ≤ 1% of buying power</li>
+              <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Shared account (3 spread strategies): combined max loss ≤ 10% of account</li>
+            </ul>
+          </SubCard>
+          <SubCard title="Sector & Correlation Awareness">
+            <ul className="space-y-1 text-xs" style={{ color: 'var(--text-secondary)' }}>
+              <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Max 3 wheel positions per sector (prevents concentrated sector bets)</li>
+              <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Watchlist spans Technology, Financials, Energy, and Index ETFs</li>
+              <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Spread strategies scan across the full watchlist for uncorrelated setups</li>
+              <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Circuit breaker monitors aggregate equity across all three accounts</li>
+            </ul>
+          </SubCard>
+        </div>
+
+        <Subheading>Entry Timing</Subheading>
+        <Prose>
+          The bot evaluates new entries at 10:00 AM ET — not at the 9:30 open. Options bid-ask spreads are 2-3× wider
+          in the first 30 minutes, and quoted Greeks (especially delta) are unreliable. Waiting 30 minutes for the options
+          market to settle means better fill prices and more accurate contract selection.
+        </Prose>
+
+        <Subheading>Worst-case scenario math</Subheading>
+        <div
+          className="mt-2 p-3 rounded text-xs"
+          style={{
+            backgroundColor: 'color-mix(in srgb, var(--red, #ef4444) 8%, transparent)',
+            color: 'var(--text-secondary)',
+            borderLeft: '3px solid var(--red, #ef4444)',
+          }}
+        >
+          If every position hits max loss simultaneously: 5 wheel assignments (~50% of buying power in stock) plus
+          all spreads at max loss (~10%) = ~60% of capital at risk. The diversified watchlist and sector limits reduce
+          the probability of this happening, but it's not zero. The circuit breaker's 15% drawdown lock exists specifically
+          to halt before this scenario fully materializes.
+        </div>
+      </div>
     </div>
   )
 }
