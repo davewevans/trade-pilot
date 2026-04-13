@@ -82,7 +82,9 @@ function DecisionCard({ d }: { d: Decision }) {
             {tsDisplay}
           </span>
         </div>
-        <Badge variant="confidence" value={d.confidence ?? undefined} />
+        {d.confidence != null && (
+          <Badge variant="confidence" value={d.confidence} />
+        )}
       </header>
 
       {/* Body — reasoning (always visible) */}
