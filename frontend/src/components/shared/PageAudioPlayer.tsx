@@ -90,7 +90,17 @@ export function PageAudioPlayer({ contentRef }: Props) {
     if (!supported) return
     const load = () => {
       const v = window.speechSynthesis.getVoices()
-      if (v.length) setVoices(v)
+      if (v.length) {
+        setVoices(v)
+        // Auto-select Google US English if no saved preference
+        if (!localStorage.getItem(LS_VOICE)) {
+          const google = v.find(voice => voice.name === 'Google US English')
+          if (google) {
+            setSelectedVoiceURI(google.voiceURI)
+            voiceURIRef.current = google.voiceURI
+          }
+        }
+      }
     }
     load()
     window.speechSynthesis.onvoiceschanged = load
