@@ -4,49 +4,34 @@ const CHUNK_WORD_LIMIT = 180
 const LS_VOICE = 'audio_player_voice'
 const LS_RATE = 'audio_player_rate'
 
+// Chrome: delay between cancel() and speak() to avoid the synth getting stuck
+const SPEAK_DELAY_MS = 50
+// Chrome: if onstart hasn't fired within this time, assume synth is stuck and retry
+const WATCHDOG_MS = 500
+// Chrome keepalive: pause/resume every N ms to prevent the engine going silent
+const KEEPALIVE_MS = 10_000
+
 function extractSections(container: HTMLElement): { text: string; el: Element | null }[] {
   const sections: { text: string; el: Element | null }[] = []
-
   const readableSelectors = ['p', 'li', 'h2', 'h3', 'h4', 'dt', 'dd']
-
-  // Gather block-level readable elements in DOM order
-  const elements = Array.from(
-    container.querySelectorAll(readableSelectors.join(','))
-  )
+  const elements = Array.from(container.querySelectorAll(readableSelectors.join(',')))
+  const header = container.querySelector('.mb-6')
 
   for (const el of elements) {
-    // Skip the PageHeader container (first mb-6 div)
-    const header = container.querySelector('.mb-6')
     if (header && header.contains(el)) continue
-
-    // Skip elements inside <table>
     if (el.closest('table')) continue
-
-    // Skip elements inside <pre> or <code>
     if (el.closest('pre') || el.closest('code')) continue
-
-    const tagName = el.tagName.toLowerCase()
     const raw = el.textContent?.trim() ?? ''
     if (!raw) continue
-
-    // For list items, add a brief natural pause prefix (handled by chunking)
-    const text =
-      tagName === 'h2' || tagName === 'h3' || tagName === 'h4'
-        ? raw
-        : raw
-
-    sections.push({ text, el })
+    sections.push({ text: raw, el })
   }
 
-  // Detect tables and insert placeholder
-  const tables = Array.from(container.querySelectorAll('table'))
-  const header = container.querySelector('.mb-6')
-  for (const table of tables) {
+  // Replace tables with a spoken placeholder, in DOM order
+  for (const table of Array.from(container.querySelectorAll('table'))) {
     if (header && header.contains(table)) continue
     sections.push({ text: 'See the table on screen for details.', el: table })
   }
 
-  // Re-sort by DOM order
   sections.sort((a, b) => {
     if (!a.el || !b.el) return 0
     const pos = a.el.compareDocumentPosition(b.el)
@@ -81,24 +66,24 @@ export function PageAudioPlayer({ contentRef }: Props) {
   const rateRef = useRef(rate)
   const voiceURIRef = useRef(selectedVoiceURI)
   const prevHighlightRef = useRef<Element | null>(null)
+  // Tracks the active watchdog so we can cancel it if onstart fires in time
+  const watchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => { rateRef.current = rate }, [rate])
   useEffect(() => { voiceURIRef.current = selectedVoiceURI }, [selectedVoiceURI])
 
-  // Load voices
+  // Load voices; auto-select Google US English if no saved preference
   useEffect(() => {
     if (!supported) return
     const load = () => {
       const v = window.speechSynthesis.getVoices()
-      if (v.length) {
-        setVoices(v)
-        // Auto-select Google US English if no saved preference
-        if (!localStorage.getItem(LS_VOICE)) {
-          const google = v.find(voice => voice.name === 'Google US English')
-          if (google) {
-            setSelectedVoiceURI(google.voiceURI)
-            voiceURIRef.current = google.voiceURI
-          }
+      if (!v.length) return
+      setVoices(v)
+      if (!localStorage.getItem(LS_VOICE)) {
+        const google = v.find(voice => voice.name === 'Google US English')
+        if (google) {
+          setSelectedVoiceURI(google.voiceURI)
+          voiceURIRef.current = google.voiceURI
         }
       }
     }
@@ -107,7 +92,18 @@ export function PageAudioPlayer({ contentRef }: Props) {
     return () => { window.speechSynthesis.onvoiceschanged = null }
   }, [supported])
 
-  // Clear highlight helper
+  // Chrome keepalive: calling pause/resume prevents the engine going silent during long sessions
+  useEffect(() => {
+    if (!playing) return
+    const id = setInterval(() => {
+      if (window.speechSynthesis.speaking) {
+        window.speechSynthesis.pause()
+        window.speechSynthesis.resume()
+      }
+    }, KEEPALIVE_MS)
+    return () => clearInterval(id)
+  }, [playing])
+
   const clearHighlight = useCallback(() => {
     if (prevHighlightRef.current) {
       const el = prevHighlightRef.current as HTMLElement
@@ -129,17 +125,15 @@ export function PageAudioPlayer({ contentRef }: Props) {
     el.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
   }, [clearHighlight])
 
-  const speakChunk = useCallback((index: number) => {
+  // Speak a single chunk, with Chrome-safe cancel-delay-speak and watchdog retry
+  const speakChunk = useCallback((index: number, isRetry = false) => {
     if (!isPlayingRef.current) return
     if (index >= chunksRef.current.length) {
-      // Done
       isPlayingRef.current = false
       setPlaying(false)
       clearHighlight()
       return
     }
-
-    window.speechSynthesis.cancel()
 
     const text = chunksRef.current[index]
     const el = chunkElsRef.current[index] ?? null
@@ -148,28 +142,63 @@ export function PageAudioPlayer({ contentRef }: Props) {
     currentChunkRef.current = index
     setChunkIndex(index + 1)
 
-    const utterance = new SpeechSynthesisUtterance(text)
-    utterance.rate = rateRef.current
+    // Cancel any prior speech, then wait briefly before speaking — Chrome requires this gap
+    window.speechSynthesis.cancel()
 
-    const voice = window.speechSynthesis.getVoices().find(
-      v => v.voiceURI === voiceURIRef.current
-    )
-    if (voice) utterance.voice = voice
+    const doSpeak = () => {
+      if (!isPlayingRef.current) return
 
-    utterance.onend = () => {
-      if (isPlayingRef.current) {
-        speakChunk(index + 1)
+      const utterance = new SpeechSynthesisUtterance(text)
+      utterance.rate = rateRef.current
+
+      const voice = window.speechSynthesis.getVoices().find(
+        v => v.voiceURI === voiceURIRef.current
+      )
+      if (voice) utterance.voice = voice
+
+      // Watchdog: if onstart doesn't fire, Chrome's synth is stuck — retry once
+      if (watchdogRef.current) clearTimeout(watchdogRef.current)
+      if (!isRetry) {
+        watchdogRef.current = setTimeout(() => {
+          watchdogRef.current = null
+          if (isPlayingRef.current && !window.speechSynthesis.speaking) {
+            // Synth is stuck: force a hard cancel then retry this chunk
+            window.speechSynthesis.cancel()
+            setTimeout(() => speakChunk(index, true), 100)
+          }
+        }, WATCHDOG_MS)
       }
-    }
-    utterance.onerror = (e) => {
-      if (e.error !== 'interrupted') {
-        isPlayingRef.current = false
-        setPlaying(false)
-        clearHighlight()
+
+      utterance.onstart = () => {
+        if (watchdogRef.current) {
+          clearTimeout(watchdogRef.current)
+          watchdogRef.current = null
+        }
       }
+
+      utterance.onend = () => {
+        if (isPlayingRef.current) {
+          speakChunk(index + 1)
+        }
+      }
+
+      utterance.onerror = (e) => {
+        if (watchdogRef.current) {
+          clearTimeout(watchdogRef.current)
+          watchdogRef.current = null
+        }
+        // 'interrupted' fires on cancel() — that's normal, not an error
+        if (e.error !== 'interrupted' && isPlayingRef.current) {
+          isPlayingRef.current = false
+          setPlaying(false)
+          clearHighlight()
+        }
+      }
+
+      window.speechSynthesis.speak(utterance)
     }
 
-    window.speechSynthesis.speak(utterance)
+    setTimeout(doSpeak, SPEAK_DELAY_MS)
   }, [applyHighlight, clearHighlight])
 
   const buildChunks = useCallback(() => {
@@ -185,7 +214,6 @@ export function PageAudioPlayer({ contentRef }: Props) {
         allChunks.push(text)
         allEls.push(el)
       } else {
-        // Split large sections into sub-chunks, all pointing to same el
         for (let i = 0; i < words.length; i += CHUNK_WORD_LIMIT) {
           allChunks.push(words.slice(i, i + CHUNK_WORD_LIMIT).join(' '))
           allEls.push(el)
@@ -201,35 +229,42 @@ export function PageAudioPlayer({ contentRef }: Props) {
 
   const handlePlay = useCallback(() => {
     if (playing) {
-      // Pause
-      window.speechSynthesis.pause()
+      // "Pause" = cancel + remember position. We avoid synth.pause()/resume()
+      // because Chrome leaves the engine in a broken state after using them.
+      window.speechSynthesis.cancel()
       isPlayingRef.current = false
       setPlaying(false)
       return
     }
 
-    // Resume or start
-    if (window.speechSynthesis.paused) {
-      isPlayingRef.current = true
-      setPlaying(true)
-      window.speechSynthesis.resume()
-      return
+    // Resume from remembered position, or fresh start
+    const resumeIndex = chunksRef.current.length > 0 ? currentChunkRef.current : -1
+
+    if (resumeIndex < 0) {
+      // Fresh start
+      const ok = buildChunks()
+      if (!ok) return
+      currentChunkRef.current = 0
     }
 
-    // Fresh start
-    const ok = buildChunks()
-    if (!ok) return
     isPlayingRef.current = true
     setPlaying(true)
-    currentChunkRef.current = 0
-    speakChunk(0)
+    speakChunk(resumeIndex < 0 ? 0 : resumeIndex)
   }, [playing, buildChunks, speakChunk])
 
   const handleStop = useCallback(() => {
+    if (watchdogRef.current) {
+      clearTimeout(watchdogRef.current)
+      watchdogRef.current = null
+    }
     isPlayingRef.current = false
     window.speechSynthesis.cancel()
     setPlaying(false)
     setChunkIndex(0)
+    // Reset so next Play is always a fresh start
+    chunksRef.current = []
+    chunkElsRef.current = []
+    currentChunkRef.current = 0
     clearHighlight()
   }, [clearHighlight])
 
@@ -244,9 +279,10 @@ export function PageAudioPlayer({ contentRef }: Props) {
     localStorage.setItem(LS_RATE, String(r))
   }
 
-  // Stop on unmount
+  // Clean up on page navigation (component unmount)
   useEffect(() => {
     return () => {
+      if (watchdogRef.current) clearTimeout(watchdogRef.current)
       isPlayingRef.current = false
       window.speechSynthesis.cancel()
       clearHighlight()
