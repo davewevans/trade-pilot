@@ -29,8 +29,43 @@ export interface TradesResponse {
 
 const BASE = '' // same origin in prod; Vite proxy handles /api in dev
 
+// Retry on 502/503 and network errors only. These are transient infra
+// failures (Render cold starts, brief proxy hiccups) — not app errors.
+// 4xx and 500 indicate real problems and should surface immediately.
+async function fetchWithRetry(
+  url: string,
+  options?: RequestInit,
+  retries = 2,
+): Promise<Response> {
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    const backoffMs = 2 ** (attempt + 1) * 1000 // 2s, then 4s
+    try {
+      const res = await fetch(url, options)
+      if ((res.status === 502 || res.status === 503) && attempt < retries) {
+        console.warn(
+          `${url} returned ${res.status}, retrying in ${backoffMs / 1000}s...`,
+        )
+        await new Promise((r) => setTimeout(r, backoffMs))
+        continue
+      }
+      return res
+    } catch (err) {
+      if (attempt < retries) {
+        console.warn(
+          `${url} network error, retrying in ${backoffMs / 1000}s...`,
+        )
+        await new Promise((r) => setTimeout(r, backoffMs))
+        continue
+      }
+      throw err
+    }
+  }
+  // Unreachable: loop either returns or throws.
+  throw new Error(`fetchWithRetry exhausted retries for ${url}`)
+}
+
 async function get<T>(path: string): Promise<T> {
-  const res = await fetch(`${BASE}${path}`)
+  const res = await fetchWithRetry(`${BASE}${path}`)
   if (!res.ok) throw new Error(`API error ${res.status}: ${path}`)
   return (await res.json()) as T
 }

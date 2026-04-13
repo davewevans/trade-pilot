@@ -164,6 +164,7 @@ export function ReasoningExplorer() {
   const [loading, setLoading] = useState(true)
   const [loadingMore, setLoadingMore] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [reloadKey, setReloadKey] = useState(0)
   const initialFetchRef = useRef(true)
 
   // Debounce the underlying text input so we don't fire a request per keystroke.
@@ -208,7 +209,7 @@ export function ReasoningExplorer() {
     return () => {
       cancelled = true
     }
-  }, [baseParams])
+  }, [baseParams, reloadKey])
 
   const loadMore = async () => {
     if (loadingMore || !decisions) return
@@ -324,14 +325,26 @@ export function ReasoningExplorer() {
 
       {error && (
         <div
-          className="text-xs p-3 rounded"
+          className="text-xs p-3 rounded flex items-center justify-between gap-3"
           style={{
             backgroundColor: 'color-mix(in srgb, var(--red) 12%, transparent)',
             color: 'var(--red)',
             border: '1px solid color-mix(in srgb, var(--red) 35%, transparent)',
           }}
         >
-          {error}
+          <span>{error}</span>
+          <button
+            type="button"
+            onClick={() => setReloadKey((k) => k + 1)}
+            className="px-2 py-1 rounded text-xs font-medium"
+            style={{
+              backgroundColor: 'color-mix(in srgb, var(--red) 20%, transparent)',
+              color: 'var(--red)',
+              border: '1px solid color-mix(in srgb, var(--red) 45%, transparent)',
+            }}
+          >
+            Retry
+          </button>
         </div>
       )}
 
