@@ -26,7 +26,7 @@ OPEN if ALL of the following:
 2. iv_rank >= 40
 3. days_to_earnings > 25
 4. days_to_ex_dividend > DTE (must avoid early assignment at ex-div)
-5. best_candidate.net_credit > 0.50
+5. best_candidate.net_credit > 0.75
 6. best_candidate.credit_to_width_ratio >= 0.15
 7. best_candidate.liquidity_ok is true
 8. DTE between 21 and 40

@@ -272,10 +272,10 @@ class TestBullPutSpreadGuardrails:
 
     def test_rejects_low_net_credit(self, guardrails):
         ok, reason = guardrails.validate_bull_put_spread_entry(
-            _entry_decision(net_credit=0.20), _base_context(), {"buying_power": "100000"},
+            _entry_decision(net_credit=0.40), _base_context(), {"buying_power": "100000"},
         )
         assert ok is False
-        assert "$0.25" in reason
+        assert "$0.50" in reason
 
     def test_rejects_max_loss_over_2pct(self, guardrails):
         ok, reason = guardrails.validate_bull_put_spread_entry(

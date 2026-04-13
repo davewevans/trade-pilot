@@ -20,7 +20,7 @@ OPEN an iron condor ONLY IF ALL of the following are true:
 2. iv_environment is HIGH (IVR >= 40 minimum, 50+ preferred)
 3. VIX is between 18 and 35
 4. days_to_earnings > 35
-5. iron_condor_candidate.total_credit > 1.00
+5. iron_condor_candidate.total_credit > 1.25
 6. iron_condor_candidate.put_spread.liquidity_ok is true
 7. iron_condor_candidate.call_spread.liquidity_ok is true
 8. DTE is between 25 and 45

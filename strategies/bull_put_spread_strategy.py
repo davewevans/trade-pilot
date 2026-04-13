@@ -113,10 +113,10 @@ class BullPutSpreadStrategy:
             }
 
         # Check candidate quality
-        if best.get("net_credit", 0) <= 0.50:
+        if best.get("net_credit", 0) <= 0.75:
             return {
                 "action": "SKIP",
-                "reasoning": f"Best candidate credit ${best.get('net_credit', 0)} <= $0.50",
+                "reasoning": f"Best candidate credit ${best.get('net_credit', 0)} <= $0.75",
                 "skip_reason": "low_credit",
             }
         if best.get("credit_to_width_ratio", 0) < 0.15:
@@ -149,8 +149,8 @@ class BullPutSpreadStrategy:
             return "No viable bull put spread candidates found", 0.0
 
         net_credit = best.get("net_credit", 0)
-        if net_credit <= 0.50:
-            return f"Best candidate credit ${net_credit} <= $0.50", 0.0
+        if net_credit <= 0.75:
+            return f"Best candidate credit ${net_credit} <= $0.75", 0.0
         if best.get("credit_to_width_ratio", 0) < 0.15:
             return (
                 f"Credit/width ratio {best.get('credit_to_width_ratio', 0)} < 0.15",

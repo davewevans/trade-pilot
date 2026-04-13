@@ -295,13 +295,13 @@ class TestIronCondorGuardrails:
         assert "5%" in reason
 
     def test_rejects_low_total_credit(self, guardrails):
-        decision = _entry_decision(total_credit=0.40)
+        decision = _entry_decision(total_credit=0.80)
         ctx = _base_context()
         account = {"buying_power": "100000"}
 
         ok, reason = guardrails.validate_iron_condor_entry(decision, ctx, account)
         assert ok is False
-        assert "$0.50" in reason
+        assert "$1.00" in reason
 
     def test_rejects_dte_outside_range(self, guardrails):
         decision = _entry_decision(dte=15)

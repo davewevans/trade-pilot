@@ -71,7 +71,7 @@ through expiry.
 
 **Entry criteria:**
 - Short put delta between -0.20 and -0.30
-- Net credit >= $0.50 per spread
+- Net credit >= $0.75 per spread
 - DTE between 21 and 35
 - No earnings within 21 days
 - Risk/reward ratio >= 1:3 (risk $300 to make $100)
@@ -102,7 +102,7 @@ strike through expiry.
 
 **Entry criteria:**
 - Short call delta between 0.20 and 0.30 (positive — it's a call)
-- Net credit >= $0.40 per spread
+- Net credit >= $0.75 per spread
 - DTE between 21 and 35
 - No earnings within 21 days
 - No ex-dividend within DTE window (early assignment risk)
@@ -127,7 +127,7 @@ underlying stays between the two short strikes and IV contracts.
 - VIX between 20 and 35 (enough premium, not extreme panic)
 
 **Entry criteria:**
-- Combined credit >= $1.00 per condor
+- Combined credit >= $1.25 per condor
 - Both short strikes outside 1× implied move
   (check volatility.implied_move_pct)
 - Put-side short delta -0.15 to -0.25

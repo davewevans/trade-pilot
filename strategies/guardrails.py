@@ -315,8 +315,8 @@ class Guardrails:
     ) -> tuple[bool, str]:
         """Hard rules for iron condor entry that cannot be overridden."""
         total_credit = decision.get("total_credit", 0)
-        if total_credit <= 0.50:
-            return False, f"Total credit ${total_credit} <= $0.50 minimum"
+        if total_credit <= 1.00:
+            return False, f"Total credit ${total_credit} <= $1.00 minimum"
 
         max_loss = decision.get("max_loss", 0)
         buying_power = float(account.get("buying_power", 0))
@@ -461,8 +461,8 @@ class Guardrails:
             return False, f"limit_price must be negative for credit spread, got {limit_price}"
 
         net_credit = decision.get("net_credit", 0)
-        if net_credit <= 0.25:
-            return False, f"Net credit ${net_credit} <= $0.25 minimum"
+        if net_credit <= 0.50:
+            return False, f"Net credit ${net_credit} <= $0.50 minimum"
 
         max_loss = decision.get("max_loss", 0)
         buying_power = float(account.get("buying_power", 0))
@@ -525,8 +525,8 @@ class Guardrails:
             return False, f"limit_price must be negative for credit spread, got {limit_price}"
 
         net_credit = decision.get("net_credit", 0)
-        if net_credit <= 0.25:
-            return False, f"Net credit ${net_credit} <= $0.25 minimum"
+        if net_credit <= 0.50:
+            return False, f"Net credit ${net_credit} <= $0.50 minimum"
 
         max_loss = decision.get("max_loss", 0)
         buying_power = float(account.get("buying_power", 0))

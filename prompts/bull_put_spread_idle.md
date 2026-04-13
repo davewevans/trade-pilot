@@ -23,7 +23,7 @@ OPEN if ALL of the following:
 1. confirmed_market_regime is NEUTRAL or BULL
 2. iv_rank >= 35
 3. days_to_earnings > 25
-4. best_candidate.net_credit > 0.50
+4. best_candidate.net_credit > 0.75
 5. best_candidate.credit_to_width_ratio >= 0.15
 6. best_candidate.liquidity_ok is true
 7. DTE between 21 and 40
