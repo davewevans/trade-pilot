@@ -6,6 +6,12 @@
     "JNJ", "UNH",
     "SPY"
   ],
+  "iron_condor": [
+    "SPY", "QQQ", "IWM",
+    "AAPL", "MSFT", "GOOGL", "AMZN",
+    "JPM", "XOM",
+    "META", "NVDA"
+  ],
   "spreads": [
     "AAPL", "MSFT", "AMD", "GOOGL", "AMZN", "META", "NVDA", "TSLA",
     "JPM", "GS", "BAC",

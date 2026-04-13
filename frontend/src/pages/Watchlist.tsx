@@ -192,6 +192,7 @@ function WatchlistSection({
 
 export function Watchlist() {
   const [wheel, setWheel] = useState<string[]>([])
+  const [ironCondor, setIronCondor] = useState<string[]>([])
   const [spreads, setSpreads] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -202,6 +203,7 @@ export function Watchlist() {
     api.watchlist()
       .then((data) => {
         setWheel(data.wheel)
+        setIronCondor(data.iron_condor)
         setSpreads(data.spreads)
         setSavedAt(data.updated_at)
       })
@@ -213,7 +215,7 @@ export function Watchlist() {
     setSaving(true)
     setError(null)
     try {
-      const data = await api.updateWatchlist(wheel, spreads)
+      const data = await api.updateWatchlist(wheel, ironCondor, spreads)
       setSavedAt(data.updated_at)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Save failed')
@@ -253,6 +255,13 @@ export function Watchlist() {
           onChange={setWheel}
         />
         <WatchlistSection
+          title="Iron Condor Watchlist"
+          note="Iron condors profit when stocks stay in a range. These should be the most liquid names available — index ETFs like SPY and QQQ are ideal. Avoid volatile stocks that make large daily moves."
+          symbols={ironCondor}
+          suggestedGroups={QUICK_ADD_GROUPS}
+          onChange={setIronCondor}
+        />
+        <WatchlistSection
           title="Spread Watchlist"
           note="The bot scans these for spread opportunities. You never own the stock — just the spread. Add any stock with a liquid options chain."
           symbols={spreads}
@@ -284,7 +293,7 @@ export function Watchlist() {
           {saving ? 'Saving…' : 'Save watchlist'}
         </button>
         <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
-          {wheel.length} wheel · {spreads.length} spreads
+          {wheel.length} wheel · {ironCondor.length} iron condor · {spreads.length} spreads
         </span>
       </div>
     </div>

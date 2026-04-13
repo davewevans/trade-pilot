@@ -123,7 +123,7 @@ export function Dashboard() {
   const [context, setContext] = useState<ContextResponse | null>(null)
   const [cb, setCb] = useState<CircuitBreaker | null>(null)
   const [accounts, setAccounts] = useState<Record<string, Portfolio | null>>({})
-  const [watchlistCounts, setWatchlistCounts] = useState<{ wheel: number; spreads: number } | null>(null)
+  const [watchlistCounts, setWatchlistCounts] = useState<{ wheel: number; iron_condor: number; spreads: number } | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -138,7 +138,7 @@ export function Dashboard() {
         if (!cancelled) setAccounts({})
       })
       api.watchlist().then((w) => {
-        if (!cancelled) setWatchlistCounts({ wheel: w.wheel.length, spreads: w.spreads.length })
+        if (!cancelled) setWatchlistCounts({ wheel: w.wheel.length, iron_condor: w.iron_condor.length, spreads: w.spreads.length })
       }).catch(() => {})
     }
     load()
@@ -170,13 +170,11 @@ export function Dashboard() {
         {watchlistCounts && (
           <p className="mt-2 text-xs" style={{ color: 'var(--text-muted)' }}>
             Watching{' '}
-            <span style={{ color: 'var(--text-secondary)' }}>
-              {watchlistCounts.wheel} stocks
-            </span>{' '}
+            <span style={{ color: 'var(--text-secondary)' }}>{watchlistCounts.wheel} stocks</span>{' '}
             for wheel,{' '}
-            <span style={{ color: 'var(--text-secondary)' }}>
-              {watchlistCounts.spreads} names
-            </span>{' '}
+            <span style={{ color: 'var(--text-secondary)' }}>{watchlistCounts.iron_condor} names</span>{' '}
+            for iron condors,{' '}
+            <span style={{ color: 'var(--text-secondary)' }}>{watchlistCounts.spreads} names</span>{' '}
             for spreads —{' '}
             <Link to="/watchlist" style={{ color: 'var(--accent)' }}>
               manage watchlist

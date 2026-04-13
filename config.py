@@ -105,11 +105,11 @@ class Settings:
                 data = json.loads(watchlist_path.read_text(encoding="utf-8"))
                 self.WATCHLIST: list[str] = data.get("wheel", ["AAPL", "SPY"])
                 self.SPREAD_WATCHLIST: list[str] = data.get("spreads", list(self.WATCHLIST))
+                self.IRON_CONDOR_WATCHLIST: list[str] = data.get("iron_condor", list(self.SPREAD_WATCHLIST))
                 log.info(
-                    "Loaded watchlist from %s: %d wheel, %d spreads",
-                    watchlist_path,
-                    len(self.WATCHLIST),
-                    len(self.SPREAD_WATCHLIST),
+                    "Loaded watchlist from %s: %d wheel, %d iron_condor, %d spreads",
+                    watchlist_path, len(self.WATCHLIST),
+                    len(self.IRON_CONDOR_WATCHLIST), len(self.SPREAD_WATCHLIST),
                 )
                 return
             except Exception:
@@ -118,6 +118,7 @@ class Settings:
         # watchlist.json missing or unreadable — seed from built-in defaults
         log.warning("watchlist.json not found at %s; using built-in defaults", watchlist_path)
         self.WATCHLIST = ["AAPL", "SPY", "MSFT", "AMD", "JPM", "XOM"]
+        self.IRON_CONDOR_WATCHLIST = ["SPY", "QQQ", "IWM", "AAPL", "MSFT", "GOOGL", "AMZN", "JPM", "XOM", "META", "NVDA"]
         self.SPREAD_WATCHLIST = [
             "AAPL", "MSFT", "AMD", "GOOGL", "AMZN", "META", "NVDA", "TSLA",
             "JPM", "GS", "BAC", "XOM", "CVX", "JNJ", "UNH", "PFE",

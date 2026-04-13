@@ -473,13 +473,16 @@ def run() -> None:
                         continue
                     decision = strat.run_cycle(spread_ctx, advisor)
                 else:
-                    # IDLE: scan SPREAD_WATCHLIST, pre-check without Claude,
-                    # then run_cycle (→ Claude) once for the winner.
+                    # IDLE: scan the strategy-specific watchlist, pre-check without
+                    # Claude, then run_cycle (→ Claude) once for the winner.
                     best_score = float("-inf")
                     best_symbol = None
                     best_ctx = None
                     last_skip_reason = None
-                    symbols = settings.SPREAD_WATCHLIST or settings.WATCHLIST
+                    if strategy_name == "iron_condor":
+                        symbols = settings.IRON_CONDOR_WATCHLIST or settings.WATCHLIST
+                    else:
+                        symbols = settings.SPREAD_WATCHLIST or settings.WATCHLIST
                     for sym in symbols:
                         try:
                             candidate_ctx = ctx_builder.build(sym, "IDLE")
@@ -505,11 +508,12 @@ def run() -> None:
                             last_skip_reason = skip_reason
 
                     if best_ctx is None:
+                        wl_name = "IRON_CONDOR_WATCHLIST" if strategy_name == "iron_condor" else "SPREAD_WATCHLIST"
                         reason = (
-                            f"No qualifying candidates across SPREAD_WATCHLIST "
+                            f"No qualifying candidates across {wl_name} "
                             f"(last skip: {last_skip_reason})"
                             if last_skip_reason
-                            else "No qualifying candidates across SPREAD_WATCHLIST"
+                            else f"No qualifying candidates across {wl_name}"
                         )
                         logger.info("%s: %s", strategy_name, reason)
                         decision = {

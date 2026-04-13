@@ -1058,7 +1058,7 @@ def regime_history():
 
 @app.get("/api/watchlist")
 def get_watchlist():
-    """Return the current wheel and spreads watchlists."""
+    """Return the current wheel, iron_condor, and spreads watchlists."""
     path = DATA_DIR / "watchlist.json"
     if path.exists():
         data = _read_json(path)
@@ -1066,6 +1066,7 @@ def get_watchlist():
             return data
     return {
         "wheel": list(settings.WATCHLIST),
+        "iron_condor": list(settings.IRON_CONDOR_WATCHLIST),
         "spreads": list(settings.SPREAD_WATCHLIST),
         "updated_at": None,
     }
@@ -1080,17 +1081,19 @@ async def update_watchlist(request: Request):
         return JSONResponse(status_code=400, content={"error": "invalid JSON body"})
 
     wheel = body.get("wheel", [])
+    iron_condor = body.get("iron_condor", [])
     spreads = body.get("spreads", [])
 
-    if not isinstance(wheel, list) or not isinstance(spreads, list):
-        return JSONResponse(status_code=400, content={"error": "wheel and spreads must be arrays"})
+    if not isinstance(wheel, list) or not isinstance(iron_condor, list) or not isinstance(spreads, list):
+        return JSONResponse(status_code=400, content={"error": "wheel, iron_condor, and spreads must be arrays"})
 
-    for sym in wheel + spreads:
+    for sym in wheel + iron_condor + spreads:
         if not isinstance(sym, str) or not sym.isalpha() or not sym.isupper() or len(sym) > 6:
             return JSONResponse(status_code=400, content={"error": f"Invalid symbol: {sym!r}"})
 
     data = {
         "wheel": wheel,
+        "iron_condor": iron_condor,
         "spreads": spreads,
         "updated_at": datetime.now().isoformat(),
     }
@@ -1099,9 +1102,13 @@ async def update_watchlist(request: Request):
 
     # Hot-reload so the next scheduler cycle uses the new lists
     settings.WATCHLIST = wheel
+    settings.IRON_CONDOR_WATCHLIST = iron_condor
     settings.SPREAD_WATCHLIST = spreads
 
-    logger.info("Watchlist updated: %d wheel, %d spreads", len(wheel), len(spreads))
+    logger.info(
+        "Watchlist updated: %d wheel, %d iron_condor, %d spreads",
+        len(wheel), len(iron_condor), len(spreads),
+    )
     return data
 
 
