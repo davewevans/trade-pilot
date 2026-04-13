@@ -65,6 +65,9 @@ export function Sidebar() {
       <NavLink to="/options-basics" className={linkClass} style={({ isActive }) => linkStyle(isActive)}>
         Options Basics
       </NavLink>
+      <NavLink to="/trade-lifecycle" className={linkClass} style={({ isActive }) => linkStyle(isActive)}>
+        Life of a Trade
+      </NavLink>
       <NavLink to="/how-it-works" className={linkClass} style={({ isActive }) => linkStyle(isActive)}>
         How Claude Decides
       </NavLink>
