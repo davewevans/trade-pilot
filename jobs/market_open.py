@@ -529,6 +529,10 @@ def run() -> None:
                         # Tag the winning underlying so _handle_spread_open uses it.
                         if decision.get("action") == "OPEN":
                             decision["underlying"] = best_symbol
+                        # S11: pre-checks passed (this symbol was the winner),
+                        # so the deterministic path would have OPENed. Anything
+                        # else here is a Claude override.
+                        decision["_pre_check_would_have"] = "OPEN"
                 action = decision.get("action", "SKIP")
                 logger.info("%s decision: %s", strategy_name, action)
 
@@ -538,6 +542,7 @@ def run() -> None:
                         reasoning=decision.get("reasoning", ""),
                         action_taken=action in ("OPEN", "CLOSE"),
                         underlying=strategy_name,
+                        pre_check_would_have=decision.get("_pre_check_would_have"),
                     )
                 except Exception as e:
                     logger.warning("Failed to write %s decision: %s", strategy_name, e)
@@ -580,6 +585,11 @@ def run() -> None:
                         "iv_environment": spread_ctx.get("iv_environment"),
                         "vix": (spread_ctx.get("macro") or {}).get("vix"),
                         "market_regime": spread_ctx.get("confirmed_market_regime"),
+                        "pre_check_result": decision.get("_pre_check_would_have"),
+                        "claude_override": (
+                            decision.get("_pre_check_would_have") is not None
+                            and decision.get("_pre_check_would_have") != action
+                        ),
                     })
 
                 if action == "OPEN":

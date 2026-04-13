@@ -64,6 +64,29 @@ def run() -> None:
     assignments = len([e for e in weekly_entries if e.get("status") == "assigned"])
     rolls = len([e for e in weekly_entries if e.get("action") == "roll"])
 
+    # ── Claude vs pre-check value (S11) ─────────────────────
+    # Decisions where the deterministic pre-check would have OPENed.
+    pre_check_passes = [
+        e for e in weekly_entries if e.get("pre_check_result") == "OPEN"
+    ]
+    claude_overrides = [
+        e for e in pre_check_passes if e.get("claude_override")
+    ]
+    override_skips = [
+        e for e in claude_overrides if (e.get("action") or "").lower() == "skip"
+    ]
+    claude_value_section = (
+        f"\n## Claude Decision Value\n\n"
+        f"| Metric | Value |\n"
+        f"|--------|-------|\n"
+        f"| Pre-check passes (Claude could have opened) | "
+        f"{len(pre_check_passes)} |\n"
+        f"| Claude overrides (disagreed with pre-check) | "
+        f"{len(claude_overrides)} |\n"
+        f"| Override → SKIP (Claude vetoed an entry) | "
+        f"{len(override_skips)} |\n"
+    )
+
     # ── Collect daily reports ───────────────────────────────
     daily_dir = settings.REPORTS_DIR / "daily"
     daily_summaries: list[str] = []
@@ -94,7 +117,7 @@ def run() -> None:
 | Assignments | {assignments} |
 | Rolls | {rolls} |
 | Skips | {skips} |
-
+{claude_value_section}
 ## Daily Reports
 
 {chr(10).join(daily_summaries) if daily_summaries else "No daily reports found."}

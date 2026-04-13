@@ -311,13 +311,21 @@ class StateWriter:
         action_taken: bool,
         underlying: str,
         guardrail_rejection: str | None = None,
+        pre_check_would_have: str | None = None,
     ) -> None:
-        """Append one record to ``snapshots/decisions.jsonl``."""
+        """Append one record to ``snapshots/decisions.jsonl``.
+
+        ``pre_check_would_have`` is the action the rules-only pre-check
+        would have taken (e.g. "OPEN") before Claude was consulted.
+        Together with the real ``action`` this lets us measure how often
+        Claude overrides the deterministic pre-check (S11 instrumentation).
+        """
         try:
+            claude_action = decision_dict.get("action", "")
             record = {
                 "timestamp": self._now_iso(),
                 "underlying": underlying,
-                "action": decision_dict.get("action", ""),
+                "action": claude_action,
                 "action_taken": action_taken,
                 "reasoning": reasoning,
                 "key_inputs": {
@@ -328,6 +336,11 @@ class StateWriter:
                     "skip_reason": decision_dict.get("skip_reason"),
                 },
                 "guardrail_rejection": guardrail_rejection,
+                "pre_check_result": pre_check_would_have,
+                "claude_override": (
+                    pre_check_would_have is not None
+                    and pre_check_would_have != claude_action
+                ),
             }
 
             path = self.dir / "decisions.jsonl"
