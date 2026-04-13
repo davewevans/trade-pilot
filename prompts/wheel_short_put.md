@@ -19,3 +19,13 @@ Work through this decision:
 
 For a roll: find the best replacement contract in the put chain.
 Target: same or lower strike, 21-35 DTE out, net credit if possible.
+
+**Roll decision checklist:**
+Before recommending a roll, verify ALL of these:
+- [ ] The roll results in a net credit >= $0.10
+- [ ] The new contract meets DTE 21-35 and delta -0.20 to -0.30
+- [ ] This would be roll #1 or #2 (not #3+)
+- [ ] Earnings are > 21 days from the new expiry
+- [ ] The stock hasn't dropped > 20% from original entry
+
+If ANY check fails → recommend "close" instead of "roll".

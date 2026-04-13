@@ -285,27 +285,38 @@ Only initiate a CC if ALL of the following are true:
 
 Roll an existing position when ANY of the following trigger:
 
-**Roll the Put:**
-- Current delta has doubled from initial delta (e.g., opened at -0.25, 
-  now at -0.50 or worse) → roll down and out
-- Stock has broken below a key support level with high volume
-- DTE <= 7 and position is still at risk (not profitable) → roll out
+**Roll triggers (in priority order):**
+1. Premium <= 50% of initial credit → CLOSE for profit (don't roll — just take the win)
+2. Current abs(delta) >= 2× initial abs(delta) → evaluate roll
+3. DTE <= 7 AND position is at risk (not profitable) → roll out
+4. DTE <= 5 AND option is ITM → roll out immediately
 
-**Roll the Call:**
-- Current delta has doubled from initial delta → roll up and out
-- Stock has surged well above strike → evaluate: let it be called 
-  away (good outcome) or roll up for more premium
-- DTE <= 7 and position still open → roll out
+**Roll execution rules (hard constraints):**
+- ONLY roll for a net credit >= $0.10. If the roll would cost money
+  (net debit), do NOT roll. Either:
+  - Accept assignment (wheel puts) — this is the wheel working as designed
+  - Close at a loss (covered calls or spreads)
+- The replacement contract must have DTE between 21 and 35 days
+- The replacement contract must have delta within the original target range
+  (-0.20 to -0.30 for puts, 0.20 to 0.35 for calls)
+- Earnings must be > 21 days from the new expiration
+- Maximum 2 rolls per position. After the second roll, if the position
+  is still at risk, close it. Don't throw good money after bad.
 
-**Take Profit (close early):**
-- Position has reached 50% of max profit (premium dropped by 50%)
-  → close early, free up capital for next trade
-  → Example: sold put for $2.00, now worth $1.00 → buy back and close
+**When NOT to roll:**
+- If the stock has dropped > 20% from your entry price (for CSPs)
+  → accept assignment rather than chasing the strike down
+- If the stock's fundamentals have changed (downgrade, earnings miss,
+  sector collapse) → close and accept the loss
+- If rolling would result in a net debit of any amount → don't roll
+- If you've already rolled this position twice → close it
 
-**Do NOT roll if:**
-- Rolling would result in a net debit (you pay to roll)
-- The underlying's fundamentals have deteriorated significantly
-- Earnings are within 21 days of the new expiry
+**Roll tracking:**
+When recommending a roll, include in your reasoning:
+- Original entry price and date
+- Number of previous rolls on this position
+- Net credit/debit of the proposed roll
+- New position's delta, DTE, and strike relative to current price
 
 ---
 

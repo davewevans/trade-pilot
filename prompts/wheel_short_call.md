@@ -22,3 +22,13 @@ Work through this decision:
 
 Note: being assigned on a covered call is NOT a loss — it means the 
 wheel completed a full cycle profitably. Celebrate it.
+
+**Roll decision checklist:**
+Before recommending a roll, verify ALL of these:
+- [ ] The roll results in a net credit >= $0.10
+- [ ] The new contract meets DTE 21-35 and delta 0.20 to 0.35
+- [ ] This would be roll #1 or #2 (not #3+)
+- [ ] Ex-dividend is NOT within the new expiry window (early-assign risk)
+- [ ] The stock's fundamentals have not deteriorated since entry
+
+If ANY check fails → recommend "close" instead of "roll".
