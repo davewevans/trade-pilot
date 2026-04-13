@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { ACCOUNTS, api, type ContextResponse } from '../api/client'
+import { ACCOUNTS, api, type ContextResponse, type SourceHealthEntry } from '../api/client'
 import { useAccount } from '../hooks/useAccount'
 import { useDecisions } from '../hooks/useDecisions'
 import { Badge } from '../components/shared/Badge'
@@ -118,6 +118,172 @@ function ActivityRow({ d }: { d: Decision }) {
   )
 }
 
+// ── Data health panel ────────────────────────────────────────
+
+const HEALTH_SOURCES = [
+  'Alpaca', 'Alpaca News', 'ORATS', 'yfinance', 'CNN Fear & Greed', 'FRED', 'Finnhub',
+]
+
+type HealthStatus = 'green' | 'yellow' | 'red' | 'gray'
+
+function healthStatus(entry: SourceHealthEntry | undefined): HealthStatus {
+  if (!entry || entry.last_checked === null) return 'gray'
+  const failures = entry.consecutive_failures
+  if (failures >= 3) return 'red'
+  const lastSuccess = entry.last_success ? new Date(entry.last_success).getTime() : null
+  const ageMs = lastSuccess == null ? Infinity : Date.now() - lastSuccess
+  const ageMins = ageMs / 60_000
+  if (lastSuccess === null) return 'red'
+  if (failures >= 1 && failures <= 2) return 'yellow'
+  if (ageMins > 120) return 'red'
+  if (ageMins > 30) return 'yellow'
+  return 'green'
+}
+
+const STATUS_DOT: Record<HealthStatus, { color: string; label: string }> = {
+  green: { color: '#3fb950', label: 'healthy' },
+  yellow: { color: '#d29922', label: 'stale' },
+  red: { color: '#f85149', label: 'down' },
+  gray: { color: '#6e7681', label: 'no data' },
+}
+
+function fmtAge(iso: string | null): string {
+  if (!iso) return 'never'
+  const ms = Date.now() - new Date(iso).getTime()
+  const mins = Math.floor(ms / 60_000)
+  if (mins < 1) return 'just now'
+  if (mins < 60) return `${mins} min ago`
+  const hrs = Math.floor(mins / 60)
+  if (hrs < 24) return `${hrs}h ago`
+  return `${Math.floor(hrs / 24)}d ago`
+}
+
+function SourceDot({
+  name,
+  entry,
+}: {
+  name: string
+  entry: SourceHealthEntry | undefined
+}) {
+  const status = healthStatus(entry)
+  const dot = STATUS_DOT[status]
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [open])
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="flex items-center gap-1.5 px-2 py-1 rounded text-xs transition-colors"
+        style={{
+          backgroundColor: open ? 'var(--bg-secondary)' : 'transparent',
+          color: 'var(--text-secondary)',
+          border: '1px solid transparent',
+          cursor: 'pointer',
+        }}
+        title={`${name}: ${dot.label}`}
+      >
+        <span
+          style={{
+            display: 'inline-block',
+            width: 8,
+            height: 8,
+            borderRadius: '50%',
+            backgroundColor: dot.color,
+            flexShrink: 0,
+          }}
+        />
+        <span>{name}</span>
+      </button>
+      {open && entry && (
+        <div
+          className="absolute z-10 top-full mt-1 left-0 rounded-md p-3 text-xs space-y-1 min-w-[220px]"
+          style={{
+            backgroundColor: 'var(--bg-card)',
+            border: '1px solid var(--border)',
+            boxShadow: '0 4px 16px rgba(0,0,0,0.4)',
+            color: 'var(--text-secondary)',
+          }}
+        >
+          <div className="font-semibold mb-1" style={{ color: 'var(--text-primary)' }}>
+            {name}
+          </div>
+          <div>Last success: <span style={{ color: 'var(--text-primary)' }}>{fmtAge(entry.last_success)}</span></div>
+          <div>Last failure: <span style={{ color: 'var(--text-primary)' }}>{fmtAge(entry.last_failure)}</span></div>
+          {entry.last_failure_reason && (
+            <div className="truncate max-w-[280px]">
+              Reason: <span style={{ color: '#f85149' }}>{entry.last_failure_reason}</span>
+            </div>
+          )}
+          <div>
+            Today: <span style={{ color: '#3fb950' }}>{entry.today_successes} ok</span>
+            {' / '}
+            <span style={{ color: '#f85149' }}>{entry.today_failures} fail</span>
+          </div>
+          {entry.consecutive_failures > 0 && (
+            <div style={{ color: '#f85149' }}>
+              {entry.consecutive_failures} consecutive failure{entry.consecutive_failures !== 1 ? 's' : ''}
+            </div>
+          )}
+        </div>
+      )}
+      {open && !entry && (
+        <div
+          className="absolute z-10 top-full mt-1 left-0 rounded-md p-3 text-xs"
+          style={{
+            backgroundColor: 'var(--bg-card)',
+            border: '1px solid var(--border)',
+            color: 'var(--text-muted)',
+          }}
+        >
+          No data recorded yet
+        </div>
+      )}
+    </div>
+  )
+}
+
+function DataHealthPanel() {
+  const [sources, setSources] = useState<Record<string, SourceHealthEntry>>({})
+
+  useEffect(() => {
+    let cancelled = false
+    const load = () => {
+      api.sourceHealth().then((d) => {
+        if (!cancelled) setSources(d.sources)
+      }).catch(() => {})
+    }
+    load()
+    const id = setInterval(load, 60_000)
+    return () => { cancelled = true; clearInterval(id) }
+  }, [])
+
+  return (
+    <div>
+      <h2 className="section-heading">Data health</h2>
+      <div
+        className="rounded-md px-3 py-2"
+        style={{ backgroundColor: 'var(--bg-card)', border: '1px solid var(--border)' }}
+      >
+        <div className="flex flex-wrap gap-1">
+          {HEALTH_SOURCES.map((name) => (
+            <SourceDot key={name} name={name} entry={sources[name]} />
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export function Dashboard() {
   const { data, loading } = useDecisions({ limit: 20 })
   const [context, setContext] = useState<ContextResponse | null>(null)
@@ -195,6 +361,8 @@ export function Dashboard() {
           <StatCard label="Market Regime" value={regime || '—'} />
         </div>
       </div>
+
+      <DataHealthPanel />
 
       <div>
         <h2 className="section-heading">Recent activity</h2>

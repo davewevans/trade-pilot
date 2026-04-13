@@ -16,6 +16,20 @@ export interface MacroContext {
   fear_greed_rating?: string | null
 }
 
+export interface SourceHealthEntry {
+  last_success: string | null
+  last_failure: string | null
+  last_failure_reason: string | null
+  consecutive_failures: number
+  today_successes: number
+  today_failures: number
+  last_checked: string | null
+}
+
+export interface SourceHealthResponse {
+  sources: Record<string, SourceHealthEntry>
+}
+
 export interface ContextResponse {
   macro?: MacroContext
   confirmed_market_regime?: string | null
@@ -147,6 +161,8 @@ export const api = {
     get<Record<string, { state: string; spread_id?: string }>>(
       '/api/strategy-states',
     ),
+
+  sourceHealth: () => get<SourceHealthResponse>('/api/source-health'),
 
   watchlist: () =>
     get<{ wheel: string[]; iron_condor: string[]; spreads: string[]; updated_at: string | null }>('/api/watchlist'),

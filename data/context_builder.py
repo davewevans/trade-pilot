@@ -12,9 +12,45 @@ from brokers.base import BaseBroker
 from config import settings
 from data import market_data
 from data.market_regime import RegimeStabilityFilter, derive_market_regime
+from data.source_health import SourceHealth
 from data.trade_journal import TradeJournal
 
 logger = logging.getLogger(__name__)
+
+_health = SourceHealth()
+
+_SOURCE_MAP: dict[str, str] = {
+    "technicals": "yfinance",
+    "fundamentals": "yfinance",
+    "vix": "yfinance",
+    "fear_greed": "CNN Fear & Greed",
+    "risk_free_rate": "FRED",
+    "news": "Alpaca News",
+    "orats_summary": "ORATS",
+    "orats_cores": "ORATS",
+    "earnings_history": "Finnhub",
+    "analyst_data": "Finnhub",
+    "news_sentiment": "Finnhub",
+    "earnings": "Finnhub",
+    "vix_term": "yfinance",
+    "ex_dividend": "yfinance",
+}
+
+
+def _record_health(source_name: str, success: bool, detail: str = "") -> None:
+    """Record a health event and warn if a source is persistently failing."""
+    _health.record(source_name, success, detail)
+    if not success:
+        entry = _health.get_all().get(source_name, {})
+        failures = entry.get("consecutive_failures", 0)
+        if failures >= 3:
+            logger.warning(
+                "DATA SOURCE DEGRADED: %s has failed %d consecutive times. "
+                "Last error: %s",
+                source_name,
+                failures,
+                entry.get("last_failure_reason", ""),
+            )
 
 _news_client = NewsClient(
     api_key=settings.ALPACA_API_KEY,
@@ -102,11 +138,16 @@ class ContextBuilder:
 
         results: dict = {}
         for key, future in futures.items():
+            source_name = _SOURCE_MAP.get(key, key)
             try:
                 results[key] = future.result()
-            except Exception:
+                success = results[key] is not None
+                _record_health(source_name, success,
+                               "" if success else f"{key} returned None")
+            except Exception as e:
                 logger.warning("Failed to fetch %s for %s", key, symbol, exc_info=True)
                 results[key] = None
+                _record_health(source_name, False, str(e)[:200])
 
         context["technicals"] = results["technicals"]
         context["fundamentals"] = results["fundamentals"]
@@ -846,15 +887,18 @@ class ContextBuilder:
     def _fetch_account(self) -> dict | None:
         try:
             acct = self.broker.get_account()
-            return {
+            result = {
                 "buying_power": float(acct.get("buying_power", 0)),
                 "options_buying_power": float(acct.get("options_buying_power", 0)),
                 "options_approved_level": acct.get("options_approved_level"),
                 "options_trading_level": acct.get("options_trading_level"),
                 "portfolio_value": float(acct.get("portfolio_value", 0)),
             }
-        except Exception:
+            _record_health("Alpaca", True)
+            return result
+        except Exception as e:
             logger.warning("Failed to fetch account info", exc_info=True)
+            _record_health("Alpaca", False, str(e)[:200])
             return None
 
     def _fetch_positions(self, symbol: str) -> list[dict] | None:
@@ -863,23 +907,27 @@ class ContextBuilder:
                 positions = self.broker.get_all_positions()
             else:
                 positions = self.broker.get_positions()
+            _record_health("Alpaca", True)
             return [
                 p for p in positions
                 if symbol.upper() in str(p.get("symbol", "")).upper()
             ]
-        except Exception:
+        except Exception as e:
             logger.warning("Failed to fetch positions for %s", symbol, exc_info=True)
+            _record_health("Alpaca", False, str(e)[:200])
             return None
 
     def _fetch_orders(self, symbol: str) -> list[dict] | None:
         try:
             orders = self.broker.get_orders(status="open")
+            _record_health("Alpaca", True)
             return [
                 o for o in orders
                 if symbol.upper() in str(o.get("symbol", "")).upper()
             ]
-        except Exception:
+        except Exception as e:
             logger.warning("Failed to fetch orders for %s", symbol, exc_info=True)
+            _record_health("Alpaca", False, str(e)[:200])
             return None
 
     def _fetch_option_chain(
@@ -964,13 +1012,15 @@ class ContextBuilder:
             top_snapshots = {
                 c["symbol"]: snapshots.get(c["symbol"], {}) for c in top
             }
+            _record_health("Alpaca", True)
             return {"contracts": top, "snapshots": top_snapshots}
 
-        except Exception:
+        except Exception as e:
             logger.warning(
                 "Failed to fetch option chain for %s (state=%s)",
                 symbol, wheel_state, exc_info=True,
             )
+            _record_health("Alpaca", False, str(e)[:200])
             return {"contracts": [], "snapshots": {}}
 
     @staticmethod

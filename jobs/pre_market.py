@@ -17,6 +17,14 @@ def run() -> None:
     """
     logger.info("=== PRE-MARKET JOB STARTING ===")
 
+    # Reset daily success/failure counters at the start of each trading day.
+    try:
+        from data.source_health import SourceHealth
+        SourceHealth().reset_daily_counts()
+        logger.info("Source health daily counts reset")
+    except Exception:
+        logger.warning("Failed to reset source health daily counts", exc_info=True)
+
     from brokers.broker_factory import get_broker
     from data.context_builder import ContextBuilder
     from data.state_writer import StateWriter

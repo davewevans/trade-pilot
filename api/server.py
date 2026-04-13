@@ -509,6 +509,14 @@ def circuit_breakers():
     return data
 
 
+@app.get("/api/source-health")
+def source_health():
+    path = SNAPSHOTS / "source_health.json"
+    if not path.exists():
+        return {"sources": {}}
+    return {"sources": json.loads(path.read_text(encoding="utf-8"))}
+
+
 @app.post("/api/admin/reset-circuit-breaker")
 async def reset_circuit_breaker():
     """Reset the circuit breaker — delete lock file and state."""

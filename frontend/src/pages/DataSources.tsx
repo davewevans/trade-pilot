@@ -1,9 +1,14 @@
+import { useEffect, useState } from 'react'
+import { api, type SourceHealthEntry } from '../api/client'
+
 type Source = {
   name: string
   tagline: string
   website: string
   cache?: string
   fallback?: string
+  /** Key(s) in the source_health.json that map to this source. */
+  healthKeys?: string[]
   body: React.ReactNode
 }
 
@@ -49,6 +54,7 @@ const SOURCES: Source[] = [
     name: 'Alpaca',
     tagline: 'Broker, market data, options chain, and news',
     website: 'alpaca.markets',
+    healthKeys: ['Alpaca', 'Alpaca News'],
     cache: 'None — all Alpaca data is fetched live each cycle.',
     fallback:
       'If Alpaca is unavailable, the cycle cannot run. The bot logs the error and skips the cycle.',
@@ -90,6 +96,7 @@ const SOURCES: Source[] = [
     name: 'ORATS (Options Research & Technology Services)',
     tagline: 'Professional-grade implied volatility analytics',
     website: 'orats.io',
+    healthKeys: ['ORATS'],
     cache: '30 minutes per symbol.',
     fallback:
       'If ORATS is unavailable (API key missing or API error), IV rank returns as unavailable and is logged. Strategies that require IV rank will skip rather than proceed without it.',
@@ -121,6 +128,7 @@ const SOURCES: Source[] = [
     name: 'Finnhub',
     tagline: 'Earnings calendar (primary source)',
     website: 'finnhub.io',
+    healthKeys: ['Finnhub'],
     cache: '6 hours per symbol.',
     fallback:
       'If Finnhub is unavailable or returns no data, the bot falls back to yfinance for earnings dates (without EPS/revenue estimates). If both fail, earnings data is marked as unavailable and the cycle proceeds without it — but Claude is told the data is missing.',
@@ -149,6 +157,7 @@ const SOURCES: Source[] = [
     name: 'yfinance',
     tagline: 'Stock technicals, fundamentals, and VIX',
     website: 'pypi.org/project/yfinance',
+    healthKeys: ['yfinance'],
     cache:
       'Fundamentals and ex-dividend data cached 6 hours. Technicals computed fresh each cycle. VIX fetched live each cycle.',
     fallback:
@@ -199,6 +208,7 @@ const SOURCES: Source[] = [
     name: 'FRED (Federal Reserve Economic Data)',
     tagline: 'Risk-free interest rate',
     website: 'fred.stlouisfed.org',
+    healthKeys: ['FRED'],
     cache: '4 hours. The rate changes slowly — daily updates from the Fed are sufficient.',
     fallback:
       'If FRED is unavailable, the bot defaults to 5.0% (0.05) and logs a warning. This is a reasonable approximation that avoids blocking a cycle over a slowly-changing macro input.',
@@ -223,6 +233,7 @@ const SOURCES: Source[] = [
     name: 'CNN Fear & Greed Index',
     tagline: 'Market sentiment score',
     website: 'edition.cnn.com/markets/fear-and-greed',
+    healthKeys: ['CNN Fear & Greed'],
     cache: '1 hour.',
     fallback:
       'If the score is unavailable, regime classification proceeds without it. EUPHORIA cannot be triggered without a score, but BULL, NEUTRAL, BEAR, and CRASH can all be determined from VIX and SPX trend alone.',
@@ -284,7 +295,97 @@ const SOURCES: Source[] = [
   },
 ]
 
-function SourceCard({ src, idx }: { src: Source; idx: number }) {
+type HealthStatus = 'green' | 'yellow' | 'red' | 'gray'
+
+function resolveStatus(
+  keys: string[] | undefined,
+  sources: Record<string, SourceHealthEntry>,
+): HealthStatus {
+  if (!keys || keys.length === 0) return 'gray'
+  const statuses = keys.map((k) => {
+    const e = sources[k]
+    if (!e || e.last_checked === null) return 'gray' as HealthStatus
+    if (e.consecutive_failures >= 3) return 'red' as HealthStatus
+    const lastSuccess = e.last_success ? new Date(e.last_success).getTime() : null
+    if (lastSuccess === null) return 'red' as HealthStatus
+    const ageMins = (Date.now() - lastSuccess) / 60_000
+    if (e.consecutive_failures >= 1 && e.consecutive_failures <= 2) return 'yellow' as HealthStatus
+    if (ageMins > 120) return 'red' as HealthStatus
+    if (ageMins > 30) return 'yellow' as HealthStatus
+    return 'green' as HealthStatus
+  })
+  // Worst status wins
+  if (statuses.includes('red')) return 'red'
+  if (statuses.includes('yellow')) return 'yellow'
+  if (statuses.includes('green')) return 'green'
+  return 'gray'
+}
+
+const STATUS_DOT_COLOR: Record<HealthStatus, string> = {
+  green: '#3fb950',
+  yellow: '#d29922',
+  red: '#f85149',
+  gray: '#6e7681',
+}
+
+function fmtAge(iso: string | null): string {
+  if (!iso) return 'never'
+  const mins = Math.floor((Date.now() - new Date(iso).getTime()) / 60_000)
+  if (mins < 1) return 'just now'
+  if (mins < 60) return `${mins} min ago`
+  const hrs = Math.floor(mins / 60)
+  if (hrs < 24) return `${hrs}h ago`
+  return `${Math.floor(hrs / 24)}d ago`
+}
+
+function LiveStatus({
+  keys,
+  sources,
+}: {
+  keys: string[] | undefined
+  sources: Record<string, SourceHealthEntry>
+}) {
+  if (!keys) return null
+  const status = resolveStatus(keys, sources)
+
+  // Find the best last_success across all keys
+  const allEntries = keys.map((k) => sources[k]).filter(Boolean)
+  const lastSuccess = allEntries.reduce<string | null>((best, e) => {
+    if (!e.last_success) return best
+    if (!best) return e.last_success
+    return e.last_success > best ? e.last_success : best
+  }, null)
+
+  return (
+    <div className="flex items-center gap-1.5 text-xs" style={{ color: 'var(--text-muted)' }}>
+      <span
+        style={{
+          display: 'inline-block',
+          width: 8,
+          height: 8,
+          borderRadius: '50%',
+          backgroundColor: STATUS_DOT_COLOR[status],
+          flexShrink: 0,
+        }}
+      />
+      {status === 'gray'
+        ? 'no data yet'
+        : lastSuccess
+        ? `last success ${fmtAge(lastSuccess)}`
+        : 'never succeeded'}
+    </div>
+  )
+}
+
+function SourceCard({
+  src,
+  idx,
+  sources,
+}: {
+  src: Source
+  idx: number
+  sources: Record<string, SourceHealthEntry>
+}) {
   return (
     <section
       className="rounded-lg border overflow-hidden"
@@ -313,9 +414,12 @@ function SourceCard({ src, idx }: { src: Source; idx: number }) {
             {src.tagline}
           </p>
         </div>
-        <code className="text-xs font-mono" style={{ color: 'var(--text-muted)' }}>
-          {src.website}
-        </code>
+        <div className="flex flex-col items-end gap-1">
+          <code className="text-xs font-mono" style={{ color: 'var(--text-muted)' }}>
+            {src.website}
+          </code>
+          <LiveStatus keys={src.healthKeys} sources={sources} />
+        </div>
       </div>
       <div className="p-5">
         {src.body}
@@ -368,6 +472,12 @@ const FALLBACK_CHAIN = [
 ]
 
 export function DataSources() {
+  const [healthSources, setHealthSources] = useState<Record<string, SourceHealthEntry>>({})
+
+  useEffect(() => {
+    api.sourceHealth().then((d) => setHealthSources(d.sources)).catch(() => {})
+  }, [])
+
   return (
     <div className="max-w-5xl">
       <div className="mb-6">
@@ -384,7 +494,7 @@ export function DataSources() {
 
       <div className="space-y-5">
         {SOURCES.map((s, i) => (
-          <SourceCard key={s.name} src={s} idx={i + 1} />
+          <SourceCard key={s.name} src={s} idx={i + 1} sources={healthSources} />
         ))}
       </div>
 
