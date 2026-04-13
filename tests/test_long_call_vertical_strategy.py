@@ -192,7 +192,7 @@ class TestIdleEntry:
 
 
 class TestOpenManagement:
-    def _setup_open(self, strategy, gain_pct=30, dte=35, debit=1.50, wing=5):
+    def _setup_open(self, strategy, gain_pct=30, dte=35, debit=1.50, wing=5, original_dte=45):
         strategy.state = LongCallVerticalState.OPEN
         strategy.open_spread_id = "spread-lcv"
 
@@ -211,6 +211,7 @@ class TestOpenManagement:
             "entry_credit": debit,
             "expiration": future_exp,
             "max_gain": max_gain_per_share * 100,
+            "original_dte": original_dte,
             "status": "open",
         }]
 

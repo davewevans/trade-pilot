@@ -163,7 +163,7 @@ plus the debit by expiration.
 **Entry criteria:**
 - Net debit <= $1.50 (keep risk small and defined)
 - Long call delta between 0.40 and 0.55 (ITM or near-ATM, not lottery)
-- DTE between 21 and 45
+- DTE between 30 and 45
 - Break-even price within the implied move range
 - No earnings within DTE window
 

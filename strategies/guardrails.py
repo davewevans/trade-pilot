@@ -404,8 +404,8 @@ class Guardrails:
             )
 
         dte = decision.get("dte")
-        if dte is not None and (dte < 25 or dte > 65):
-            return False, f"DTE {dte} outside allowed range 25-65"
+        if dte is not None and (dte < 28 or dte > 48):
+            return False, f"DTE {dte} outside allowed range 28-48"
 
         for key in ("long_call_symbol", "short_call_symbol"):
             sym = decision.get(key, "")

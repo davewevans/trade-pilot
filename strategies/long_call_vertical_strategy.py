@@ -261,11 +261,34 @@ class LongCallVerticalStrategy:
                 "limit_price": round(current_value, 2),
             }
 
-        # 2. Time exit: DTE <= 20
-        if dte_remaining is not None and dte_remaining <= 20:
+        # 2. Proportional time exit: close when 60% of original DTE has
+        #    elapsed without at least 25% of max gain (theta acceleration
+        #    makes holding a debit spread past this point poor R/R).
+        original_dte = spread.get("original_dte")
+        if (
+            dte_remaining is not None
+            and original_dte
+            and original_dte > 0
+        ):
+            dte_elapsed_pct = (
+                (original_dte - dte_remaining) / original_dte * 100
+            )
+            if dte_elapsed_pct >= 60 and gain_pct < 25:
+                return {
+                    "action": "CLOSE",
+                    "reasoning": (
+                        f"{dte_elapsed_pct:.0f}% of DTE elapsed with only "
+                        f"{gain_pct:.0f}% gain — theta working against us"
+                    ),
+                    "spread_id": self.open_spread_id,
+                    "limit_price": round(current_value, 2),
+                }
+        # Hard floor: any spread within 10 days of expiration closes
+        # regardless of original DTE (gamma risk).
+        if dte_remaining is not None and dte_remaining <= 10:
             return {
                 "action": "CLOSE",
-                "reasoning": f"DTE {dte_remaining} <= 20 (theta acceleration)",
+                "reasoning": f"DTE {dte_remaining} <= 10 (gamma risk)",
                 "spread_id": self.open_spread_id,
                 "limit_price": round(current_value, 2),
             }
@@ -313,6 +336,17 @@ class LongCallVerticalStrategy:
 
         if self.spread_tracker:
             wing_width = decision.get("short_call_strike", 0) - decision.get("long_call_strike", 0)
+            # Compute original DTE so management can apply a proportional
+            # time-exit (close once 60% of DTE elapsed without 25% gain).
+            original_dte = decision.get("dte")
+            if original_dte is None:
+                try:
+                    exp = datetime.strptime(
+                        decision.get("expiration", ""), "%Y-%m-%d",
+                    ).date()
+                    original_dte = (exp - datetime.now().date()).days
+                except (ValueError, TypeError):
+                    original_dte = None
             spread_id = self.spread_tracker.register_spread(
                 strategy_type="long_call_vertical",
                 underlying=decision.get("underlying", ""),
@@ -324,6 +358,7 @@ class LongCallVerticalStrategy:
                 max_gain=round((wing_width - decision.get("net_debit", 0)) * 100, 2),
                 entry_order_id=order_id,
                 cb_status_at_entry=self.cb_status_at_entry,
+                original_dte=original_dte,
             )
             self.open_spread_id = spread_id
 

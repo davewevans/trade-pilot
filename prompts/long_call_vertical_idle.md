@@ -28,7 +28,7 @@ OPEN if ALL of the following:
 5. days_to_earnings > DTE + 5 days buffer
 6. best_candidate.net_debit < 2.00
 7. best_candidate.long_leg.delta between 0.45 and 0.60
-8. DTE between 30 and 60
+8. DTE between 30 and 45
 
 SKIP if:
 - Market regime is not BULL
