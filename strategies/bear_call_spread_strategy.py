@@ -25,11 +25,15 @@ _PROMPTS_DIR = _PROJECT_ROOT / "prompts"
 
 class BearCallSpreadState(str, Enum):
     IDLE = "IDLE"
+    PENDING_OPEN = "PENDING_OPEN"
     OPEN = "OPEN"
+    PENDING_CLOSE = "PENDING_CLOSE"
 
 
 class BearCallSpreadStrategy:
     """State machine for the bear call spread strategy."""
+
+    State = BearCallSpreadState
 
     def __init__(self, broker, state_writer=None, spread_tracker=None):
         self.broker = broker
@@ -37,6 +41,7 @@ class BearCallSpreadStrategy:
         self.spread_tracker = spread_tracker
         self.state = BearCallSpreadState.IDLE
         self.open_spread_id: str | None = None
+        self.pending_order_id: str | None = None
         self._client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
         self._model = "claude-sonnet-4-6"
 
@@ -56,6 +61,7 @@ class BearCallSpreadStrategy:
             data = json.loads(self._state_path.read_text(encoding="utf-8"))
             self.state = BearCallSpreadState(data.get("state", "IDLE"))
             self.open_spread_id = data.get("open_spread_id")
+            self.pending_order_id = data.get("pending_order_id")
         except Exception:
             logger.exception("Failed to load bear call spread state — starting IDLE")
 
@@ -64,8 +70,14 @@ class BearCallSpreadStrategy:
         self._state_path.write_text(json.dumps({
             "state": self.state.value,
             "open_spread_id": self.open_spread_id,
+            "pending_order_id": self.pending_order_id,
             "updated_at": datetime.now().isoformat(timespec="seconds"),
         }, indent=2), encoding="utf-8")
+
+    def reconcile_pending(self) -> None:
+        """Resolve PENDING_OPEN / PENDING_CLOSE against broker order status."""
+        from strategies._spread_lifecycle import reconcile_pending_state
+        reconcile_pending_state(self)
 
     def get_state(self) -> BearCallSpreadState:
         return self.state
@@ -73,6 +85,13 @@ class BearCallSpreadStrategy:
     # ── main cycle ──────────────────────────────────────────
 
     def run_cycle(self, context: dict, advisor=None) -> dict:
+        if self.state in (
+            BearCallSpreadState.PENDING_OPEN, BearCallSpreadState.PENDING_CLOSE,
+        ):
+            return {
+                "action": "HOLD",
+                "reasoning": f"Spread state {self.state.value} — awaiting fill confirmation",
+            }
         if self.state == BearCallSpreadState.IDLE:
             return self._evaluate_entry(context, advisor=advisor)
         return self._evaluate_management(context)
@@ -144,14 +163,14 @@ class BearCallSpreadStrategy:
         if not has_bearish_setup and regime != "BEAR":
             return "No bearish technical setup (above 50-SMA and RSI < 60)"
 
-        # Already have an open spread
+        # Already have an active spread (includes PENDING states).
         if self.spread_tracker:
             symbol = context.get("symbol", "")
-            open_bcs = self.spread_tracker.get_open_spreads(
+            open_bcs = self.spread_tracker.get_active_spreads(
                 underlying=symbol, strategy_type="bear_call_spread",
             )
             if open_bcs:
-                return f"Already have an open bear call spread on {symbol}"
+                return f"Already have an active bear call spread on {symbol}"
 
         return None
 
@@ -326,7 +345,8 @@ class BearCallSpreadStrategy:
             logger.exception("Failed to place bear call spread order")
             return False
 
-        logger.info("Bear call spread order placed: %s", order.get("id"))
+        order_id = order.get("id")
+        logger.info("Bear call spread order placed: %s", order_id)
 
         if self.spread_tracker:
             spread_id = self.spread_tracker.register_spread(
@@ -338,10 +358,12 @@ class BearCallSpreadStrategy:
                 expiration=decision.get("expiration", ""),
                 max_loss=decision.get("max_loss", 0),
                 max_gain=abs(decision.get("net_credit", 0)) * 100,
+                entry_order_id=order_id,
             )
             self.open_spread_id = spread_id
 
-        self.state = BearCallSpreadState.OPEN
+        self.pending_order_id = order_id
+        self.state = BearCallSpreadState.PENDING_OPEN
         self._save_state()
 
         if self.state_writer:
@@ -376,7 +398,7 @@ class BearCallSpreadStrategy:
             return False
 
         try:
-            self.broker.close_mleg_position(
+            close_order = self.broker.close_mleg_position(
                 open_legs=spread["legs"],
                 order_type="limit" if limit_price else "market",
                 limit_price=limit_price,
@@ -386,15 +408,15 @@ class BearCallSpreadStrategy:
             logger.exception("Failed to close bear call spread %s", spread_id)
             return False
 
-        self.spread_tracker.close_spread(
-            spread_id,
-            exit_credit=limit_price if limit_price else None,
-        )
-
-        self.state = BearCallSpreadState.IDLE
-        self.open_spread_id = None
+        close_order_id = (close_order or {}).get("id")
+        self.spread_tracker.mark_pending_close(spread_id, close_order_id)
+        self.pending_order_id = close_order_id
+        self.state = BearCallSpreadState.PENDING_CLOSE
         self._save_state()
-        logger.info("Bear call spread %s closed", spread_id)
+        logger.info(
+            "Bear call spread %s close submitted: %s (PENDING_CLOSE)",
+            spread_id, close_order_id,
+        )
         return True
 
     # ── parsing ─────────────────────────────────────────────

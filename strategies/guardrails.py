@@ -318,7 +318,7 @@ class Guardrails:
         underlying = self._extract_root(decision.get("put_short_symbol", ""))
         if open_condors:
             for oc in open_condors:
-                if oc.get("underlying", "").upper() == underlying.upper() and oc.get("status") == "open":
+                if oc.get("underlying", "").upper() == underlying.upper() and oc.get("status") not in ("closed", "canceled"):
                     return False, f"Already have an open iron condor on {underlying}"
 
         # Earnings check
@@ -389,7 +389,7 @@ class Guardrails:
             for s in open_spreads:
                 if (
                     s.get("underlying", "").upper() == underlying.upper()
-                    and s.get("status") == "open"
+                    and s.get("status") not in ("closed", "canceled")
                 ):
                     return False, f"Already have an open long call vertical on {underlying}"
 
@@ -436,7 +436,7 @@ class Guardrails:
             for s in open_spreads:
                 if (
                     s.get("underlying", "").upper() == underlying.upper()
-                    and s.get("status") == "open"
+                    and s.get("status") not in ("closed", "canceled")
                 ):
                     return False, f"Already have an open bear call spread on {underlying}"
 
@@ -494,7 +494,7 @@ class Guardrails:
             for s in open_spreads:
                 if (
                     s.get("underlying", "").upper() == underlying.upper()
-                    and s.get("status") == "open"
+                    and s.get("status") not in ("closed", "canceled")
                 ):
                     return False, f"Already have an open bull put spread on {underlying}"
 

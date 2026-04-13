@@ -126,6 +126,28 @@ def reconcile_pending_orders(broker, recorder) -> None:
         )
 
 
+def reconcile_pending_spreads(strategies) -> None:
+    """Drive each spread strategy through PENDING_* → terminal transitions.
+
+    Args:
+        strategies: iterable of spread-strategy instances exposing
+            ``reconcile_pending()``. Each call is independent and never
+            raises — failures are logged and the loop continues.
+
+    This is the order-status reconciler for multi-leg spread positions.
+    Run it at market_open *before* any trading decisions are made, and
+    again after each entry/exit so stale PENDING_* state is short-lived.
+    """
+    for strat in strategies:
+        try:
+            strat.reconcile_pending()
+        except Exception:
+            logger.exception(
+                "reconcile_pending_spreads: %s failed",
+                type(strat).__name__,
+            )
+
+
 def _to_float(value) -> float | None:
     if value is None:
         return None

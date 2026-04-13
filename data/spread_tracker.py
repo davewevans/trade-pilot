@@ -14,6 +14,24 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+# Spread lifecycle statuses.
+#   PENDING_OPEN  → entry order placed, not yet confirmed filled
+#   OPEN          → entry order filled, position live
+#   PENDING_CLOSE → close order placed, not yet confirmed filled
+#   CLOSED        → close order filled (terminal)
+#   CANCELED      → entry order canceled/rejected before fill (terminal)
+STATUS_PENDING_OPEN = "pending_open"
+STATUS_OPEN = "open"
+STATUS_PENDING_CLOSE = "pending_close"
+STATUS_CLOSED = "closed"
+STATUS_CANCELED = "canceled"
+
+# Non-terminal statuses — i.e. anything that should block a duplicate
+# entry or be examined by reconciliation.
+ACTIVE_STATUSES = frozenset({
+    STATUS_PENDING_OPEN, STATUS_OPEN, STATUS_PENDING_CLOSE,
+})
+
 
 class SpreadTracker:
     """Register, query, close, and reconcile multi-leg spread positions."""
@@ -59,8 +77,13 @@ class SpreadTracker:
         expiration: str,
         max_loss: float,
         max_gain: float,
+        entry_order_id: str | None = None,
     ) -> str:
-        """Register a newly filled spread. Returns a ``spread_id``."""
+        """Register a newly submitted spread. Starts in PENDING_OPEN.
+
+        Transitions to OPEN only after reconciliation confirms the entry
+        order filled. Returns a ``spread_id``.
+        """
         spread_id = str(uuid.uuid4())
         spread = {
             "spread_id": spread_id,
@@ -72,7 +95,9 @@ class SpreadTracker:
             "expiration": expiration,
             "max_loss": max_loss,
             "max_gain": max_gain,
-            "status": "open",
+            "status": STATUS_PENDING_OPEN,
+            "entry_order_id": entry_order_id,
+            "close_order_id": None,
             "exit_credit": None,
             "pnl": None,
             "closed_at": None,
@@ -81,18 +106,92 @@ class SpreadTracker:
         self._spreads.append(spread)
         self._save()
         logger.info(
-            "Registered spread %s: %s %s (%d legs)",
+            "Registered spread %s: %s %s (%d legs) status=%s order=%s",
             spread_id, strategy_type, underlying, len(legs),
+            STATUS_PENDING_OPEN, entry_order_id,
         )
         return spread_id
+
+    def _find(self, spread_id: str) -> dict | None:
+        for s in self._spreads:
+            if s["spread_id"] == spread_id:
+                return s
+        return None
+
+    def mark_open(self, spread_id: str, fill_price: float | None = None) -> None:
+        """Transition PENDING_OPEN → OPEN after entry order confirmed filled."""
+        s = self._find(spread_id)
+        if not s:
+            logger.warning("mark_open: spread %s not found", spread_id)
+            return
+        if s.get("status") != STATUS_PENDING_OPEN:
+            logger.warning(
+                "mark_open: spread %s in unexpected status %s",
+                spread_id, s.get("status"),
+            )
+        s["status"] = STATUS_OPEN
+        if fill_price is not None:
+            # Fill price for a credit spread is reported as a negative
+            # number by Alpaca; store the absolute value as the credit.
+            s["entry_credit"] = abs(float(fill_price))
+        s["opened_at"] = datetime.now().isoformat(timespec="seconds")
+        self._save()
+        logger.info("Spread %s confirmed OPEN (fill=%s)", spread_id, fill_price)
+
+    def cancel_pending_open(self, spread_id: str, reason: str = "") -> None:
+        """Mark a PENDING_OPEN spread as CANCELED (entry never filled)."""
+        s = self._find(spread_id)
+        if not s:
+            logger.warning("cancel_pending_open: spread %s not found", spread_id)
+            return
+        s["status"] = STATUS_CANCELED
+        s["closed_at"] = datetime.now().isoformat(timespec="seconds")
+        s["cancel_reason"] = reason
+        self._save()
+        logger.info(
+            "Spread %s entry canceled/rejected — status=%s reason=%s",
+            spread_id, STATUS_CANCELED, reason,
+        )
+
+    def mark_pending_close(self, spread_id: str, close_order_id: str | None) -> None:
+        """Transition OPEN → PENDING_CLOSE after a close order is submitted."""
+        s = self._find(spread_id)
+        if not s:
+            logger.warning("mark_pending_close: spread %s not found", spread_id)
+            return
+        if s.get("status") != STATUS_OPEN:
+            logger.warning(
+                "mark_pending_close: spread %s in unexpected status %s",
+                spread_id, s.get("status"),
+            )
+        s["status"] = STATUS_PENDING_CLOSE
+        s["close_order_id"] = close_order_id
+        self._save()
+        logger.info(
+            "Spread %s → PENDING_CLOSE order=%s", spread_id, close_order_id,
+        )
+
+    def revert_to_open(self, spread_id: str, reason: str = "") -> None:
+        """Roll PENDING_CLOSE back to OPEN if the close order was canceled."""
+        s = self._find(spread_id)
+        if not s:
+            logger.warning("revert_to_open: spread %s not found", spread_id)
+            return
+        s["status"] = STATUS_OPEN
+        s["close_order_id"] = None
+        self._save()
+        logger.info(
+            "Spread %s close canceled/rejected — reverted to OPEN reason=%s",
+            spread_id, reason,
+        )
 
     def get_open_spreads(
         self,
         underlying: str | None = None,
         strategy_type: str | None = None,
     ) -> list[dict]:
-        """Return all open spreads, optionally filtered."""
-        results = [s for s in self._spreads if s["status"] == "open"]
+        """Return spreads strictly in OPEN status (entry filled, no close pending)."""
+        results = [s for s in self._spreads if s.get("status") == STATUS_OPEN]
         if underlying:
             ul = underlying.upper()
             results = [s for s in results if s["underlying"].upper() == ul]
@@ -100,15 +199,41 @@ class SpreadTracker:
             results = [s for s in results if s["strategy_type"] == strategy_type]
         return results
 
+    def get_active_spreads(
+        self,
+        underlying: str | None = None,
+        strategy_type: str | None = None,
+    ) -> list[dict]:
+        """Return all non-terminal spreads (PENDING_OPEN, OPEN, PENDING_CLOSE).
+
+        Use this for duplicate-entry detection so an in-flight entry
+        cannot be double-submitted while it is still PENDING_OPEN.
+        """
+        results = [s for s in self._spreads if s.get("status") in ACTIVE_STATUSES]
+        if underlying:
+            ul = underlying.upper()
+            results = [s for s in results if s["underlying"].upper() == ul]
+        if strategy_type:
+            results = [s for s in results if s["strategy_type"] == strategy_type]
+        return results
+
+    def get_spreads_by_status(self, status: str) -> list[dict]:
+        """Return all spreads currently in *status*."""
+        return [s for s in self._spreads if s.get("status") == status]
+
     def close_spread(
         self,
         spread_id: str,
         exit_credit: float | None = None,
     ) -> None:
-        """Mark a spread as closed. Calculate P&L if *exit_credit* given."""
+        """Mark a spread as terminally CLOSED. Calculate P&L if *exit_credit* given.
+
+        Normally called by reconciliation after PENDING_CLOSE → CLOSED is
+        confirmed by the broker. Safe to call from any non-terminal state.
+        """
         for s in self._spreads:
             if s["spread_id"] == spread_id:
-                s["status"] = "closed"
+                s["status"] = STATUS_CLOSED
                 s["closed_at"] = datetime.now().isoformat(timespec="seconds")
                 if exit_credit is not None:
                     s["exit_credit"] = exit_credit
@@ -125,7 +250,10 @@ class SpreadTracker:
         """Find which open spread a given leg symbol belongs to."""
         sym_upper = symbol.upper()
         for s in self._spreads:
-            if s["status"] != "open":
+            # Treat OPEN and PENDING_CLOSE as live for leg lookup (legs
+            # are filled in both states); skip PENDING_OPEN since legs
+            # may not yet exist on the broker side.
+            if s.get("status") not in (STATUS_OPEN, STATUS_PENDING_CLOSE):
                 continue
             for leg in s.get("legs", []):
                 if leg.get("symbol", "").upper() == sym_upper:
@@ -146,7 +274,10 @@ class SpreadTracker:
 
         closed_ids: list[str] = []
         for s in self._spreads:
-            if s["status"] != "open":
+            # Only reconcile confirmed-OPEN spreads. PENDING_OPEN legs
+            # may not exist on Alpaca yet, and PENDING_CLOSE is being
+            # handled by the order-status reconciler instead.
+            if s.get("status") != STATUS_OPEN:
                 continue
 
             leg_symbols = [
@@ -187,7 +318,7 @@ class SpreadTracker:
         """
         symbols: set[str] = set()
         for s in self._spreads:
-            if s.get("status") != "open":
+            if s.get("status") not in (STATUS_OPEN, STATUS_PENDING_CLOSE):
                 continue
             for leg in s.get("legs", []):
                 sym = leg.get("symbol")

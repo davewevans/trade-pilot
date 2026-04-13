@@ -31,11 +31,15 @@ _IC_MGMT_FIELDS = {
 
 class IronCondorState(str, Enum):
     IDLE = "IDLE"
+    PENDING_OPEN = "PENDING_OPEN"
     OPEN = "OPEN"
+    PENDING_CLOSE = "PENDING_CLOSE"
 
 
 class IronCondorStrategy:
     """State machine for the iron condor strategy."""
+
+    State = IronCondorState
 
     def __init__(self, broker, state_writer=None, spread_tracker=None):
         self.broker = broker
@@ -43,6 +47,7 @@ class IronCondorStrategy:
         self.spread_tracker = spread_tracker
         self.state = IronCondorState.IDLE
         self.open_spread_id: str | None = None
+        self.pending_order_id: str | None = None
         self._client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
         self._model = "claude-sonnet-4-6"
 
@@ -63,6 +68,7 @@ class IronCondorStrategy:
             data = json.loads(self._state_path.read_text(encoding="utf-8"))
             self.state = IronCondorState(data.get("state", "IDLE"))
             self.open_spread_id = data.get("open_spread_id")
+            self.pending_order_id = data.get("pending_order_id")
         except Exception:
             logger.exception("Failed to load iron condor state — starting IDLE")
 
@@ -71,8 +77,14 @@ class IronCondorStrategy:
         self._state_path.write_text(json.dumps({
             "state": self.state.value,
             "open_spread_id": self.open_spread_id,
+            "pending_order_id": self.pending_order_id,
             "updated_at": datetime.now().isoformat(timespec="seconds"),
         }, indent=2), encoding="utf-8")
+
+    def reconcile_pending(self) -> None:
+        """Resolve PENDING_OPEN / PENDING_CLOSE against broker order status."""
+        from strategies._spread_lifecycle import reconcile_pending_state
+        reconcile_pending_state(self)
 
     def get_state(self) -> IronCondorState:
         return self.state
@@ -81,6 +93,13 @@ class IronCondorStrategy:
 
     def run_cycle(self, context: dict, advisor=None) -> dict:
         """Main decision method called by the scheduler."""
+        if self.state in (
+            IronCondorState.PENDING_OPEN, IronCondorState.PENDING_CLOSE,
+        ):
+            return {
+                "action": "HOLD",
+                "reasoning": f"Spread state {self.state.value} — awaiting fill confirmation",
+            }
         if self.state == IronCondorState.IDLE:
             return self._evaluate_entry(context, advisor=advisor)
         return self._evaluate_management(context)
@@ -135,11 +154,11 @@ class IronCondorStrategy:
         if dte_earnings is not None and dte_earnings <= 35:
             return f"Earnings in {dte_earnings} days (need > 35)"
 
-        # Already have an open condor
+        # Already have an active condor (includes PENDING states).
         if self.spread_tracker:
-            open_ic = self.spread_tracker.get_open_spreads(strategy_type="iron_condor")
+            open_ic = self.spread_tracker.get_active_spreads(strategy_type="iron_condor")
             if open_ic:
-                return "Already have an open iron condor"
+                return "Already have an active iron condor"
 
         return None
 
@@ -336,10 +355,12 @@ class IronCondorStrategy:
                 expiration=decision.get("expiration", ""),
                 max_loss=decision.get("max_loss", 0),
                 max_gain=abs(decision.get("total_credit", 0)) * 100,
+                entry_order_id=order_id,
             )
             self.open_spread_id = spread_id
 
-        self.state = IronCondorState.OPEN
+        self.pending_order_id = order_id
+        self.state = IronCondorState.PENDING_OPEN
         self._save_state()
 
         # Write decision snapshot
@@ -374,7 +395,7 @@ class IronCondorStrategy:
             return False
 
         try:
-            self.broker.close_mleg_position(
+            close_order = self.broker.close_mleg_position(
                 open_legs=spread["legs"],
                 order_type="limit" if limit_price else "market",
                 limit_price=limit_price,
@@ -384,15 +405,15 @@ class IronCondorStrategy:
             logger.exception("Failed to close iron condor %s", spread_id)
             return False
 
-        self.spread_tracker.close_spread(
-            spread_id,
-            exit_credit=limit_price if limit_price else None,
-        )
-
-        self.state = IronCondorState.IDLE
-        self.open_spread_id = None
+        close_order_id = (close_order or {}).get("id")
+        self.spread_tracker.mark_pending_close(spread_id, close_order_id)
+        self.pending_order_id = close_order_id
+        self.state = IronCondorState.PENDING_CLOSE
         self._save_state()
-        logger.info("Iron condor %s closed", spread_id)
+        logger.info(
+            "Iron condor %s close submitted: %s (PENDING_CLOSE)",
+            spread_id, close_order_id,
+        )
         return True
 
     # ── parsing ─────────────────────────────────────────────

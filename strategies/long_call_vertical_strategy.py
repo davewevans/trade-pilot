@@ -27,11 +27,15 @@ _PROMPTS_DIR = _PROJECT_ROOT / "prompts"
 
 class LongCallVerticalState(str, Enum):
     IDLE = "IDLE"
+    PENDING_OPEN = "PENDING_OPEN"
     OPEN = "OPEN"
+    PENDING_CLOSE = "PENDING_CLOSE"
 
 
 class LongCallVerticalStrategy:
     """State machine for the long call vertical (bull call debit spread)."""
+
+    State = LongCallVerticalState
 
     def __init__(self, broker, state_writer=None, spread_tracker=None):
         self.broker = broker
@@ -39,6 +43,7 @@ class LongCallVerticalStrategy:
         self.spread_tracker = spread_tracker
         self.state = LongCallVerticalState.IDLE
         self.open_spread_id: str | None = None
+        self.pending_order_id: str | None = None
         self._client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
         self._model = "claude-sonnet-4-6"
 
@@ -58,6 +63,7 @@ class LongCallVerticalStrategy:
             data = json.loads(self._state_path.read_text(encoding="utf-8"))
             self.state = LongCallVerticalState(data.get("state", "IDLE"))
             self.open_spread_id = data.get("open_spread_id")
+            self.pending_order_id = data.get("pending_order_id")
         except Exception:
             logger.exception("Failed to load long call vertical state — starting IDLE")
 
@@ -66,8 +72,14 @@ class LongCallVerticalStrategy:
         self._state_path.write_text(json.dumps({
             "state": self.state.value,
             "open_spread_id": self.open_spread_id,
+            "pending_order_id": self.pending_order_id,
             "updated_at": datetime.now().isoformat(timespec="seconds"),
         }, indent=2), encoding="utf-8")
+
+    def reconcile_pending(self) -> None:
+        """Resolve PENDING_OPEN / PENDING_CLOSE against broker order status."""
+        from strategies._spread_lifecycle import reconcile_pending_state
+        reconcile_pending_state(self)
 
     def get_state(self) -> LongCallVerticalState:
         return self.state
@@ -75,6 +87,13 @@ class LongCallVerticalStrategy:
     # ── main cycle ──────────────────────────────────────────
 
     def run_cycle(self, context: dict, advisor=None) -> dict:
+        if self.state in (
+            LongCallVerticalState.PENDING_OPEN, LongCallVerticalState.PENDING_CLOSE,
+        ):
+            return {
+                "action": "HOLD",
+                "reasoning": f"Spread state {self.state.value} — awaiting fill confirmation",
+            }
         if self.state == LongCallVerticalState.IDLE:
             return self._evaluate_entry(context, advisor=advisor)
         return self._evaluate_management(context)
@@ -139,11 +158,11 @@ class LongCallVerticalStrategy:
 
         if self.spread_tracker:
             symbol = context.get("symbol", "")
-            existing = self.spread_tracker.get_open_spreads(
+            existing = self.spread_tracker.get_active_spreads(
                 underlying=symbol, strategy_type="long_call_vertical",
             )
             if existing:
-                return f"Already have an open long call vertical on {symbol}"
+                return f"Already have an active long call vertical on {symbol}"
 
         return None
 
@@ -288,7 +307,8 @@ class LongCallVerticalStrategy:
             logger.exception("Failed to place long call vertical order")
             return False
 
-        logger.info("Long call vertical order placed: %s", order.get("id"))
+        order_id = order.get("id")
+        logger.info("Long call vertical order placed: %s", order_id)
 
         if self.spread_tracker:
             wing_width = decision.get("short_call_strike", 0) - decision.get("long_call_strike", 0)
@@ -301,10 +321,12 @@ class LongCallVerticalStrategy:
                 expiration=decision.get("expiration", ""),
                 max_loss=round(decision.get("net_debit", 0) * 100, 2),
                 max_gain=round((wing_width - decision.get("net_debit", 0)) * 100, 2),
+                entry_order_id=order_id,
             )
             self.open_spread_id = spread_id
 
-        self.state = LongCallVerticalState.OPEN
+        self.pending_order_id = order_id
+        self.state = LongCallVerticalState.PENDING_OPEN
         self._save_state()
 
         if self.state_writer:
@@ -339,7 +361,7 @@ class LongCallVerticalStrategy:
             return False
 
         try:
-            self.broker.close_mleg_position(
+            close_order = self.broker.close_mleg_position(
                 open_legs=spread["legs"],
                 order_type="limit" if limit_price else "market",
                 limit_price=limit_price,
@@ -349,15 +371,15 @@ class LongCallVerticalStrategy:
             logger.exception("Failed to close long call vertical %s", spread_id)
             return False
 
-        self.spread_tracker.close_spread(
-            spread_id,
-            exit_credit=limit_price if limit_price else None,
-        )
-
-        self.state = LongCallVerticalState.IDLE
-        self.open_spread_id = None
+        close_order_id = (close_order or {}).get("id")
+        self.spread_tracker.mark_pending_close(spread_id, close_order_id)
+        self.pending_order_id = close_order_id
+        self.state = LongCallVerticalState.PENDING_CLOSE
         self._save_state()
-        logger.info("Long call vertical %s closed", spread_id)
+        logger.info(
+            "Long call vertical %s close submitted: %s (PENDING_CLOSE)",
+            spread_id, close_order_id,
+        )
         return True
 
     # ── parsing ─────────────────────────────────────────────

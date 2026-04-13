@@ -121,6 +121,13 @@ def run() -> None:
         "long_call_vertical": LongCallVerticalStrategy(broker=default_broker, state_writer=sw, spread_tracker=tracker),
     }
 
+    # Reconcile any PENDING_OPEN / PENDING_CLOSE spreads from a previous
+    # session before we make new decisions. Without this, management logic
+    # could act on phantom positions (orders that never filled or were
+    # canceled) or skip valid management because the close already filled.
+    from jobs.reconcile_orders import reconcile_pending_spreads
+    reconcile_pending_spreads(list(spread_strategies.values()))
+
     # Portfolio snapshot
     try:
         positions = broker.get_positions()
@@ -396,10 +403,14 @@ def run() -> None:
                         strategy_name, strat, decision, guardrails,
                         spread_ctx, account, tracker, settings, report_lines,
                     )
+                    # Re-poll order status immediately so a same-cycle fast
+                    # fill flips PENDING_OPEN → OPEN before the next loop.
+                    reconcile_pending_spreads([strat])
                 elif action == "CLOSE" and decision.get("spread_id"):
                     _handle_spread_close(
                         strategy_name, strat, decision, settings, report_lines,
                     )
+                    reconcile_pending_spreads([strat])
                 else:
                     report_lines.append(f"**{strategy_name}** -- {action}")
 
@@ -435,7 +446,9 @@ def _handle_spread_open(
         return
 
     validator = getattr(guardrails, validator_name)
-    open_spreads = tracker.get_open_spreads(strategy_type=name)
+    # Use ACTIVE spreads (incl. PENDING_OPEN/PENDING_CLOSE) so a duplicate
+    # entry can't slip through while a prior order is still in flight.
+    open_spreads = tracker.get_active_spreads(strategy_type=name)
     if name == "iron_condor":
         is_valid, rejection = validator(decision, context, account, open_condors=open_spreads)
     else:

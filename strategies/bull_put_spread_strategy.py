@@ -25,11 +25,15 @@ _PROMPTS_DIR = _PROJECT_ROOT / "prompts"
 
 class BullPutSpreadState(str, Enum):
     IDLE = "IDLE"
+    PENDING_OPEN = "PENDING_OPEN"
     OPEN = "OPEN"
+    PENDING_CLOSE = "PENDING_CLOSE"
 
 
 class BullPutSpreadStrategy:
     """State machine for the bull put spread strategy."""
+
+    State = BullPutSpreadState  # exposed for shared lifecycle helper
 
     def __init__(self, broker, state_writer=None, spread_tracker=None):
         self.broker = broker
@@ -37,6 +41,7 @@ class BullPutSpreadStrategy:
         self.spread_tracker = spread_tracker
         self.state = BullPutSpreadState.IDLE
         self.open_spread_id: str | None = None
+        self.pending_order_id: str | None = None
         self._client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
         self._model = "claude-sonnet-4-6"
 
@@ -56,6 +61,7 @@ class BullPutSpreadStrategy:
             data = json.loads(self._state_path.read_text(encoding="utf-8"))
             self.state = BullPutSpreadState(data.get("state", "IDLE"))
             self.open_spread_id = data.get("open_spread_id")
+            self.pending_order_id = data.get("pending_order_id")
         except Exception:
             logger.exception("Failed to load bull put spread state — starting IDLE")
 
@@ -64,8 +70,14 @@ class BullPutSpreadStrategy:
         self._state_path.write_text(json.dumps({
             "state": self.state.value,
             "open_spread_id": self.open_spread_id,
+            "pending_order_id": self.pending_order_id,
             "updated_at": datetime.now().isoformat(timespec="seconds"),
         }, indent=2), encoding="utf-8")
+
+    def reconcile_pending(self) -> None:
+        """Resolve PENDING_OPEN / PENDING_CLOSE against broker order status."""
+        from strategies._spread_lifecycle import reconcile_pending_state
+        reconcile_pending_state(self)
 
     def get_state(self) -> BullPutSpreadState:
         return self.state
@@ -74,6 +86,15 @@ class BullPutSpreadStrategy:
 
     def run_cycle(self, context: dict, advisor=None) -> dict:
         """Main decision method called by the scheduler."""
+        # Skip while an entry/close order is still pending fill — acting
+        # now would mean acting on a phantom (or already-closing) position.
+        if self.state in (
+            BullPutSpreadState.PENDING_OPEN, BullPutSpreadState.PENDING_CLOSE,
+        ):
+            return {
+                "action": "HOLD",
+                "reasoning": f"Spread state {self.state.value} — awaiting fill confirmation",
+            }
         if self.state == BullPutSpreadState.IDLE:
             return self._evaluate_entry(context, advisor=advisor)
         return self._evaluate_management(context)
@@ -135,14 +156,15 @@ class BullPutSpreadStrategy:
         if dte_earnings is not None and dte_earnings <= 25:
             return f"Earnings in {dte_earnings} days (need > 25)"
 
-        # Already have an open spread on same underlying
+        # Already have an active spread on same underlying (includes
+        # PENDING_OPEN / PENDING_CLOSE — must not double-submit).
         if self.spread_tracker:
             symbol = context.get("symbol", "")
-            open_bps = self.spread_tracker.get_open_spreads(
+            open_bps = self.spread_tracker.get_active_spreads(
                 underlying=symbol, strategy_type="bull_put_spread",
             )
             if open_bps:
-                return f"Already have an open bull put spread on {symbol}"
+                return f"Already have an active bull put spread on {symbol}"
 
         return None
 
@@ -300,7 +322,8 @@ class BullPutSpreadStrategy:
             logger.exception("Failed to place bull put spread order")
             return False
 
-        logger.info("Bull put spread order placed: %s", order.get("id"))
+        order_id = order.get("id")
+        logger.info("Bull put spread order placed: %s", order_id)
 
         if self.spread_tracker:
             spread_id = self.spread_tracker.register_spread(
@@ -312,10 +335,13 @@ class BullPutSpreadStrategy:
                 expiration=decision.get("expiration", ""),
                 max_loss=decision.get("max_loss", 0),
                 max_gain=abs(decision.get("net_credit", 0)) * 100,
+                entry_order_id=order_id,
             )
             self.open_spread_id = spread_id
 
-        self.state = BullPutSpreadState.OPEN
+        # PENDING_OPEN until reconciliation confirms the entry filled.
+        self.pending_order_id = order_id
+        self.state = BullPutSpreadState.PENDING_OPEN
         self._save_state()
 
         if self.state_writer:
@@ -351,7 +377,7 @@ class BullPutSpreadStrategy:
             return False
 
         try:
-            self.broker.close_mleg_position(
+            close_order = self.broker.close_mleg_position(
                 open_legs=spread["legs"],
                 order_type="limit" if limit_price else "market",
                 limit_price=limit_price,
@@ -361,15 +387,17 @@ class BullPutSpreadStrategy:
             logger.exception("Failed to close bull put spread %s", spread_id)
             return False
 
-        self.spread_tracker.close_spread(
-            spread_id,
-            exit_credit=limit_price if limit_price else None,
-        )
+        close_order_id = (close_order or {}).get("id")
+        # PENDING_CLOSE until reconciliation confirms the close filled.
+        self.spread_tracker.mark_pending_close(spread_id, close_order_id)
 
-        self.state = BullPutSpreadState.IDLE
-        self.open_spread_id = None
+        self.pending_order_id = close_order_id
+        self.state = BullPutSpreadState.PENDING_CLOSE
         self._save_state()
-        logger.info("Bull put spread %s closed", spread_id)
+        logger.info(
+            "Bull put spread %s close submitted: %s (PENDING_CLOSE)",
+            spread_id, close_order_id,
+        )
         return True
 
     # ── parsing ─────────────────────────────────────────────
