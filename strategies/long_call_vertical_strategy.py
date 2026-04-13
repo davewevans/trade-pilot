@@ -117,6 +117,34 @@ class LongCallVerticalStrategy:
         enriched = {**context, "best_candidate": best}
         return advisor.ask_spread(enriched, "long_call_vertical", "idle")
 
+    def pre_check_entry(self, context: dict) -> tuple[str | None, float]:
+        """Cheap, Claude-free pre-check used to rank candidates across symbols.
+
+        Returns ``(skip_reason, score)``. For a debit spread we prefer the
+        candidate with the best reward/risk ratio, so score = (max_gain /
+        net_debit). Falls back to inverse of net_debit if max_gain missing.
+        """
+        skip = self._check_entry_conditions(context)
+        if skip:
+            return skip, 0.0
+
+        spread_candidates = context.get("spread_candidates", {})
+        lcv_data = spread_candidates.get("long_call_vertical", {})
+        best = lcv_data.get("best_candidate")
+        if not best:
+            return "No viable long call vertical candidates found", 0.0
+
+        net_debit = best.get("net_debit", 0) or 0
+        if net_debit <= 0 or net_debit >= 2.00:
+            return (
+                f"Net debit ${net_debit} outside range (need $0.20-$2.00)",
+                0.0,
+            )
+
+        max_gain = best.get("max_gain") or 0
+        score = (float(max_gain) / float(net_debit)) if max_gain else (1.0 / float(net_debit))
+        return None, float(score)
+
     def _check_entry_conditions(self, context: dict) -> str | None:
         regime = context.get("confirmed_market_regime", "NEUTRAL")
         if regime != "BULL":

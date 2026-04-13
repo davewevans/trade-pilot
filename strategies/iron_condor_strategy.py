@@ -117,6 +117,24 @@ class IronCondorStrategy:
         enriched = {**context, "iron_condor_candidate": ic_legs}
         return advisor.ask_spread(enriched, "iron_condor", "idle")
 
+    def pre_check_entry(self, context: dict) -> tuple[str | None, float]:
+        """Cheap, Claude-free pre-check used to rank candidates across symbols.
+
+        Returns ``(skip_reason, score)``. Score is the combined condor credit.
+        """
+        skip = self._check_entry_conditions(context)
+        if skip:
+            return skip, 0.0
+
+        spread_candidates = context.get("spread_candidates", {})
+        ic_data = spread_candidates.get("iron_condor", {})
+        ic_legs = ic_data.get("iron_condor_legs")
+        if not ic_legs:
+            return "No viable iron condor candidates found", 0.0
+
+        total_credit = float(ic_legs.get("total_credit", 0))
+        return None, total_credit
+
     def _check_entry_conditions(self, context: dict) -> str | None:
         """Return a skip reason string, or None if all conditions pass."""
         regime = context.get("confirmed_market_regime", "NEUTRAL")

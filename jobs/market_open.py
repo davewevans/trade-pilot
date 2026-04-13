@@ -412,18 +412,98 @@ def run() -> None:
         for strategy_name in active_spreads:
             strat = spread_strategies[strategy_name]
             try:
-                # TODO: each spread strategy should eventually specify its
-                # own preferred underlying rather than reusing WATCHLIST[0].
-                try:
-                    spread_ctx = ctx_builder.build(settings.WATCHLIST[0], "IDLE")
-                except Exception:
-                    logger.exception(
-                        "Failed to build context for spread strategy %s", strategy_name,
-                    )
-                    report_lines.append(f"**{strategy_name}** -- ERROR (context build)")
-                    continue
+                # Pick the underlying to evaluate:
+                #   - OPEN-state: only evaluate the symbol that has the open
+                #     position (management doesn't benefit from scanning).
+                #   - IDLE-state: scan SPREAD_WATCHLIST with the cheap
+                #     pre_check_entry() pass, then call Claude ONCE for the
+                #     single best-scoring candidate.
+                strat_state_value = strat.get_state().value
+                spread_ctx = None
+                decision = None
 
-                decision = strat.run_cycle(spread_ctx, advisor)
+                if strat_state_value == "OPEN":
+                    mgmt_underlying = None
+                    if strat.spread_tracker and strat.open_spread_id:
+                        for s in strat.spread_tracker.get_open_spreads(
+                            strategy_type=strategy_name,
+                        ):
+                            if s["spread_id"] == strat.open_spread_id:
+                                mgmt_underlying = s.get("underlying")
+                                break
+                    if not mgmt_underlying:
+                        mgmt_underlying = (
+                            settings.WATCHLIST[0] if settings.WATCHLIST else ""
+                        )
+                    try:
+                        spread_ctx = ctx_builder.build(mgmt_underlying, "IDLE")
+                    except Exception:
+                        logger.exception(
+                            "Failed to build context for %s management (%s)",
+                            strategy_name, mgmt_underlying,
+                        )
+                        report_lines.append(
+                            f"**{strategy_name}** -- ERROR (context build)"
+                        )
+                        continue
+                    decision = strat.run_cycle(spread_ctx, advisor)
+                else:
+                    # IDLE: scan SPREAD_WATCHLIST, pre-check without Claude,
+                    # then run_cycle (→ Claude) once for the winner.
+                    best_score = float("-inf")
+                    best_symbol = None
+                    best_ctx = None
+                    last_skip_reason = None
+                    symbols = settings.SPREAD_WATCHLIST or settings.WATCHLIST
+                    for sym in symbols:
+                        try:
+                            candidate_ctx = ctx_builder.build(sym, "IDLE")
+                        except Exception:
+                            logger.warning(
+                                "Failed to build context for %s/%s — skipping",
+                                strategy_name, sym,
+                            )
+                            continue
+                        try:
+                            skip_reason, score = strat.pre_check_entry(candidate_ctx)
+                        except Exception:
+                            logger.exception(
+                                "pre_check_entry failed for %s/%s",
+                                strategy_name, sym,
+                            )
+                            continue
+                        if skip_reason is None and score > best_score:
+                            best_score = score
+                            best_symbol = sym
+                            best_ctx = candidate_ctx
+                        elif skip_reason is not None:
+                            last_skip_reason = skip_reason
+
+                    if best_ctx is None:
+                        reason = (
+                            f"No qualifying candidates across SPREAD_WATCHLIST "
+                            f"(last skip: {last_skip_reason})"
+                            if last_skip_reason
+                            else "No qualifying candidates across SPREAD_WATCHLIST"
+                        )
+                        logger.info("%s: %s", strategy_name, reason)
+                        decision = {
+                            "action": "SKIP",
+                            "reasoning": reason,
+                            "skip_reason": "no_candidates_across_watchlist",
+                        }
+                        # Fall back to a minimal context for downstream .get() calls
+                        spread_ctx = shared_context
+                    else:
+                        spread_ctx = best_ctx
+                        logger.info(
+                            "%s best candidate: %s (score=%.2f)",
+                            strategy_name, best_symbol, best_score,
+                        )
+                        decision = strat.run_cycle(spread_ctx, advisor)
+                        # Tag the winning underlying so _handle_spread_open uses it.
+                        if decision.get("action") == "OPEN":
+                            decision["underlying"] = best_symbol
                 action = decision.get("action", "SKIP")
                 logger.info("%s decision: %s", strategy_name, action)
 

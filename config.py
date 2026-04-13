@@ -79,6 +79,15 @@ class Settings:
             else ["AAPL", "SPY"]
         )
 
+        # Spread strategies evaluate these symbols (superset of wheel WATCHLIST).
+        # If not set, falls back to WATCHLIST.
+        spread_watchlist_env = os.getenv("SPREAD_WATCHLIST", "")
+        self.SPREAD_WATCHLIST: list[str] = (
+            [s.strip() for s in spread_watchlist_env.split(",") if s.strip()]
+            if spread_watchlist_env
+            else list(self.WATCHLIST)
+        )
+
         self.DRY_RUN: bool = os.getenv("DRY_RUN", "false").lower() == "true"
 
         # Circuit breaker thresholds (percentages)

@@ -129,6 +129,36 @@ class BullPutSpreadStrategy:
         enriched = {**context, "best_candidate": best}
         return advisor.ask_spread(enriched, "bull_put_spread", "idle")
 
+    def pre_check_entry(self, context: dict) -> tuple[str | None, float]:
+        """Cheap, Claude-free pre-check used to rank candidates across symbols.
+
+        Runs hard skip conditions and candidate-quality checks; returns
+        ``(skip_reason, score)``. ``skip_reason`` is None when this symbol is
+        a viable candidate. ``score`` is the candidate's net credit (higher
+        is better). Used by ``market_open`` to pick the single best symbol
+        before paying for a Claude call.
+        """
+        skip = self._check_entry_conditions(context)
+        if skip:
+            return skip, 0.0
+
+        spread_candidates = context.get("spread_candidates", {})
+        bps_data = spread_candidates.get("bull_put_spread", {})
+        best = bps_data.get("best_candidate")
+        if not best:
+            return "No viable bull put spread candidates found", 0.0
+
+        net_credit = best.get("net_credit", 0)
+        if net_credit <= 0.50:
+            return f"Best candidate credit ${net_credit} <= $0.50", 0.0
+        if best.get("credit_to_width_ratio", 0) < 0.15:
+            return (
+                f"Credit/width ratio {best.get('credit_to_width_ratio', 0)} < 0.15",
+                0.0,
+            )
+
+        return None, float(net_credit)
+
     def _check_entry_conditions(self, context: dict) -> str | None:
         """Return a skip reason string, or None if all conditions pass."""
         regime = context.get("confirmed_market_regime", "NEUTRAL")
