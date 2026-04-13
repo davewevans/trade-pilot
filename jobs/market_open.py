@@ -527,6 +527,38 @@ def _handle_spread_open(
         report_lines.append(f"**{name}** -- REJECTED: {rejection}")
         return
 
+    # ── Shared-account capital guard ────────────────────────
+    # bull_put_spread, bear_call_spread, and long_call_vertical share
+    # the default Alpaca account, so a per-trade max-loss check is not
+    # enough — they can collectively overcommit. Block here, BEFORE
+    # execute_entry() reaches place_mleg_order().
+    from strategies.guardrails import (
+        SHARED_ACCOUNT_STRATEGIES,
+        check_shared_account_buying_power,
+    )
+    if name in SHARED_ACCOUNT_STRATEGIES:
+        new_max_loss = float(
+            decision.get("max_loss")
+            or (decision.get("net_debit", 0) * 100)
+            or 0
+        )
+        bp = float(
+            account.get("options_buying_power")
+            or account.get("buying_power")
+            or 0
+        )
+        ok, reason = check_shared_account_buying_power(
+            new_trade_max_loss=new_max_loss,
+            account_buying_power=bp,
+            spread_tracker=tracker,
+        )
+        if not ok:
+            logger.warning("%s SHARED CAPITAL REJECTED: %s", name, reason)
+            report_lines.append(
+                f"**{name}** -- SKIPPED (insufficient shared buying power: {reason})"
+            )
+            return
+
     underlying = decision.get("underlying", settings.WATCHLIST[0] if settings.WATCHLIST else "")
 
     if settings.DRY_RUN:

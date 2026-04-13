@@ -20,11 +20,16 @@ SHARED_ACCOUNT_STRATEGIES = frozenset({
 
 
 def get_committed_capital_on_shared_account(spread_tracker) -> float:
-    """Return total max_loss committed to open spreads on the shared account."""
-    open_spreads = spread_tracker.get_open_spreads()
+    """Return total max_loss committed on the shared account.
+
+    Counts every non-terminal spread (PENDING_OPEN, OPEN, PENDING_CLOSE)
+    so that capital is reserved the moment an entry order is submitted
+    and is not released until the spread reaches CLOSED or CANCELED.
+    """
+    active_spreads = spread_tracker.get_active_spreads()
     return sum(
         float(s.get("max_loss", 0))
-        for s in open_spreads
+        for s in active_spreads
         if s.get("strategy_type") in SHARED_ACCOUNT_STRATEGIES
     )
 
