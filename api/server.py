@@ -112,6 +112,7 @@ _LOGIN_HTML = """<!DOCTYPE html>
     form { background: #161b22; padding: 2rem; border-radius: 8px;
            min-width: 280px; box-shadow: 0 4px 24px rgba(0,0,0,0.4); }
     h1   { margin: 0 0 1rem; font-size: 1.05rem; font-weight: 600; }
+    .logo { display: block; margin: 0 auto 1rem; width: 200px; height: 200px; max-width: 100%; }
     input[type=password] { width: 100%; padding: 0.6rem; box-sizing: border-box;
            border: 1px solid #30363d; background: #0d1117; color: #e6e6e6;
            border-radius: 4px; font-size: 0.95rem; }
@@ -124,7 +125,7 @@ _LOGIN_HTML = """<!DOCTYPE html>
 </head>
 <body>
   <form id="f" autocomplete="off">
-    <h1>trade-pilot</h1>
+    <img class="logo" src="/favicon.svg" alt="trade-pilot">
     <input id="p" type="password" placeholder="Password" autofocus required>
     <button type="submit">Sign in</button>
     <div id="e" class="err" role="alert"></div>
