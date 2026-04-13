@@ -212,6 +212,14 @@ class ContextBuilder:
             "hv_20d": cores.get("hv_20d"),
             "hv_ex_earnings_20d": cores.get("hv_ex_earnings_20d"),
             "rip": cores.get("rip"),
+            # Earnings volatility — how much the stock typically moves on
+            # earnings vs what options are currently pricing for the next event.
+            "historical_avg_earnings_move": cores.get("abs_avg_earnings_move"),
+            "implied_earnings_move": cores.get("implied_earnings_move"),
+            "earnings_iv_premium": _earnings_iv_premium(
+                cores.get("implied_earnings_move"),
+                cores.get("abs_avg_earnings_move"),
+            ),
             "orats_available": orats is not None,
             # Monies: vol smile availability
             "monies_available": len(monies_rows) > 0,
@@ -1164,6 +1172,24 @@ class ContextBuilder:
             f"DTE Earnings: {dte_str} | VIX: {vix_str} | "
             f"F&G: {fg_str} | RFR: {rfr_str}"
         )
+
+
+# ── Earnings volatility helpers ───────────────────────────────────────────────
+
+
+def _earnings_iv_premium(
+    implied: float | None,
+    historical: float | None,
+) -> float | None:
+    """Return (implied_earnings_move - historical_avg) / historical_avg.
+
+    Positive → the market is pricing a bigger move than usual (fear/uncertainty
+    premium).  Negative → the market is complacent relative to history.
+    Returns None when either input is missing or historical is zero.
+    """
+    if implied is None or historical is None or historical == 0:
+        return None
+    return round((implied - historical) / historical, 4)
 
 
 # ── EV / probability-of-profit enrichment ─────────────────────────────────────

@@ -469,6 +469,27 @@ When evaluating a **debit spread (long call vertical)**:
 
 ---
 
+## Earnings Volatility Analysis
+
+The `context["volatility"]` block includes two earnings-specific metrics sourced from ORATS /cores:
+
+- `historical_avg_earnings_move`: How much the stock has *actually* moved on earnings day, averaged across recent quarters (absolute %, e.g. 0.08 = 8%).
+- `implied_earnings_move`: How much the options market is *currently pricing* for the next earnings event (absolute %, derived from the earnings-week straddle).
+- `earnings_iv_premium`: `(implied - historical) / historical`. Positive means the market is pricing a bigger move than normal; negative means the market is complacent.
+
+**If `implied_earnings_move` >> `historical_avg_earnings_move` (earnings_iv_premium > 0.20):**
+The market is scared. IV is elevated around earnings more than the stock's track record warrants. This inflates *all* option prices across expirations — not just the earnings-week contract. If our position expires *before* the earnings date, we can exploit this: we're selling options at fear-elevated prices and will close before the event. This is a tailwind. Mention it in `reasoning.volatility`.
+
+**If `implied_earnings_move` << `historical_avg_earnings_move` (earnings_iv_premium < -0.20):**
+The market is complacent. Actual earnings moves may be larger than what's priced in. Extra caution is warranted even if the position expires after earnings — we could face a larger-than-expected gap through our short strike. Tighten delta or skip if earnings fall within the DTE window.
+
+**Practical rules:**
+- `earnings_iv_premium > 0.30` and position expires before earnings: note as a positive factor; the inflated IV we're selling will collapse after the event, but we close first.
+- `earnings_iv_premium < -0.20`: flag as a risk. The market may be underpricing actual move risk.
+- When `historical_avg_earnings_move` is missing (None): fall back to `days_to_earnings` proximity check only.
+
+---
+
 ## Analyst & Sentiment Data
 
 The `context["analyst"]` block surfaces Finnhub data on consensus,

@@ -88,6 +88,13 @@ class SimulatedTrade:
     entry_regime: str
     entry_iv_env: str
     holding_days: Optional[int]
+    # Earnings move tracking — populated when an earnings event fell
+    # inside the holding period.
+    entry_implied_earnings_move: Optional[float] = None   # what options priced at entry
+    entry_historical_earnings_move: Optional[float] = None # stock's historical avg move
+    earnings_iv_premium_at_entry: Optional[float] = None  # (implied-hist)/hist at entry
+    actual_earnings_move: Optional[float] = None           # realised stock move on event day
+    earnings_occurred_in_window: bool = False              # did earnings fall in hold period?
 
 
 @dataclass
@@ -127,6 +134,11 @@ class OpenPosition:
     entry_iv_env: str
     entry_dte: int
     contracts: int
+    # Earnings context captured at entry from ORATS /cores
+    implied_earnings_move: Optional[float] = None
+    historical_earnings_move: Optional[float] = None
+    earnings_iv_premium: Optional[float] = None
+    earnings_date: Optional[str] = None          # next earnings date at time of entry
 
 
 # ── Engine ────────────────────────────────────────────────────────────────────
@@ -157,6 +169,9 @@ class BacktestEngine:
         log("Fetching historical VIX + SPY price data from yfinance...")
         market_data = _load_market_data(params.start_date, params.end_date)
         trading_days = sorted(market_data.keys())
+
+        log(f"Fetching per-symbol price history for earnings move computation...")
+        self._symbol_prices = _load_symbol_prices(params.symbols, params.start_date, params.end_date)
 
         if not trading_days:
             log("ERROR: No trading days found in range.")
@@ -225,6 +240,48 @@ class BacktestEngine:
 
     # ── Entry simulation ─────────────────────────────────────────────────
 
+    def _get_earnings_context(
+        self, symbol: str, trade_date: str,
+    ) -> tuple[Optional[float], Optional[float], Optional[float], Optional[str]]:
+        """Return (implied_move, hist_move, iv_premium, earnings_date) from ORATS cores.
+
+        All values may be None if data is unavailable.  The ``earnings_date``
+        is the *next* scheduled event from the perspective of ``trade_date``.
+        """
+        try:
+            cores = self._orats.get_cores_on_date(symbol, trade_date)
+        except Exception:
+            logger.debug("get_cores_on_date failed for %s on %s", symbol, trade_date)
+            return None, None, None, None
+
+        if not cores:
+            return None, None, None, None
+
+        implied = cores.get("implied_earnings_move")
+        hist = cores.get("abs_avg_earnings_move")
+
+        premium: Optional[float] = None
+        if implied is not None and hist and hist != 0:
+            premium = round((implied - hist) / abs(hist), 4)
+
+        # ORATS field naming varies across API versions; try common keys.
+        ern_date = (
+            cores.get("earn_date")
+            or cores.get("earnings_date")
+            or cores.get("next_earn_date")
+            or cores.get("earnDate")
+        )
+        # Normalise to ISO string if it looks like a date
+        if ern_date and not isinstance(ern_date, str):
+            try:
+                ern_date = str(ern_date)[:10]
+            except Exception:
+                ern_date = None
+        elif isinstance(ern_date, str):
+            ern_date = ern_date[:10] if len(ern_date) >= 10 else None
+
+        return implied, hist, premium, ern_date
+
     def _try_entry(
         self,
         params: BacktestParams,
@@ -237,6 +294,11 @@ class BacktestEngine:
         """Attempt to find and record an entry for the given strategy."""
 
         strategy = params.strategy
+
+        # Fetch earnings context once; applied to whichever branch creates a position.
+        ern_implied, ern_hist, ern_premium, ern_date = self._get_earnings_context(
+            symbol, trade_date,
+        )
 
         if strategy in ("wheel_csp", "bull_put_spread", "iron_condor"):
             put_contracts = self._orats.get_strikes_on_date(
@@ -299,6 +361,10 @@ class BacktestEngine:
                 entry_iv_env=iv_env,
                 entry_dte=short_put["dte"] or params.dte_min,
                 contracts=params.contracts,
+                implied_earnings_move=ern_implied,
+                historical_earnings_move=ern_hist,
+                earnings_iv_premium=ern_premium,
+                earnings_date=ern_date,
             )
 
         elif strategy == "bear_call_spread":
@@ -353,6 +419,10 @@ class BacktestEngine:
                 entry_iv_env=iv_env,
                 entry_dte=short_call["dte"] or params.dte_min,
                 contracts=params.contracts,
+                implied_earnings_move=ern_implied,
+                historical_earnings_move=ern_hist,
+                earnings_iv_premium=ern_premium,
+                earnings_date=ern_date,
             )
 
         elif strategy == "long_call_vertical":
@@ -408,6 +478,10 @@ class BacktestEngine:
                 entry_iv_env=iv_env,
                 entry_dte=long_call["dte"] or params.dte_min,
                 contracts=params.contracts,
+                implied_earnings_move=ern_implied,
+                historical_earnings_move=ern_hist,
+                earnings_iv_premium=ern_premium,
+                earnings_date=ern_date,
             )
 
         return None
@@ -531,8 +605,8 @@ class BacktestEngine:
 
         return self._build_trade(pos, last_day, exit_debit, "still_open")
 
-    @staticmethod
     def _build_trade(
+        self,
         pos: OpenPosition,
         exit_date: str,
         exit_debit: float,
@@ -551,6 +625,37 @@ class BacktestEngine:
         else:
             # credit spread: credit collected minus debit to close
             pnl = round((pos.entry_credit - exit_debit) * pos.contracts * 100, 2)
+
+        # ── Earnings-in-window detection ──────────────────────────────────
+        ern_occurred = False
+        actual_ern_move: Optional[float] = None
+
+        if pos.earnings_date:
+            try:
+                ern_dt = date.fromisoformat(pos.earnings_date)
+                entry_dt = date.fromisoformat(pos.entry_date)
+                exit_dt = date.fromisoformat(exit_date)
+
+                if entry_dt <= ern_dt <= exit_dt:
+                    ern_occurred = True
+                    prices = getattr(self, "_symbol_prices", {}).get(pos.symbol, {})
+                    ern_str = ern_dt.isoformat()
+                    ern_close = prices.get(ern_str)
+
+                    # Walk back up to 5 calendar days to find previous trading day
+                    prev_close: Optional[float] = None
+                    for back in range(1, 6):
+                        check = (ern_dt - timedelta(days=back)).isoformat()
+                        if check in prices:
+                            prev_close = prices[check]
+                            break
+
+                    if prev_close and ern_close and prev_close != 0:
+                        actual_ern_move = round(
+                            (ern_close - prev_close) / prev_close, 4,
+                        )
+            except (ValueError, TypeError):
+                pass
 
         return SimulatedTrade(
             symbol=pos.symbol,
@@ -572,6 +677,11 @@ class BacktestEngine:
             entry_regime=pos.entry_regime,
             entry_iv_env=pos.entry_iv_env,
             holding_days=holding,
+            entry_implied_earnings_move=pos.implied_earnings_move,
+            entry_historical_earnings_move=pos.historical_earnings_move,
+            earnings_iv_premium_at_entry=pos.earnings_iv_premium,
+            actual_earnings_move=actual_ern_move,
+            earnings_occurred_in_window=ern_occurred,
         )
 
     # ── Routing logic ─────────────────────────────────────────────────────
@@ -734,6 +844,50 @@ def _load_market_data(start_date: str, end_date: str) -> dict[str, dict]:
             "regime": regime,
             "iv_env": "MODERATE",  # will be refined per-symbol using ORATS data
         }
+
+    return result
+
+
+def _load_symbol_prices(
+    symbols: list[str], start_date: str, end_date: str,
+) -> dict[str, dict[str, float]]:
+    """Download per-symbol daily close prices from yfinance.
+
+    Returns ``{symbol: {date_str: close_price}}``.  A small pre-buffer is
+    fetched so we can look up the previous trading day's close when an
+    earnings event falls on the first day of the window.
+    """
+    try:
+        import yfinance as yf
+    except ImportError:
+        logger.warning("yfinance not available — per-symbol prices skipped")
+        return {}
+
+    extra = timedelta(days=10)
+    fetch_start = (date.fromisoformat(start_date) - extra).isoformat()
+    result: dict[str, dict[str, float]] = {}
+
+    for symbol in symbols:
+        try:
+            df = yf.download(symbol, start=fetch_start, end=end_date, progress=False, auto_adjust=True)
+            if df.empty:
+                continue
+            if hasattr(df.columns, "levels"):
+                df.columns = [c[0] for c in df.columns]
+            close = df["Close"].squeeze()
+            prices: dict[str, float] = {}
+            for idx, val in close.items():
+                try:
+                    d_str = idx.date().isoformat() if hasattr(idx, "date") else str(idx)[:10]
+                    f = float(val) if not hasattr(val, "__len__") else float(val.iloc[0])
+                    if not math.isnan(f):
+                        prices[d_str] = round(f, 4)
+                except Exception:
+                    continue
+            result[symbol] = prices
+            logger.debug("Loaded %d price points for %s", len(prices), symbol)
+        except Exception as exc:
+            logger.warning("Failed to load price history for %s: %s", symbol, exc)
 
     return result
 
