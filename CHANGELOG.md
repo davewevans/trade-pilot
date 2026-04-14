@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-04-14
+
+### Added
+
+- **Backtest Intelligence page** — new dashboard page with three sections:
+  environment match (compares current market regime to backtest conditions),
+  similar trades (historical analogues for the proposed trade), and reality
+  check (sanity checks between backtest assumptions and live conditions).
+- **ORATS slippage model** — models realistic fill slippage using ORATS
+  bid/ask spread data; unit-tested (`backtesting/slippage.py`).
+- **ContextBuilder ORATS enrichment** — context builder now enriches spread
+  candidates with ORATS snapshot data (IV rank, skew, term structure) and
+  falls back to Alpaca market data when ORATS is unavailable.
+- **Synthesized learn documents** — new knowledge-base entries covering
+  implied volatility mechanics, non-directional strategies, and theta decay;
+  raw notes files removed.
+
+### Changed
+
+- **SkipReasons and Strategies components** — updated with ORATS-sourced
+  insights and expanded entry criteria display.
+- **Backtest page** — added link to ORATS backtesting methodology in both
+  the Backtest and Backtest Intelligence pages.
+- **Alpaca account key naming** — environment variables renamed from
+  strategy-tied names (`ALPACA_WHEEL_*`, `ALPACA_IRON_CONDOR_*`) to
+  account-number names (`ALPACA_PAPER1_*`, `ALPACA_PAPER2_*`,
+  `ALPACA_PAPER3_*`) to support flexible strategy-to-account assignment.
+
 ## [1.1.0] - 2026-04-13
 
 ### Added
