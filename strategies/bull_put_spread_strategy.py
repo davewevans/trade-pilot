@@ -285,10 +285,19 @@ class BullPutSpreadStrategy:
         )
 
         # Exit conditions
-        if pnl_pct >= 50:
+        # When vol_of_vol is HIGH, option prices whip around intraday —
+        # take profits sooner (40%) before they evaporate.
+        vov_label = (context.get("volatility") or {}).get("vol_of_vol_label")
+        profit_target_pct = 40 if vov_label == "HIGH" else 50
+
+        if pnl_pct >= profit_target_pct:
             return {
                 "action": "CLOSE",
-                "reasoning": f"Captured {pnl_pct}% of max profit (>= 50% target)",
+                "reasoning": (
+                    f"Captured {pnl_pct}% of max profit "
+                    f"(>= {profit_target_pct}% target"
+                    + (" — tightened due to high vol-of-vol)" if vov_label == "HIGH" else ")")
+                ),
                 "spread_id": self.open_spread_id,
                 "limit_price": round(current_value, 2),
             }

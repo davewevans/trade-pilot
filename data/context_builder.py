@@ -208,6 +208,7 @@ class ContextBuilder:
             "iv_hv_ratio": cores.get("iv_hv_ratio"),
             "iv_hv_ratio_1y_avg": cores.get("iv_hv_ratio_1y_avg"),
             "vol_of_vol": cores.get("vol_of_vol"),
+            "vol_of_vol_label": _classify_vol_of_vol(cores.get("vol_of_vol")),
             "skew_percentile": cores.get("skew_percentile"),
             "hv_20d": cores.get("hv_20d"),
             "hv_ex_earnings_20d": cores.get("hv_ex_earnings_20d"),
@@ -1181,6 +1182,29 @@ class ContextBuilder:
 
 
 # ── Earnings volatility helpers ───────────────────────────────────────────────
+
+
+def _classify_vol_of_vol(vov: float | None) -> str | None:
+    """Classify ORATS volOfVol into HIGH / NORMAL / LOW.
+
+    ORATS ``volOfVol`` measures how much implied volatility itself moves day
+    to day (expressed as a fraction of ATM IV).  Typical equity range is
+    0.05–0.35.  Thresholds below are heuristic — ORATS doesn't publish a
+    per-symbol percentile for this field.
+
+    HIGH  (> 0.30): IV is whipping around — mid-prices are unreliable and
+                    profit targets can appear and vanish intraday.
+    LOW   (< 0.10): IV is unusually stable — mid-prices are reliable and
+                    profit targets are sticky once hit.
+    NORMAL: standard operating range.
+    """
+    if vov is None:
+        return None
+    if vov > 0.30:
+        return "HIGH"
+    if vov < 0.10:
+        return "LOW"
+    return "NORMAL"
 
 
 def _earnings_iv_premium(

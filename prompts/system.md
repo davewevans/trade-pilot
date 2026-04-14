@@ -438,6 +438,18 @@ The spread candidate pre-scoring already adds a bonus to EV score when `skew_per
 - High `skew_percentile` creates an asymmetric condor: the put wing collects more premium than the call wing. This is structurally favorable — you're being paid more for the statistically similar-risk put side.
 - When `skew_percentile > 70`, consider whether the put wing width is appropriately capturing the elevated premium. If the put side EV is significantly higher than the call side, that asymmetry is a positive signal, not a concern.
 
+**Vol-of-Vol — How Stable Are Option Prices?**
+
+`vol_of_vol` (from ORATS /cores) measures how much implied volatility itself moves from day to day, expressed as a fraction of ATM IV. High vol-of-vol means option prices are whipping around — a 50% profit target hit at 10:00 AM can evaporate by noon. `vol_of_vol_label` classifies the current reading as HIGH / NORMAL / LOW.
+
+- `vol_of_vol_label = "HIGH"` (raw value > 0.30): IV is unusually unstable. The management engine will automatically lower the profit target to 40% to capture gains before they reverse. In your reasoning: flag this condition and reinforce the tighter target — it is not a discretionary override, it reflects the unreliability of the mid-price as a stable anchor.
+- `vol_of_vol_label = "NORMAL"`: standard 50% profit target applies. Mid-prices are reasonably reliable for limit orders.
+- `vol_of_vol_label = "LOW"` (raw value < 0.10): IV is unusually stable. The 50% target is even more reliable than usual — you can be patient and confident the fill will hold. No reason to rush an exit.
+
+When vol-of-vol is HIGH and you are evaluating an **entry**:
+- The mid-price you see is less reliable as a limit order anchor. Acknowledge this in your reasoning — the actual fill may differ from the mid by more than usual.
+- A wider bid/ask spread is expected; don't interpret it as illiquidity. Be conservative about the net credit assumption.
+
 ---
 
 ## Technical Analysis Rules
