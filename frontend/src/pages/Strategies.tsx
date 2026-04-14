@@ -255,6 +255,22 @@ export function Strategies() {
           when a single sector sells off.
         </div>
 
+        <div
+          className="mt-3 p-3 rounded text-xs"
+          style={{
+            backgroundColor: 'color-mix(in srgb, var(--accent) 8%, transparent)',
+            color: 'var(--text-secondary)',
+            borderLeft: '3px solid var(--accent)',
+          }}
+        >
+          <strong>Wheel watchlist:</strong> Each cycle the bot scans the entire wheel watchlist —
+          not just a single symbol. It pre-checks each symbol and evaluates qualifying candidates
+          before asking Claude for the best setup. The wheel watchlist is smaller than the other
+          two (stocks you'd be comfortable owning through assignment). It lives in{' '}
+          <code className="font-mono">data/watchlist.json</code> and can be edited from the
+          Watchlist page in the dashboard without redeploying.
+        </div>
+
         <Subheading>How the bot manages positions</Subheading>
         <ul className="space-y-1.5 text-sm" style={{ color: 'var(--text-secondary)' }}>
           <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> <strong>50% profit close:</strong> If we've captured 50% of the premium, the bot closes early — this captures ~70% of the theta income with far less gamma risk.</li>
@@ -310,6 +326,20 @@ export function Strategies() {
           <SubCard title="Break-evens">
             Short put strike minus premium / short call strike plus premium.
           </SubCard>
+        </div>
+
+        <div
+          className="mt-3 p-3 rounded text-xs"
+          style={{
+            backgroundColor: 'color-mix(in srgb, var(--accent) 8%, transparent)',
+            color: 'var(--text-secondary)',
+            borderLeft: '3px solid var(--accent)',
+          }}
+        >
+          <strong>Iron condor watchlist:</strong> The bot scans its own dedicated iron condor
+          watchlist each cycle — favoring liquid, range-bound names where selling both sides
+          makes sense. This is separate from the wheel and spreads watchlists, and is also
+          managed from the Watchlist page in the dashboard.
         </div>
 
         <Subheading>How the bot manages this position</Subheading>
@@ -425,9 +455,7 @@ export function Strategies() {
             borderLeft: '3px solid var(--accent)',
           }}
         >
-          <strong>Multi-underlying scanning:</strong> Each spread strategy scans the full watchlist to find the best
-          candidate — it's not locked to a single stock. The bot evaluates every eligible symbol, scores the candidates,
-          and only opens the strongest setup. At most one new spread opens per cycle.
+          <strong>Multi-underlying scanning:</strong> Each spread strategy scans its own dedicated watchlist (the largest of the three — any liquid options chain qualifies). The bot pre-checks every symbol, scores the candidates by EV and regime fit, and only calls Claude once for the single strongest setup. At most one new spread opens per cycle. The watchlist lives in <code className="font-mono">data/watchlist.json</code> and is editable from the Watchlist page without redeploying.
         </div>
       </AccountSection>
 
