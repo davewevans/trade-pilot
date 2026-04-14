@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { api } from '../../api/client'
 import type { CircuitBreaker, HealthStatus } from '../../types'
 import { Badge } from '../shared/Badge'
@@ -73,14 +74,15 @@ export function TopBar() {
           style={{ backgroundColor: dotColor }}
           title={dotTitle}
         />
-        <img
-          src="/favicon.svg"
-          alt=""
-          width={36}
-          height={36}
-          aria-hidden="true"
-        />
-        <span className="font-semibold tracking-wide">trade-pilot</span>
+        <Link to="/" className="flex items-center gap-3 hover:opacity-80 transition-opacity" style={{ color: 'var(--text-primary)' }}>
+          <img
+            src="/favicon.svg"
+            alt="trade-pilot"
+            width={36}
+            height={36}
+          />
+          <span className="font-semibold tracking-wide">trade-pilot</span>
+        </Link>
         {effectiveHalted && <Badge variant="circuit" value="RED">HALTED</Badge>}
       </div>
       <div className="flex items-center gap-4 text-xs" style={{ color: 'var(--text-secondary)' }}>
