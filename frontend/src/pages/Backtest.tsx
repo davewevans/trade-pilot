@@ -222,7 +222,16 @@ export function Backtest() {
         </h1>
         <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
           Simulate how a strategy would have performed using ORATS historical options data.
-          First run fetches from the ORATS API and caches locally — subsequent runs are fast.
+          First run fetches from the ORATS API and caches locally — subsequent runs are fast.{' '}
+          <a
+            href="https://orats.com/university/backtesting-methodology"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline underline-offset-2"
+            style={{ color: 'var(--accent)' }}
+          >
+            Learn about ORATS backtesting methodology →
+          </a>
         </p>
       </div>
 
