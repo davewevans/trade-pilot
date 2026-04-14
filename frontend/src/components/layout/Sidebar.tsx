@@ -41,6 +41,12 @@ export function Sidebar() {
       <NavLink to="/watchlist" className={linkClass} style={({ isActive }) => linkStyle(isActive)}>
         Watchlist
       </NavLink>
+      <div
+        className="text-[10px] uppercase tracking-wider mt-6 mb-2 px-3"
+        style={{ color: 'var(--text-muted)' }}
+      >
+        Research
+      </div>
       <NavLink to="/backtest" className={linkClass} style={({ isActive }) => linkStyle(isActive)}>
         Backtester
       </NavLink>
