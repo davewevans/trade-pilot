@@ -58,6 +58,36 @@ const CATEGORIES: Category[] = [
           'VIX > 35. Even outside CRASH classification, extreme VIX triggers a pause on new wheel entries.',
         applies: 'Wheel',
       },
+      {
+        reason: 'IV overvalued check (ORATS forecast)',
+        body:
+          'ORATS forecasts IV to be lower than current levels, meaning options are overpriced. For credit strategies this is favorable, but for the Long Call Vertical (a debit strategy), overvalued IV means overpaying — the bot skips.',
+        applies: 'Long Call Vertical',
+      },
+      {
+        reason: 'IV undervalued check (ORATS forecast)',
+        body:
+          'ORATS forecasts IV to be higher than current levels, meaning options are underpriced. Selling underpriced options gives poor edge — the bot skips credit entries.',
+        applies: 'Bear Call, Iron Condor, Short Strangle',
+      },
+      {
+        reason: 'Term structure backwardation',
+        body:
+          'Short-term IV exceeds long-term IV (backwardation). This signals near-term fear and undermines neutral strategy theses. Iron condors, strangles, and calendar spreads are blocked.',
+        applies: 'Iron Condor, Short Strangle, Calendar Spread',
+      },
+      {
+        reason: 'Contango required',
+        body:
+          'Calendar spreads require positive contango (short-term IV < long-term IV) for the time-decay differential to work in your favor. Without contango, the structural edge disappears.',
+        applies: 'Calendar Spread',
+      },
+      {
+        reason: 'Spread yield too low',
+        body:
+          'The credit received relative to the stock price is below 0.1%. This normalizes credit quality across different stock prices — a $0.50 credit on a $500 stock is too thin even if it exceeds old fixed thresholds.',
+        applies: 'Bull Put, Bear Call, Short Strangle',
+      },
     ],
   },
   {
@@ -91,6 +121,35 @@ const CATEGORIES: Category[] = [
         body:
           "A stock's ex-dividend date falls within the trade's DTE window. Short calls near the ex-div date carry early assignment risk — the bot avoids this.",
         applies: 'Bear Call Spread',
+      },
+    ],
+  },
+  {
+    title: 'Short Strangle & Calendar Spread Specific',
+    rows: [
+      {
+        reason: 'Delta breach risk (strangle)',
+        body:
+          'Either the short put or short call delta has exceeded 0.40, meaning the position is being tested and the stock has moved significantly toward one of the strikes. Without protective wings, the bot closes immediately.',
+        applies: 'Short Strangle',
+      },
+      {
+        reason: 'Earnings between expirations (calendar)',
+        body:
+          'For calendar spreads, an earnings event falls between the short and long expiration dates. A post-earnings IV crush would collapse the long leg\'s value while the short leg may have already expired — destroying the spread\'s edge.',
+        applies: 'Calendar Spread',
+      },
+      {
+        reason: 'Max rolls reached (calendar)',
+        body:
+          'The short leg of the calendar has already been rolled twice. Further rolling increases complexity and capital commitment — after two rolls the bot closes the entire position rather than continuing to extend.',
+        applies: 'Calendar Spread',
+      },
+      {
+        reason: 'ATR breach (calendar)',
+        body:
+          'The stock has moved more than 1 ATR (Average True Range) from the calendar\'s strike price. Calendar spreads have a narrow profit zone — once the stock moves this far, the directional thesis is broken and the position is closed.',
+        applies: 'Calendar Spread',
       },
     ],
   },
