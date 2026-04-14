@@ -27,6 +27,7 @@ interface BacktestParams {
   profit_close_pct: number
   contracts: number
   spread_width_strikes: number
+  slippage_model: string
 }
 
 interface SimulatedTrade {
@@ -37,6 +38,8 @@ interface SimulatedTrade {
   expiration_date: string
   short_strike: number
   long_strike: number | null
+  short_strike_2: number | null
+  long_strike_2: number | null
   entry_credit: number
   exit_debit: number | null
   contracts: number
@@ -47,6 +50,8 @@ interface SimulatedTrade {
   entry_regime: string
   entry_iv_env: string
   holding_days: number | null
+  vix_at_entry: number | null
+  sma50_position: string | null
 }
 
 interface BacktestResult {
@@ -58,9 +63,25 @@ interface BacktestResult {
   avg_duration_days: number
   total_trades: number
   winning_trades: number
+  sharpe_ratio: number | null
+  total_slippage_cost: number | null
   monthly_returns: { month: string; pnl: number }[]
   equity_curve: { date: string; cumulative_pnl: number }[]
   trades: SimulatedTrade[]
+}
+
+interface BacktestRunSummary {
+  id: string
+  strategy: string
+  symbols: string[]
+  start_date: string
+  end_date: string
+  total_pnl: number
+  win_rate: number
+  sharpe_ratio: number | null
+  total_trades: number
+  created_at: string
+  slippage_model: string
 }
 
 interface JobStatus {
@@ -79,6 +100,8 @@ const STRATEGIES = [
   { value: 'bear_call_spread', label: 'Bear Call Spread' },
   { value: 'iron_condor', label: 'Iron Condor' },
   { value: 'long_call_vertical', label: 'Long Call Vertical' },
+  { value: 'short_strangle', label: 'Short Strangle' },
+  { value: 'calendar_spread', label: 'Calendar Spread' },
 ]
 
 const PRESET_SYMBOLS: { label: string; syms: string[] }[] = [
@@ -100,6 +123,7 @@ const DEFAULT_PARAMS: BacktestParams = {
   profit_close_pct: 0.50,
   contracts: 1,
   spread_width_strikes: 5,
+  slippage_model: 'orats',
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -151,7 +175,17 @@ export function Backtest() {
   const [jobId, setJobId] = useState<string | null>(null)
   const [job, setJob] = useState<JobStatus | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [history, setHistory] = useState<BacktestRunSummary[]>([])
+  const [historyResult, setHistoryResult] = useState<BacktestResult | null>(null)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  // ── Load history on mount ─────────────────────────────────────────────────
+  useEffect(() => {
+    fetch('/api/backtest/history', { credentials: 'include' })
+      .then((r) => (r.ok ? r.json() : []))
+      .then((data: BacktestRunSummary[]) => setHistory(data.slice(0, 20)))
+      .catch(() => {})
+  }, [])
 
   // ── Polling ──────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -164,6 +198,13 @@ export function Backtest() {
         setJob(data)
         if (data.status === 'complete' || data.status === 'error') {
           if (pollRef.current) clearInterval(pollRef.current)
+          // Refresh history after a completed run
+          if (data.status === 'complete') {
+            fetch('/api/backtest/history', { credentials: 'include' })
+              .then((r) => (r.ok ? r.json() : []))
+              .then((d: BacktestRunSummary[]) => setHistory(d.slice(0, 20)))
+              .catch(() => {})
+          }
         }
       } catch (_e) {
         // ignore transient errors
@@ -195,6 +236,7 @@ export function Backtest() {
     setError(null)
     setJob(null)
     setJobId(null)
+    setHistoryResult(null)
     if (pollRef.current) clearInterval(pollRef.current)
 
     try {
@@ -211,7 +253,18 @@ export function Backtest() {
     }
   }
 
-  const result = job?.result
+  async function handleLoadHistoryRun(id: string) {
+    try {
+      const res = await fetch(`/api/backtest/${id}/trades`, { credentials: 'include' })
+      if (!res.ok) return
+      const data: BacktestResult = await res.json()
+      setHistoryResult(data)
+      setJob(null)
+      setJobId(null)
+    } catch (_e) {}
+  }
+
+  const result = job?.result ?? historyResult
   const running = job?.status === 'queued' || job?.status === 'running'
 
   return (
@@ -422,6 +475,30 @@ export function Backtest() {
               }}
             />
           </div>
+
+          {/* Slippage model */}
+          <div className="space-y-1">
+            <label className="text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>
+              Slippage Model
+            </label>
+            <select
+              value={params.slippage_model}
+              onChange={(e) => set('slippage_model', e.target.value)}
+              className="w-full rounded px-2 py-1.5 text-sm"
+              style={{
+                backgroundColor: 'var(--bg-secondary)',
+                border: '1px solid var(--border)',
+                color: 'var(--text-primary)',
+              }}
+            >
+              <option value="orats">ORATS Realistic (recommended)</option>
+              <option value="none">None (raw mid prices)</option>
+            </select>
+            <p className="text-[10px] leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+              ORATS model applies 75% bid-ask slippage for single legs, 66% for 2-leg spreads,
+              53% for iron condors — based on 20 years of market-making experience.
+            </p>
+          </div>
         </div>
 
         {/* Symbol selector */}
@@ -560,7 +637,121 @@ export function Backtest() {
       )}
 
       {/* ── Results ──────────────────────────────────────────────────────────── */}
-      {result && <BacktestResults result={result} />}
+      {result && (
+        <div>
+          {historyResult && (
+            <div className="flex items-center justify-between mb-4">
+              <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                Viewing saved backtest
+              </p>
+              <button
+                onClick={() => setHistoryResult(null)}
+                className="text-xs px-2 py-1 rounded"
+                style={{
+                  backgroundColor: 'var(--bg-secondary)',
+                  border: '1px solid var(--border)',
+                  color: 'var(--text-secondary)',
+                }}
+              >
+                Clear
+              </button>
+            </div>
+          )}
+          <BacktestResults result={result} />
+        </div>
+      )}
+
+      {/* ── Past Backtests ────────────────────────────────────────────────────── */}
+      <div
+        className="rounded-lg overflow-hidden"
+        style={{ border: '1px solid var(--border)' }}
+      >
+        <div
+          className="px-4 py-3"
+          style={{ backgroundColor: 'var(--bg-card)', borderBottom: '1px solid var(--border)' }}
+        >
+          <h3 className="font-semibold text-sm" style={{ color: 'var(--text-primary)' }}>
+            Past Backtests
+          </h3>
+          <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
+            Click a row to load its results
+          </p>
+        </div>
+
+        {history.length === 0 ? (
+          <div className="px-4 py-8 text-center" style={{ backgroundColor: 'var(--bg-card)' }}>
+            <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
+              No saved backtests yet. Run one above and it will appear here.
+            </p>
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr style={{ backgroundColor: 'var(--bg-secondary)', borderBottom: '1px solid var(--border)' }}>
+                  {['Date Run', 'Strategy', 'Symbols', 'Period', 'Trades', 'Win Rate', 'P&L', 'Sharpe'].map((h) => (
+                    <th key={h} className="px-3 py-2 text-left font-medium" style={{ color: 'var(--text-muted)' }}>
+                      {h}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {history.map((run, i) => (
+                  <tr
+                    key={run.id}
+                    onClick={() => handleLoadHistoryRun(run.id)}
+                    className="cursor-pointer"
+                    style={{
+                      borderBottom: '1px solid var(--border)',
+                      backgroundColor: i % 2 === 0 ? 'var(--bg-card)' : 'color-mix(in srgb, var(--bg-secondary) 50%, var(--bg-card))',
+                    }}
+                    onMouseEnter={(e) => {
+                      ;(e.currentTarget as HTMLTableRowElement).style.backgroundColor =
+                        'color-mix(in srgb, var(--accent) 8%, var(--bg-card))'
+                    }}
+                    onMouseLeave={(e) => {
+                      ;(e.currentTarget as HTMLTableRowElement).style.backgroundColor =
+                        i % 2 === 0 ? 'var(--bg-card)' : 'color-mix(in srgb, var(--bg-secondary) 50%, var(--bg-card))'
+                    }}
+                  >
+                    <td className="px-3 py-2 font-mono" style={{ color: 'var(--text-muted)' }}>
+                      {run.created_at.slice(0, 10)}
+                    </td>
+                    <td className="px-3 py-2" style={{ color: 'var(--text-secondary)' }}>
+                      {STRATEGIES.find((s) => s.value === run.strategy)?.label ?? run.strategy}
+                    </td>
+                    <td className="px-3 py-2 font-mono" style={{ color: 'var(--text-secondary)' }}>
+                      {Array.isArray(run.symbols) ? run.symbols.join(', ') : run.symbols}
+                    </td>
+                    <td className="px-3 py-2 font-mono" style={{ color: 'var(--text-muted)' }}>
+                      {run.start_date.slice(0, 7)} – {run.end_date.slice(0, 7)}
+                    </td>
+                    <td className="px-3 py-2" style={{ color: 'var(--text-secondary)' }}>
+                      {run.total_trades}
+                    </td>
+                    <td
+                      className="px-3 py-2 font-mono"
+                      style={{ color: run.win_rate >= 60 ? 'var(--green)' : run.win_rate >= 50 ? 'var(--text-secondary)' : 'var(--red)' }}
+                    >
+                      {fmtPct(run.win_rate)}
+                    </td>
+                    <td
+                      className="px-3 py-2 font-mono font-semibold"
+                      style={{ color: run.total_pnl >= 0 ? 'var(--green)' : 'var(--red)' }}
+                    >
+                      {fmt$(run.total_pnl)}
+                    </td>
+                    <td className="px-3 py-2 font-mono" style={{ color: 'var(--text-secondary)' }}>
+                      {run.sharpe_ratio != null ? run.sharpe_ratio.toFixed(2) : '—'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
     </div>
   )
 }
@@ -579,7 +770,7 @@ function BacktestResults({ result }: { result: BacktestResult }) {
   return (
     <div className="space-y-6">
       {/* ── Summary stats ────────────────────────────────────────────────── */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
         <StatCard label="Total P&L" value={fmt$(result.total_pnl)} positive={result.total_pnl >= 0} />
         <StatCard label="Win Rate" value={fmtPct(result.win_rate)} positive={result.win_rate >= 50} />
         <StatCard label="Avg Trade" value={fmt$(result.avg_trade_pnl)} positive={result.avg_trade_pnl >= 0} />
@@ -587,6 +778,16 @@ function BacktestResults({ result }: { result: BacktestResult }) {
         <StatCard label="Avg Duration" value={`${result.avg_duration_days.toFixed(1)}d`} />
         <StatCard label="Total Trades" value={String(result.total_trades)} />
         <StatCard label="Winners" value={`${result.winning_trades}/${result.total_trades}`} positive={result.winning_trades >= result.total_trades / 2} />
+        <StatCard
+          label="Sharpe"
+          value={result.sharpe_ratio != null ? result.sharpe_ratio.toFixed(2) : '—'}
+          positive={result.sharpe_ratio != null && result.sharpe_ratio >= 1.0}
+        />
+        <StatCard
+          label="Slippage Cost"
+          value={result.total_slippage_cost != null ? fmt$(-result.total_slippage_cost) : '—'}
+          negative
+        />
       </div>
 
       {/* ── Equity curve ──────────────────────────────────────────────────── */}
@@ -703,7 +904,7 @@ function BacktestResults({ result }: { result: BacktestResult }) {
           <table className="w-full text-xs">
             <thead>
               <tr style={{ backgroundColor: 'var(--bg-secondary)', borderBottom: '1px solid var(--border)' }}>
-                {['Symbol', 'Entry', 'Exit', 'Expiry', 'Strike', 'Credit', 'Close', 'P&L', 'Days', 'IVR', 'Regime', 'Exit Reason'].map((h) => (
+                {['Symbol', 'Entry', 'Exit', 'Expiry', 'Strike', 'Credit', 'Close', 'P&L', 'Days', 'IVR', 'VIX', 'SMA', 'Regime', 'Exit Reason'].map((h) => (
                   <th key={h} className="px-3 py-2 text-left font-medium" style={{ color: 'var(--text-muted)' }}>
                     {h}
                   </th>
@@ -733,6 +934,8 @@ function BacktestResults({ result }: { result: BacktestResult }) {
                   </td>
                   <td className="px-3 py-2 font-mono" style={{ color: 'var(--text-secondary)' }}>
                     {t.short_strike}{t.long_strike ? `/${t.long_strike}` : ''}
+                    {t.short_strike_2 ? `/${t.short_strike_2}` : ''}
+                    {t.long_strike_2 ? `/${t.long_strike_2}` : ''}
                   </td>
                   <td className="px-3 py-2 font-mono" style={{ color: 'var(--text-secondary)' }}>
                     ${Math.abs(t.entry_credit).toFixed(2)}
@@ -751,6 +954,27 @@ function BacktestResults({ result }: { result: BacktestResult }) {
                   </td>
                   <td className="px-3 py-2 font-mono" style={{ color: 'var(--text-muted)' }}>
                     {t.entry_ivr.toFixed(0)}
+                  </td>
+                  <td className="px-3 py-2 font-mono" style={{ color: 'var(--text-muted)' }}>
+                    {t.vix_at_entry != null ? t.vix_at_entry.toFixed(1) : '—'}
+                  </td>
+                  <td className="px-3 py-2">
+                    {t.sma50_position != null ? (
+                      <span
+                        className="px-1.5 py-0.5 rounded text-[10px] font-medium"
+                        style={{
+                          backgroundColor: t.sma50_position === 'above'
+                            ? 'color-mix(in srgb, var(--green) 15%, transparent)'
+                            : 'color-mix(in srgb, var(--red) 15%, transparent)',
+                          color: t.sma50_position === 'above' ? 'var(--green)' : 'var(--red)',
+                          border: `1px solid ${t.sma50_position === 'above' ? 'color-mix(in srgb, var(--green) 40%, transparent)' : 'color-mix(in srgb, var(--red) 40%, transparent)'}`,
+                        }}
+                      >
+                        {t.sma50_position}
+                      </span>
+                    ) : (
+                      <span style={{ color: 'var(--text-muted)' }}>—</span>
+                    )}
                   </td>
                   <td className="px-3 py-2" style={{ color: 'var(--text-muted)' }}>
                     {t.entry_regime}
@@ -771,7 +995,7 @@ function BacktestResults({ result }: { result: BacktestResult }) {
               ))}
               {filteredTrades.length === 0 && (
                 <tr>
-                  <td colSpan={12} className="px-4 py-8 text-center text-sm" style={{ color: 'var(--text-muted)' }}>
+                  <td colSpan={14} className="px-4 py-8 text-center text-sm" style={{ color: 'var(--text-muted)' }}>
                     No trades match the current filter.
                   </td>
                 </tr>

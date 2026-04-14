@@ -119,6 +119,9 @@ export function Sidebar() {
         <NavLink to="/backtest" className={linkClass} style={({ isActive }) => linkStyle(isActive)}>
           Backtester
         </NavLink>
+        <NavLink to="/backtest-intel" className={linkClass} style={({ isActive }) => linkStyle(isActive)}>
+          Backtest Intel
+        </NavLink>
         <NavLink to="/volatility" className={linkClass} style={({ isActive }) => linkStyle(isActive)}>
           Volatility
         </NavLink>
