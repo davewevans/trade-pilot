@@ -14,6 +14,7 @@ import { ACCOUNTS, api } from '../api/client'
 import { useAccount } from '../hooks/useAccount'
 import { Badge } from '../components/shared/Badge'
 import { EmptyState } from '../components/shared/EmptyState'
+import { IVHistoryChart } from '../components/shared/IVHistoryChart'
 import { LoadingSpinner } from '../components/shared/LoadingSpinner'
 import { StatCard } from '../components/shared/StatCard'
 import type { CircuitBreaker, EquityHistory, Position, Trade } from '../types'
@@ -128,6 +129,7 @@ export function AccountDetail() {
   const [tradesLoading, setTradesLoading] = useState(true)
   const [cb, setCb] = useState<CircuitBreaker | null>(null)
   const [equityHistory, setEquityHistory] = useState<EquityHistory | null>(null)
+  const [ivSymbol, setIvSymbol] = useState<string>('')
 
   useEffect(() => {
     let cancelled = false
@@ -189,6 +191,12 @@ export function AccountDetail() {
   const positions = (portfolio?.positions ?? []).filter(
     (p) => p.strategy_type === positionTag,
   )
+
+  // Collect unique underlying symbols from positions + recent trades for the IV picker.
+  const accountSymbols = Array.from(new Set([
+    ...positions.map((p) => p.underlying ?? p.symbol?.slice(0, 4) ?? '').filter(Boolean),
+    ...(trades ?? []).map((t) => t.underlying ?? '').filter(Boolean),
+  ])).slice(0, 12)
 
   const wheelStates = portfolio?.wheel_states ?? {}
   const isWheel = account === 'wheel'
@@ -365,6 +373,52 @@ export function AccountDetail() {
           )}
         </div>
       </section>
+
+      {accountSymbols.length > 0 && (
+        <section>
+          <div className="flex items-center gap-3 mb-2">
+            <h3 className="section-heading mb-0">IV rank history</h3>
+            <div className="flex flex-wrap gap-1">
+              {accountSymbols.map((sym) => (
+                <button
+                  key={sym}
+                  onClick={() => setIvSymbol(sym === ivSymbol ? '' : sym)}
+                  className="px-2 py-0.5 rounded text-xs font-mono transition-colors"
+                  style={{
+                    backgroundColor:
+                      ivSymbol === sym
+                        ? 'color-mix(in srgb, var(--accent) 20%, var(--bg-card))'
+                        : 'var(--bg-card)',
+                    color: ivSymbol === sym ? 'var(--accent)' : 'var(--text-muted)',
+                    border: `1px solid ${ivSymbol === sym ? 'var(--accent)' : 'var(--border)'}`,
+                  }}
+                >
+                  {sym}
+                </button>
+              ))}
+            </div>
+          </div>
+          {ivSymbol ? (
+            <div
+              className="rounded p-4"
+              style={{ backgroundColor: 'var(--bg-card)', border: '1px solid var(--border)' }}
+            >
+              <IVHistoryChart symbol={ivSymbol} compact />
+            </div>
+          ) : (
+            <div
+              className="rounded p-4 text-sm text-center"
+              style={{
+                backgroundColor: 'var(--bg-card)',
+                border: '1px solid var(--border)',
+                color: 'var(--text-muted)',
+              }}
+            >
+              Select a symbol above to view its IV rank history.
+            </div>
+          )}
+        </section>
+      )}
 
       <section>
         <h3 className="section-heading">Closed trades</h3>

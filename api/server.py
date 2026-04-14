@@ -17,7 +17,7 @@ import time
 import uuid
 from collections import Counter
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, Query, Request, Response
@@ -1087,6 +1087,109 @@ def get_watchlist():
 
 
 # ── Backtest job store ───────────────────────────────────────────────────────
+# ── IV history in-memory cache (24h TTL) ─────────────────────────────────────
+# ORATS hist/ivrank is already persisted in SQLite (immutable historical data).
+# This layer avoids even the SQLite lookup on repeated dashboard refreshes.
+_IV_HISTORY_CACHE: dict[str, tuple[float, dict]] = {}
+_IV_HISTORY_CACHE_TTL = 24 * 60 * 60  # seconds
+
+
+@app.get("/api/iv-history")
+def iv_history(
+    symbol: str = Query(..., min_length=1, max_length=10),
+    days: int = Query(default=365, ge=30, le=1095),
+):
+    """Daily IV rank history for a symbol, plus trade entry markers.
+
+    Response shape::
+
+        {
+          "symbol": "AAPL",
+          "days": 365,
+          "iv_history": [
+            {"date": "2024-01-02", "iv_rank_1y": 45.2, "iv_rank_1m": 38.1, "iv": 0.22},
+            ...
+          ],
+          "trade_markers": [
+            {"date": "2024-03-15", "iv_rank": 62.1, "strategy_type": "bull_put_spread", "trade_type": "sell_to_open"},
+            ...
+          ]
+        }
+    """
+    sym = symbol.upper()
+    cache_key = f"{sym}:{days}"
+    now = time.monotonic()
+
+    cached = _IV_HISTORY_CACHE.get(cache_key)
+    if cached and (now - cached[0]) < _IV_HISTORY_CACHE_TTL:
+        return cached[1]
+
+    end_dt = date.today()
+    start_dt = end_dt - timedelta(days=days)
+
+    try:
+        from data.orats_historical import ORATSHistorical
+        raw_rows = ORATSHistorical().get_iv_rank_history(
+            sym, start_dt.isoformat(), end_dt.isoformat(),
+        )
+    except Exception:
+        logger.exception("IV history fetch failed for %s", sym)
+        return JSONResponse(status_code=503, content={"error": "IV history unavailable"})
+
+    # Normalise raw ORATS camelCase fields to friendly snake_case for the frontend.
+    iv_history_points = []
+    for row in raw_rows:
+        trade_date = row.get("tradeDate") or row.get("trade_date") or ""
+        iv_rank_1y = row.get("ivRank1y") or row.get("iv_rank_1y")
+        iv_rank_1m = row.get("ivRank1m") or row.get("iv_rank_1m")
+        iv_raw = row.get("iv")
+        if not trade_date:
+            continue
+        iv_history_points.append({
+            "date": str(trade_date)[:10],
+            "iv_rank_1y": round(float(iv_rank_1y), 1) if iv_rank_1y is not None else None,
+            "iv_rank_1m": round(float(iv_rank_1m), 1) if iv_rank_1m is not None else None,
+            "iv": round(float(iv_raw) * 100, 2) if iv_raw is not None else None,  # as pct
+        })
+
+    iv_history_points.sort(key=lambda x: x["date"])
+
+    # ── Trade entry markers ──────────────────────────────────────────────────
+    trade_markers: list[dict] = []
+    conn = _open_db()
+    if conn is not None:
+        try:
+            repo = TradeRepository(conn)
+            filled = repo.get_filled(underlying=sym)
+            # Only show sell-to-open trades (entries, not exits)
+            for t in filled:
+                if t.get("trade_type") not in ("sell_to_open", "buy_to_open"):
+                    continue
+                filled_date = (t.get("filled_at") or "")[:10]
+                if not filled_date or filled_date < start_dt.isoformat():
+                    continue
+                trade_markers.append({
+                    "date": filled_date,
+                    "iv_rank": round(float(t["iv_rank_at_entry"]), 1)
+                    if t.get("iv_rank_at_entry") is not None else None,
+                    "strategy_type": t.get("strategy_type"),
+                    "trade_type": t.get("trade_type"),
+                })
+        except Exception:
+            logger.warning("Trade marker fetch failed for %s", sym)
+        finally:
+            conn.close()
+
+    result = {
+        "symbol": sym,
+        "days": days,
+        "iv_history": iv_history_points,
+        "trade_markers": trade_markers,
+    }
+    _IV_HISTORY_CACHE[cache_key] = (now, result)
+    return result
+
+
 # Jobs run in background threads. Results are stored in memory until retrieved.
 # Keys: job_id (str) → dict with status/progress/result fields.
 

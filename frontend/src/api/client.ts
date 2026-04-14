@@ -41,6 +41,27 @@ export interface TradesResponse {
   total: number
 }
 
+export interface IVHistoryPoint {
+  date: string
+  iv_rank_1y: number | null
+  iv_rank_1m: number | null
+  iv: number | null          // ATM IV as percentage (e.g. 22.5 = 22.5%)
+}
+
+export interface IVTradeMarker {
+  date: string
+  iv_rank: number | null
+  strategy_type: string | null
+  trade_type: string | null
+}
+
+export interface IVHistoryResponse {
+  symbol: string
+  days: number
+  iv_history: IVHistoryPoint[]
+  trade_markers: IVTradeMarker[]
+}
+
 const BASE = '' // same origin in prod; Vite proxy handles /api in dev
 
 // Retry on 502/503 and network errors only. These are transient infra
@@ -183,6 +204,9 @@ export const api = {
     get<{ job_id: string; status: string; progress: string; error?: string | null; result?: unknown }>(
       `/api/backtest/${jobId}`,
     ),
+
+  ivHistory: (symbol: string, days: number = 365) =>
+    get<IVHistoryResponse>(`/api/iv-history?symbol=${encodeURIComponent(symbol)}&days=${days}`),
 
   watchlist: () =>
     get<{ wheel: string[]; iron_condor: string[]; spreads: string[]; updated_at: string | null }>('/api/watchlist'),
