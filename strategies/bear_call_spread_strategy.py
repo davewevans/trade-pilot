@@ -105,10 +105,21 @@ class BearCallSpreadStrategy:
                 "skip_reason": "no_candidates",
             }
 
-        if best.get("net_credit", 0) <= 0.75:
+        spread_yield = best.get("spread_yield", 0)
+        net_credit_val = best.get("net_credit", 0)
+        if spread_yield < 0.001:
             return {
                 "action": "SKIP",
-                "reasoning": f"Best candidate credit ${best.get('net_credit', 0)} <= $0.75",
+                "reasoning": (
+                    f"Spread yield {spread_yield:.4f} < 0.001 minimum "
+                    f"(credit ${net_credit_val} too thin for stock price)"
+                ),
+                "skip_reason": "low_spread_yield",
+            }
+        if net_credit_val < 0.30:
+            return {
+                "action": "SKIP",
+                "reasoning": f"Absolute credit ${net_credit_val} < $0.30 minimum",
                 "skip_reason": "low_credit",
             }
         if best.get("credit_to_width_ratio", 0) < 0.15:
@@ -137,18 +148,37 @@ class BearCallSpreadStrategy:
             return "No viable bear call spread candidates found", 0.0
 
         net_credit = best.get("net_credit", 0)
-        if net_credit <= 0.75:
-            return f"Best candidate credit ${net_credit} <= $0.75", 0.0
+        spread_yield = best.get("spread_yield", 0)
+        if spread_yield < 0.001:
+            return (
+                f"Spread yield {spread_yield:.4f} < 0.001 minimum "
+                f"(credit ${net_credit} too thin for stock price)",
+                0.0,
+            )
+        if net_credit < 0.30:
+            return f"Absolute credit ${net_credit} < $0.30 minimum", 0.0
         if best.get("credit_to_width_ratio", 0) < 0.15:
             return (
                 f"Credit/width ratio {best.get('credit_to_width_ratio', 0)} < 0.15",
                 0.0,
             )
 
+        # IV forecast check — poor time to sell if IV is undervalued
+        iv_ov = (context.get("volatility") or {}).get("iv_overvalued_label")
+        if iv_ov == "UNDERVALUED":
+            return "IV is UNDERVALUED per ORATS forecast — poor edge for selling calls", 0.0
+
         # Rank by EV score (ORATS-adjusted probability × max_gain - loss risk).
         # Falls back to net_credit when EV data is unavailable.
         ev = best.get("ev_score")
         score = float(ev) if ev is not None else float(net_credit)
+
+        # IV overvaluation scoring bonus/penalty
+        if iv_ov == "OVERVALUED":
+            score *= 1.15
+        elif iv_ov == "UNDERVALUED":
+            score *= 0.85
+
         return None, score
 
     def _check_entry_conditions(self, context: dict) -> str | None:

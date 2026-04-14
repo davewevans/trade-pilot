@@ -61,6 +61,7 @@ def _base_context(**overrides):
                     "break_even": 551.0,
                     "credit_to_width_ratio": 0.20,
                     "liquidity_ok": True,
+                    "spread_yield": 0.00185,  # 1.00 / 540.0
                 },
             },
         },
@@ -416,3 +417,33 @@ class TestStatePersistence:
         data = json.loads(strategy._state_path.read_text())
         assert data["state"] == "OPEN"
         assert data["open_spread_id"] == "persist-bcs"
+
+
+# ================================================================
+# IV forecast and spread yield checks (Prompt 3)
+# ================================================================
+
+
+class TestIVForecastAndSpreadYield:
+    def test_undervalued_iv_blocks_entry(self, strategy):
+        ctx = _base_context()
+        ctx["volatility"] = {"iv_overvalued_label": "UNDERVALUED", "iv_hv_ratio": 1.1}
+        reason, score = strategy.pre_check_entry(ctx)
+        assert reason is not None
+        assert "UNDERVALUED" in reason
+        assert score == 0.0
+
+    def test_overvalued_iv_boosts_score(self, strategy):
+        ctx_ov = _base_context()
+        ctx_ov["volatility"] = {"iv_overvalued_label": "OVERVALUED", "iv_hv_ratio": 1.1}
+        ctx_base = _base_context()
+        _, score_base = strategy.pre_check_entry(ctx_base)
+        _, score_ov = strategy.pre_check_entry(ctx_ov)
+        assert score_ov == pytest.approx(score_base * 1.15, rel=0.01)
+
+    def test_low_spread_yield_blocks_entry(self, strategy):
+        ctx = _base_context()
+        ctx["spread_candidates"]["bear_call_spread"]["best_candidate"]["spread_yield"] = 0.0004
+        reason, score = strategy.pre_check_entry(ctx)
+        assert reason is not None
+        assert score == 0.0

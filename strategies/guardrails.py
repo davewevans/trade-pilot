@@ -84,11 +84,12 @@ class Guardrails:
     the trade is rejected with a human-readable reason.
     """
 
-    def __init__(self, broker=None):
+    def __init__(self, broker=None, spread_tracker=None):
         # Optional broker reference used as a fallback to verify equity
         # ownership for covered-call checks when the positions list passed
         # to validate() does not include stock positions.
         self.broker = broker
+        self.spread_tracker = spread_tracker
 
     def validate(
         self, decision: dict, account: dict, positions: list, context: dict | None = None
@@ -595,6 +596,183 @@ class Guardrails:
         if dte_earnings is not None and dte_earnings <= 21:
             return False, f"Earnings in {dte_earnings} days (hard block: need > 21)"
 
+        return True, ""
+
+    # ── short strangle entry ───────────────────────────────
+
+    def validate_short_strangle_entry(
+        self,
+        decision: dict,
+        context: dict,
+        account: dict,
+        open_spreads: list | None = None,
+    ) -> tuple[bool, str]:
+        """Hard rules for short strangle entry.
+
+        Tighter than spread guardrails — undefined risk requires stricter controls.
+        """
+        # qty must be 1
+        qty = decision.get("qty", 1)
+        if qty != 1:
+            return False, f"qty must be 1 for short strangle, got {qty}"
+
+        # Both symbols required
+        put_symbol = decision.get("put_symbol", "")
+        call_symbol = decision.get("call_symbol", "")
+        if not _OCC_PUT_RE.match(put_symbol):
+            return False, f"Invalid OCC put symbol: {put_symbol!r}"
+        if not _OCC_CALL_RE.match(call_symbol):
+            return False, f"Invalid OCC call symbol: {call_symbol!r}"
+
+        # Same expiration
+        from utils.occ import extract_expiration
+        put_exp = extract_expiration(put_symbol)
+        call_exp = extract_expiration(call_symbol)
+        if put_exp and call_exp and put_exp != call_exp:
+            return False, f"Put and call expirations don't match: {put_exp} vs {call_exp}"
+
+        # limit_price must be negative (credit)
+        limit_price = decision.get("limit_price")
+        if limit_price is not None and limit_price >= 0:
+            return False, f"limit_price must be negative for short strangle, got {limit_price}"
+
+        # Margin check: require naked option margin ~ 20% of underlying × 100
+        # Reject if estimated margin > 25% of buying power (undefined risk cap).
+        buying_power = float(account.get("buying_power", 0))
+        underlying_price = float(
+            (context.get("technicals") or {}).get("current_price") or 0
+        )
+        if underlying_price > 0 and buying_power > 0:
+            max_margin = underlying_price * 100 * 0.20
+            if max_margin > buying_power * 0.25:
+                return (
+                    False,
+                    f"Estimated margin ${max_margin:,.0f} exceeds 25% of buying power "
+                    f"${buying_power * 0.25:,.0f} (undefined risk limit)",
+                )
+
+        # Earnings within 21 days — hard block
+        fund = context.get("fundamentals") or {}
+        dte_earnings = fund.get("days_to_earnings")
+        if dte_earnings is not None and dte_earnings <= 21:
+            return False, f"Earnings in {dte_earnings} days (hard block for undefined risk)"
+
+        # One open strangle per underlying at a time
+        underlying = self._extract_root(put_symbol)
+        if open_spreads:
+            for s in open_spreads:
+                if (
+                    s.get("underlying", "").upper() == underlying.upper()
+                    and s.get("status") not in ("closed", "canceled")
+                ):
+                    return False, f"Already have an open short strangle on {underlying}"
+
+        return True, ""
+
+    def validate_short_strangle_exit(
+        self,
+        decision: dict,
+        context: dict,
+    ) -> tuple[bool, str]:
+        """Validate a short strangle exit decision."""
+        spread_id = decision.get("spread_id")
+        if not spread_id:
+            return False, "Missing spread_id for strangle exit"
+        return True, ""
+
+    # ── calendar spread entry ──────────────────────────────
+
+    def validate_calendar_spread_entry(
+        self,
+        decision: dict,
+        context: dict,
+        account: dict,
+        open_spreads: list | None = None,
+    ) -> tuple[bool, str]:
+        """Hard rules for calendar spread entry."""
+        short_symbol = decision.get("short_symbol", "")
+        long_symbol = decision.get("long_symbol", "")
+
+        # Both symbols must be same type (both calls or both puts)
+        is_short_put = _OCC_PUT_RE.match(short_symbol)
+        is_short_call = _OCC_CALL_RE.match(short_symbol)
+        is_long_put = _OCC_PUT_RE.match(long_symbol)
+        is_long_call = _OCC_CALL_RE.match(long_symbol)
+
+        if not (is_short_put or is_short_call):
+            return False, f"Invalid OCC symbol for short_symbol: {short_symbol!r}"
+        if not (is_long_put or is_long_call):
+            return False, f"Invalid OCC symbol for long_symbol: {long_symbol!r}"
+
+        # Same type check
+        short_is_put = bool(is_short_put)
+        long_is_put = bool(is_long_put)
+        if short_is_put != long_is_put:
+            return False, "Both legs must be the same option type (both calls or both puts)"
+
+        # Same strike
+        from utils.occ import extract_strike, extract_expiration
+        short_strike = extract_strike(short_symbol)
+        long_strike = extract_strike(long_symbol)
+        if short_strike and long_strike and abs(short_strike - long_strike) > 0.01:
+            return False, f"Calendar legs must have same strike: {short_strike} vs {long_strike}"
+
+        # Short expiration must be before long expiration
+        short_exp = extract_expiration(short_symbol)
+        long_exp = extract_expiration(long_symbol)
+        if short_exp and long_exp:
+            if short_exp >= long_exp:
+                return (
+                    False,
+                    f"Short leg expiration {short_exp} must be before long leg {long_exp}",
+                )
+
+        # limit_price must be positive (debit)
+        limit_price = decision.get("limit_price")
+        if limit_price is not None and limit_price <= 0:
+            return False, f"limit_price must be positive for debit calendar, got {limit_price}"
+
+        # Net debit range $0.50 – $2.50
+        net_debit = decision.get("net_debit", 0)
+        if not (0.50 <= net_debit <= 2.50):
+            return False, f"Net debit ${net_debit} outside allowed range $0.50–$2.50"
+
+        # Net debit <= 1% of buying power
+        buying_power = float(account.get("buying_power", 0))
+        if buying_power > 0 and (net_debit * 100) > buying_power * 0.01:
+            return (
+                False,
+                f"Net debit ${net_debit * 100:,.0f} exceeds 1% of buying power "
+                f"${buying_power * 0.01:,.0f}",
+            )
+
+        # Earnings within 21 days — hard block
+        fund = context.get("fundamentals") or {}
+        dte_earnings = fund.get("days_to_earnings")
+        if dte_earnings is not None and dte_earnings <= 21:
+            return False, f"Earnings in {dte_earnings} days (hard block)"
+
+        # One open calendar per underlying at a time
+        underlying = self._extract_root(short_symbol)
+        if open_spreads:
+            for s in open_spreads:
+                if (
+                    s.get("underlying", "").upper() == underlying.upper()
+                    and s.get("status") not in ("closed", "canceled")
+                ):
+                    return False, f"Already have an open calendar spread on {underlying}"
+
+        return True, ""
+
+    def validate_calendar_spread_exit(
+        self,
+        decision: dict,
+        context: dict,
+    ) -> tuple[bool, str]:
+        """Validate a calendar spread exit decision."""
+        spread_id = decision.get("spread_id")
+        if not spread_id:
+            return False, "Missing spread_id for calendar exit"
         return True, ""
 
     # ── helpers ──────────────────────────────────────────────

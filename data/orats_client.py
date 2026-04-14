@@ -279,6 +279,23 @@ class ORATSClient:
                 "rip": self._safe_float(row.get("rip")),
                 "best_etf": row.get("bestEtf"),
                 "sector_name": row.get("sectorName"),
+                # ORATS forecast fields
+                "or_fcst_20d": self._safe_float(row.get("orFcst20d")),
+                "or_iv_fcst_20d": self._safe_float(row.get("orIvFcst20d")),
+                "or_fcst_inf": self._safe_float(row.get("orFcstInf")),
+                "ex_ern_iv_20d": self._safe_float(row.get("exErnIv20d")),
+                "ex_ern_iv_30d": self._safe_float(row.get("exErnIv30d")),
+                "slope": self._safe_float(row.get("slope")),
+                "slope_fcst": self._safe_float(row.get("slopeFcst")),
+                "slope_inf": self._safe_float(row.get("slopeInf")),
+                "contango": self._safe_float(row.get("contango")),
+                "contango_fcst": self._safe_float(row.get("contangoFcst")),
+                "deriv": self._safe_float(row.get("deriv")),
+                "fwd_ratio_20_30": self._safe_float(row.get("fwdRatio2030")),
+                "fwd_ratio_30_60": self._safe_float(row.get("fwdRatio3060")),
+                "fwd_ratio_60_90": self._safe_float(row.get("fwdRatio6090")),
+                "confidence": self._safe_float(row.get("confidence")),
+                "r_squared": self._safe_float(row.get("rSquared")),
             }
             _cores_cache[key] = (time.monotonic(), result)
             return result

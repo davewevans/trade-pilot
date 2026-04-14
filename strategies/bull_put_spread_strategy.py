@@ -112,11 +112,22 @@ class BullPutSpreadStrategy:
                 "skip_reason": "no_candidates",
             }
 
-        # Check candidate quality
-        if best.get("net_credit", 0) <= 0.75:
+        # Check candidate quality — spread yield check (ORATS methodology)
+        spread_yield = best.get("spread_yield", 0)
+        net_credit = best.get("net_credit", 0)
+        if spread_yield < 0.001:
             return {
                 "action": "SKIP",
-                "reasoning": f"Best candidate credit ${best.get('net_credit', 0)} <= $0.75",
+                "reasoning": (
+                    f"Spread yield {spread_yield:.4f} < 0.001 minimum "
+                    f"(credit ${net_credit} too thin for stock price)"
+                ),
+                "skip_reason": "low_spread_yield",
+            }
+        if net_credit < 0.30:
+            return {
+                "action": "SKIP",
+                "reasoning": f"Absolute credit ${net_credit} < $0.30 minimum",
                 "skip_reason": "low_credit",
             }
         if best.get("credit_to_width_ratio", 0) < 0.15:
@@ -149,8 +160,15 @@ class BullPutSpreadStrategy:
             return "No viable bull put spread candidates found", 0.0
 
         net_credit = best.get("net_credit", 0)
-        if net_credit <= 0.75:
-            return f"Best candidate credit ${net_credit} <= $0.75", 0.0
+        spread_yield = best.get("spread_yield", 0)
+        if spread_yield < 0.001:
+            return (
+                f"Spread yield {spread_yield:.4f} < 0.001 minimum "
+                f"(credit ${net_credit} too thin for stock price)",
+                0.0,
+            )
+        if net_credit < 0.30:
+            return f"Absolute credit ${net_credit} < $0.30 minimum", 0.0
         if best.get("credit_to_width_ratio", 0) < 0.15:
             return (
                 f"Credit/width ratio {best.get('credit_to_width_ratio', 0)} < 0.15",
@@ -161,6 +179,14 @@ class BullPutSpreadStrategy:
         # Falls back to net_credit when EV data is unavailable.
         ev = best.get("ev_score")
         score = float(ev) if ev is not None else float(net_credit)
+
+        # IV overvaluation scoring bonus/penalty
+        iv_ov_label = (context.get("volatility") or {}).get("iv_overvalued_label")
+        if iv_ov_label == "OVERVALUED":
+            score *= 1.15  # 15% bonus — selling edge confirmed by ORATS forecast
+        elif iv_ov_label == "UNDERVALUED":
+            score *= 0.85  # 15% penalty — IV may be cheap, less edge
+
         return None, score
 
     def _check_entry_conditions(self, context: dict) -> str | None:

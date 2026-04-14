@@ -15,6 +15,7 @@ DIRECTIONAL strategy. Only deploy with strong bullish evidence.
 - Support bounce signal: {{support_bounce_signal}}
 - Above 50-day SMA: {{above_50sma}}
 - Days to earnings: {{days_to_earnings}}
+- IV overvaluation: {{iv_overvalued_label}}
 
 ## Best Long Call Vertical Candidate
 {{best_candidate}}
@@ -29,11 +30,14 @@ OPEN if ALL of the following:
 6. best_candidate.net_debit < 2.00
 7. best_candidate.long_leg.delta between 0.45 and 0.60
 8. DTE between 30 and 45
+9. iv_overvalued_label should be UNDERVALUED or FAIR. If OVERVALUED,
+   skip — you are overpaying for the long call.
 
 SKIP if:
 - Market regime is not BULL
 - IV is not LOW (don't buy expensive options)
 - No CAHOLD signal detected (need technical confirmation)
+- iv_overvalued_label is OVERVALUED (ORATS confirms options are expensive)
 
 ## Required Response Format (JSON only):
 ```json

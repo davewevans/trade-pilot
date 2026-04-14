@@ -136,6 +136,12 @@ class IronCondorStrategy:
         # summed across both legs).  Falls back to total_credit when unavailable.
         ev = ic_legs.get("total_ev_score")
         score = float(ev) if ev is not None else float(ic_legs.get("total_credit", 0))
+
+        # IV overvaluation scoring bonus — stronger for 4-leg (more vega exposure)
+        iv_ov = (context.get("volatility") or {}).get("iv_overvalued_label")
+        if iv_ov == "OVERVALUED":
+            score *= 1.20
+
         return None, score
 
     def _check_entry_conditions(self, context: dict) -> str | None:
@@ -162,6 +168,16 @@ class IronCondorStrategy:
         dte_earnings = fund.get("days_to_earnings")
         if dte_earnings is not None and dte_earnings <= 35:
             return f"Earnings in {dte_earnings} days (need > 35)"
+
+        # IV forecast check — poor time to sell if IV is undervalued
+        iv_ov = (context.get("volatility") or {}).get("iv_overvalued_label")
+        if iv_ov == "UNDERVALUED":
+            return "IV is UNDERVALUED per ORATS forecast — poor edge for iron condor"
+
+        # Contango check — backwardation undermines the neutral thesis
+        contango_label = (context.get("volatility") or {}).get("contango_label")
+        if contango_label == "BACKWARDATION":
+            return "Term structure in BACKWARDATION — unfavorable for neutral strategy"
 
         # Already have an active condor (includes PENDING states).
         if self.spread_tracker:

@@ -141,14 +141,27 @@ class LongCallVerticalStrategy:
                 0.0,
             )
 
+        # IV forecast check — buying overvalued options is poor value
+        iv_ov = (context.get("volatility") or {}).get("iv_overvalued_label")
+        if iv_ov == "OVERVALUED":
+            return "IV is OVERVALUED per ORATS forecast — poor time to buy options", 0.0
+
         # Rank by EV score when available (accounts for whether call options
         # are cheap relative to ORATS' forecast — key for debit spreads where
         # overpriced IV hurts). Falls back to reward/risk ratio.
         ev = best.get("ev_score")
         if ev is not None:
-            return None, float(ev)
-        max_gain = best.get("max_gain") or 0
-        score = (float(max_gain) / float(net_debit)) if max_gain else (1.0 / float(net_debit))
+            score = float(ev)
+        else:
+            max_gain = best.get("max_gain") or 0
+            score = (float(max_gain) / float(net_debit)) if max_gain else (1.0 / float(net_debit))
+
+        # Scoring bonus for buying cheap options, penalty for expensive
+        if iv_ov == "UNDERVALUED":
+            score *= 1.20  # Bonus — buying cheap options
+        elif iv_ov == "OVERVALUED":
+            score *= 0.70  # Strong penalty — buying expensive options
+
         return None, float(score)
 
     def _check_entry_conditions(self, context: dict) -> str | None:
@@ -169,6 +182,11 @@ class LongCallVerticalStrategy:
             return (
                 f"IV/HV ratio {iv_hv:.2f} > 1.30 — options overpriced for debit strategy"
             )
+
+        # IV forecast check — buying overvalued options is poor value
+        iv_ov = (context.get("volatility") or {}).get("iv_overvalued_label")
+        if iv_ov == "OVERVALUED":
+            return "IV is OVERVALUED per ORATS forecast — poor time to buy options"
 
         tech = context.get("technicals") or {}
         if tech.get("above_sma_50") is not True:

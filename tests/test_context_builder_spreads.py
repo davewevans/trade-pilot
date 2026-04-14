@@ -4,7 +4,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from data.context_builder import ContextBuilder
+from data.context_builder import (
+    ContextBuilder,
+    _compute_iv_overvalued_label,
+    _compute_contango_label,
+)
 
 
 # ── Helpers ─────────────────────────────────────────────────
@@ -402,3 +406,62 @@ class TestCalculateCurrentSpreadValue:
         # pnl_pct = 1.60 / 2.00 * 100 = 80.0
         assert result["original_credit"] == 2.00
         assert result["pnl_pct"] == 80.0
+
+
+# ── ORATS IV overvalued label ────────────────────────────────
+
+
+class TestComputeIVOvervaluedLabel:
+    def test_overvalued_when_current_above_forecast(self):
+        # current_iv = 0.30, iv_fcst = 0.25 → ratio = (0.30-0.25)/0.30 = 0.1667 > 0.05
+        ratio, label = _compute_iv_overvalued_label(0.30, 0.25)
+        assert label == "OVERVALUED"
+        assert ratio == pytest.approx(0.1667, abs=0.001)
+
+    def test_undervalued_when_current_below_forecast(self):
+        # current_iv = 0.25, iv_fcst = 0.30 → ratio = (0.25-0.30)/0.25 = -0.20 < -0.05
+        ratio, label = _compute_iv_overvalued_label(0.25, 0.30)
+        assert label == "UNDERVALUED"
+        assert ratio == pytest.approx(-0.20, abs=0.001)
+
+    def test_fair_when_near_forecast(self):
+        # current_iv = 0.285, iv_fcst = 0.280 → ratio ≈ 0.0175, within ±0.05
+        ratio, label = _compute_iv_overvalued_label(0.285, 0.280)
+        assert label == "FAIR"
+        assert abs(ratio) < 0.05
+
+    def test_none_when_current_iv_missing(self):
+        ratio, label = _compute_iv_overvalued_label(None, 0.25)
+        assert ratio is None
+        assert label is None
+
+    def test_none_when_forecast_missing(self):
+        ratio, label = _compute_iv_overvalued_label(0.30, None)
+        assert ratio is None
+        assert label is None
+
+    def test_none_when_current_iv_zero(self):
+        ratio, label = _compute_iv_overvalued_label(0.0, 0.25)
+        assert ratio is None
+        assert label is None
+
+
+# ── ORATS contango label ─────────────────────────────────────
+
+
+class TestComputeContangoLabel:
+    def test_normal_when_contango_positive(self):
+        assert _compute_contango_label(0.03) == "NORMAL"
+        assert _compute_contango_label(0.021) == "NORMAL"
+
+    def test_flat_when_near_zero(self):
+        assert _compute_contango_label(0.02) == "FLAT"
+        assert _compute_contango_label(0.0) == "FLAT"
+        assert _compute_contango_label(-0.019) == "FLAT"
+
+    def test_backwardation_when_strongly_negative(self):
+        assert _compute_contango_label(-0.02) == "BACKWARDATION"
+        assert _compute_contango_label(-0.05) == "BACKWARDATION"
+
+    def test_none_when_value_missing(self):
+        assert _compute_contango_label(None) is None
