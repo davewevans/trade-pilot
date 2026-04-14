@@ -835,9 +835,24 @@ class ContextBuilder:
         if not contracts:
             return []
 
-        # Fetch snapshots for all contracts
-        all_symbols = [c["symbol"] for c in contracts]
-        snapshots = self.broker.get_option_snapshots(all_symbols)
+        # Determine DTE range from gte/lte strings for ORATS query
+        try:
+            _today_dt = datetime.now().date()
+            _dte_min = (datetime.strptime(gte, "%Y-%m-%d").date() - _today_dt).days
+            _dte_max = (datetime.strptime(lte, "%Y-%m-%d").date() - _today_dt).days
+        except (ValueError, AttributeError):
+            _dte_min, _dte_max = 21, 45
+
+        # Fetch snapshots preferring ORATS real-time greeks/quotes
+        snapshots = self._enrich_with_orats_snapshots(
+            contracts=contracts,
+            symbol=symbol,
+            option_type=option_type,
+            dte_min=_dte_min,
+            dte_max=_dte_max,
+            delta_min=delta_min,
+            delta_max=delta_max,
+        )
 
         # Index contracts by (expiration, strike) for pairing
         by_exp_strike: dict[tuple[str, float], dict] = {}
@@ -970,8 +985,25 @@ class ContextBuilder:
         if not contracts:
             return []
 
-        all_symbols = [c["symbol"] for c in contracts]
-        snapshots = self.broker.get_option_snapshots(all_symbols)
+        # Determine DTE range from gte/lte for ORATS query
+        try:
+            _today_dt = datetime.now().date()
+            _dte_min = (datetime.strptime(gte, "%Y-%m-%d").date() - _today_dt).days
+            _dte_max = (datetime.strptime(lte, "%Y-%m-%d").date() - _today_dt).days
+        except (ValueError, AttributeError):
+            _dte_min, _dte_max = 21, 45
+
+        # Use 0.15–0.65 call delta range to cover both long (0.45–0.60) and
+        # short (0.25–0.40) legs; long legs below 0.15 fall back to Alpaca.
+        snapshots = self._enrich_with_orats_snapshots(
+            contracts=contracts,
+            symbol=symbol,
+            option_type="call",
+            dte_min=_dte_min,
+            dte_max=_dte_max,
+            delta_min=0.15,
+            delta_max=0.65,
+        )
 
         by_exp_strike: dict[tuple[str, float], dict] = {}
         for c in contracts:
@@ -1072,6 +1104,79 @@ class ContextBuilder:
                 })
 
         return candidates
+
+    def _enrich_with_orats_snapshots(
+        self,
+        contracts: list[dict],
+        symbol: str,
+        option_type: str,
+        dte_min: int,
+        dte_max: int,
+        delta_min: float,
+        delta_max: float,
+    ) -> dict[str, dict]:
+        """Return snapshots keyed by Alpaca OCC symbol, preferring ORATS data.
+
+        For each contract, looks up (expiration_date, strike) in ORATS strikes
+        data. Falls back to Alpaca get_option_snapshots() for any contract not
+        covered by ORATS (e.g. long legs outside the delta range queried).
+
+        Args:
+            contracts: List of contract dicts from get_option_chain_with_greeks,
+                each with ``symbol``, ``expiration_date``, and ``strike_price``.
+            symbol: Underlying ticker (e.g. "SPY").
+            option_type: "put" or "call".
+            dte_min: Minimum DTE passed to ORATS strikes query.
+            dte_max: Maximum DTE passed to ORATS strikes query.
+            delta_min: Minimum absolute delta passed to ORATS strikes query.
+            delta_max: Maximum absolute delta passed to ORATS strikes query.
+
+        Returns:
+            Dict keyed by Alpaca OCC symbol with snapshot fields
+            (bid, ask, mid, delta, theta, vega, gamma, iv, open_interest, volume).
+        """
+        if not hasattr(self, '_orats_client'):
+            from data.orats_client import ORATSClient
+            self._orats_client = ORATSClient()
+
+        orats_by_strike = self._orats_client.get_snapshots_by_strike(
+            symbol=symbol,
+            option_type=option_type,
+            dte_min=dte_min,
+            dte_max=dte_max,
+            delta_min=delta_min,
+            delta_max=delta_max,
+        )
+
+        result: dict[str, dict] = {}
+        alpaca_fallback: list[str] = []
+
+        for contract in contracts:
+            occ_symbol = contract.get("symbol", "")
+            exp_date = contract.get("expiration_date", "")
+            try:
+                strike = float(contract.get("strike_price", 0))
+            except (TypeError, ValueError):
+                strike = 0.0
+
+            orats_snap = orats_by_strike.get((exp_date, strike))
+            if orats_snap is not None:
+                result[occ_symbol] = orats_snap
+            else:
+                alpaca_fallback.append(occ_symbol)
+
+        if alpaca_fallback:
+            logger.warning(
+                "_enrich_with_orats_snapshots: %d contract(s) not in ORATS for %s %s "
+                "(dte=%d-%d delta=%.2f-%.2f), falling back to Alpaca: %s",
+                len(alpaca_fallback), symbol, option_type,
+                dte_min, dte_max, delta_min, delta_max,
+                alpaca_fallback[:5],
+            )
+            alpaca_snaps = self.broker.get_option_snapshots(alpaca_fallback)
+            result.update(alpaca_snaps)
+
+        return result
 
     @staticmethod
     def _pick_best(candidates: list[dict]) -> dict | None:
@@ -1316,8 +1421,23 @@ class ContextBuilder:
             if not contracts:
                 return {"contracts": [], "snapshots": {}}
 
-            snap_symbols = [c["symbol"] for c in contracts if c.get("symbol")]
-            snapshots = self.broker.get_option_snapshots(snap_symbols)
+            # Prefer ORATS real-time greeks/quotes; fall back to Alpaca per-miss.
+            # IDLE state: put delta 0.20–0.30; LONG_STOCK: call delta 0.20–0.35.
+            _orats_option_type = contract_type  # "put" or "call"
+            if contract_type == "put":
+                _orats_delta_min, _orats_delta_max = 0.20, 0.30
+            else:
+                _orats_delta_min, _orats_delta_max = 0.20, 0.35
+
+            snapshots = self._enrich_with_orats_snapshots(
+                contracts=contracts,
+                symbol=symbol,
+                option_type=_orats_option_type,
+                dte_min=21,
+                dte_max=35,
+                delta_min=_orats_delta_min,
+                delta_max=_orats_delta_max,
+            )
 
             enriched = []
             for c in contracts:

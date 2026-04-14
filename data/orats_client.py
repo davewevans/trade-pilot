@@ -456,6 +456,85 @@ class ORATSClient:
         _strikes_cache[cache_key] = (time.monotonic(), contracts)
         return contracts
 
+    def get_snapshots_by_strike(
+        self,
+        symbol: str,
+        option_type: str,
+        dte_min: int,
+        dte_max: int,
+        delta_min: float,
+        delta_max: float,
+    ) -> dict[tuple[str, float], dict]:
+        """Return ORATS greeks and quotes indexed by (expiration_date, strike).
+
+        Internally calls :meth:`get_strikes_by_delta` and reuses its cache,
+        so no new HTTP request is made if the result is already cached.
+
+        Returns a dict keyed by ``(expiration_date, strike)`` tuples where
+        ``expiration_date`` is an ISO date string (``"YYYY-MM-DD"``) and
+        ``strike`` is a ``float``.
+
+        Each value matches the snapshot shape returned by
+        ``AlpacaBroker.get_option_snapshots()``:
+
+        .. code-block:: python
+
+            {
+                "bid": float | None,
+                "ask": float | None,
+                "mid": float | None,
+                "delta": float | None,
+                "theta": float | None,
+                "vega": float | None,
+                "gamma": float | None,
+                "iv": float | None,      # mapped from smvVol
+                "open_interest": int | None,
+                "volume": None,          # ORATS /strikes does not return volume
+            }
+
+        Never raises — returns an empty dict on failure.
+        """
+        try:
+            rows = self.get_strikes_by_delta(
+                symbol=symbol,
+                option_type=option_type,
+                delta_min=delta_min,
+                delta_max=delta_max,
+                dte_min=dte_min,
+                dte_max=dte_max,
+            )
+        except Exception:
+            logger.warning(
+                "get_snapshots_by_strike: get_strikes_by_delta failed for %s %s",
+                symbol, option_type, exc_info=True,
+            )
+            return {}
+
+        result: dict[tuple[str, float], dict] = {}
+        for row in rows:
+            exp_date = row.get("expiration_date", "")
+            strike = row.get("strike")
+            if not exp_date or strike is None:
+                continue
+            result[(exp_date, float(strike))] = {
+                "bid": row.get("bid_price"),
+                "ask": row.get("ask_price"),
+                "mid": row.get("mid_price"),
+                "delta": row.get("delta"),
+                "theta": row.get("theta"),
+                "vega": row.get("vega"),
+                "gamma": row.get("gamma"),
+                "iv": row.get("smv_vol"),
+                "open_interest": row.get("open_interest"),
+                "volume": None,
+            }
+
+        logger.info(
+            "ORATS snapshots_by_strike: %s %s dte=%d-%d delta=%.2f-%.2f → %d strikes",
+            symbol, option_type, dte_min, dte_max, delta_min, delta_max, len(result),
+        )
+        return result
+
     @staticmethod
     def classify_iv_environment(iv_rank_1y: Optional[float]) -> str:
         """Classify IV rank into LOW / MODERATE / HIGH / UNKNOWN."""
