@@ -15,6 +15,8 @@ net credit. Profit if the underlying stays below the short call strike.
 - RSI (14-day): {{rsi_14}}
 - Above 50-day SMA: {{above_sma_50}}
 - Above 200-day SMA: {{above_sma_200}}
+- IV overvaluation: {{iv_overvalued_label}}
+- Slope percentile: {{skew_percentile}}
 - Strategy routing hint: {{strategy_routing_hint}}
 
 ## Best Bear Call Spread Candidate
@@ -26,13 +28,18 @@ OPEN if ALL of the following:
 2. iv_rank >= 40
 3. days_to_earnings > 25
 4. days_to_ex_dividend > DTE (must avoid early assignment at ex-div)
-5. best_candidate.net_credit > 0.75
+5. best_candidate.spread_yield >= 0.001 AND net_credit >= $0.30
 6. best_candidate.credit_to_width_ratio >= 0.15
 7. best_candidate.liquidity_ok is true
 8. DTE between 21 and 40
 9. Short call delta between 0.20 and 0.30
 10. Bearish technical justification: underlying at resistance,
     below 50-day SMA, or RSI >= 60 (overbought)
+11. Prefer entry when iv_overvalued_label is "OVERVALUED". Hard skip
+    if iv_overvalued_label is "UNDERVALUED" — options are cheap,
+    poor edge for selling calls.
+12. If skew_percentile < 33, calls are relatively expensive compared
+    to puts → favorable for selling call spreads.
 
 SKIP if underlying is in a strong uptrend (above both SMAs with
 RSI < 60 and no resistance nearby) — this is a bearish strategy

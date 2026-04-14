@@ -13,6 +13,9 @@ Max loss = wing width - credit if underlying falls below long put.
 - Confirmed market regime: {{confirmed_market_regime}}
 - IV Rank: {{iv_rank}} ({{iv_environment}})
 - Days to earnings: {{days_to_earnings}}
+- Spread yield: {{spread_yield}}
+- IV overvaluation: {{iv_overvalued_label}}
+- Slope percentile: {{skew_percentile}}
 - Strategy routing hint: {{strategy_routing_hint}}
 
 ## Best Bull Put Spread Candidate
@@ -23,11 +26,18 @@ OPEN if ALL of the following:
 1. confirmed_market_regime is NEUTRAL or BULL
 2. iv_rank >= 35
 3. days_to_earnings > 25
-4. best_candidate.net_credit > 0.75
+4. best_candidate.spread_yield >= 0.001 AND net_credit >= $0.30
 5. best_candidate.credit_to_width_ratio >= 0.15
 6. best_candidate.liquidity_ok is true
 7. DTE between 21 and 40
 8. Short put delta between -0.20 and -0.30
+9. Prefer entry when iv_overvalued_label is "OVERVALUED" or "FAIR"
+   (ORATS forecast confirms options are overpriced). If
+   iv_overvalued_label is "UNDERVALUED", note this as a risk factor
+   and require extra-strong technicals to justify entry.
+10. If skew_percentile > 66, note this as favorable — puts are
+    expensive relative to history, increasing the edge for bull
+    put spreads.
 
 SKIP if any condition fails. Explain which condition(s) failed.
 

@@ -32,8 +32,12 @@ services:
         value: UTC         # Render server runs UTC, scheduler adjusts
 
       # These are set manually in Render dashboard (not in this file):
-      # ALPACA_API_KEY
-      # ALPACA_SECRET_KEY
+      # ALPACA_PAPER1_API_KEY
+      # ALPACA_PAPER1_SECRET_KEY
+      # ALPACA_PAPER2_API_KEY
+      # ALPACA_PAPER2_SECRET_KEY
+      # ALPACA_PAPER3_API_KEY
+      # ALPACA_PAPER3_SECRET_KEY
       # ALPACA_PAPER
       # ANTHROPIC_API_KEY
       # FRED_API_KEY

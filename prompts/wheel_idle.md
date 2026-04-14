@@ -17,3 +17,19 @@ and IV where available.
 
 Select the contract closest to -0.25 delta that meets all criteria.
 Set limit_price to the midpoint of bid and ask, rounded to nearest $0.05.
+
+## ORATS Volatility Signals (soft preferences — no hard blocks)
+
+The following fields are available in the volatility context:
+- iv_overvalued_label: {{iv_overvalued_label}}
+- skew_percentile: {{skew_percentile}}
+- contango_label: {{contango_label}}
+- premium_richness_label: {{premium_richness_label}}
+
+When iv_overvalued_label is OVERVALUED and premium_richness_label is
+RICH, conditions are ideal for selling puts — note this in your
+reasoning as a positive signal.
+
+When contango_label is BACKWARDATION, exercise extra caution — near-term
+vol exceeding long-term vol suggests market stress. This is a soft
+signal: increase your selectivity but do not hard-skip.

@@ -512,3 +512,32 @@ class TestStatePersistence:
         data = json.loads(strategy._state_path.read_text())
         assert data["state"] == "OPEN"
         assert data["open_spread_id"] == "persist-lcv"
+
+
+# ================================================================
+# IV forecast checks — reversed logic for buyer strategy (Prompt 3)
+# ================================================================
+
+
+class TestIVForecastForBuyer:
+    def test_overvalued_iv_blocks_entry(self, strategy):
+        ctx = _base_context()
+        ctx["volatility"] = {"iv_overvalued_label": "OVERVALUED", "iv_hv_ratio": 1.1}
+        reason, score = strategy.pre_check_entry(ctx)
+        assert reason is not None
+        assert "OVERVALUED" in reason
+        assert score == 0.0
+
+    def test_undervalued_iv_boosts_score(self, strategy):
+        ctx_uv = _base_context()
+        ctx_uv["volatility"] = {"iv_overvalued_label": "UNDERVALUED", "iv_hv_ratio": 0.8}
+        ctx_base = _base_context()
+        _, score_base = strategy.pre_check_entry(ctx_base)
+        _, score_uv = strategy.pre_check_entry(ctx_uv)
+        assert score_uv == pytest.approx(score_base * 1.20, rel=0.01)
+
+    def test_fair_iv_passes_without_penalty(self, strategy):
+        ctx = _base_context()
+        ctx["volatility"] = {"iv_overvalued_label": "FAIR", "iv_hv_ratio": 1.0}
+        reason, score = strategy.pre_check_entry(ctx)
+        assert reason is None

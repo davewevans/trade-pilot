@@ -43,13 +43,13 @@ _fundamentals_cache: dict[str, tuple[float, dict]] = {}  # symbol -> (timestamp,
 _FUNDAMENTALS_TTL = 6 * 3600  # 6 hours in seconds
 
 _option_client = OptionHistoricalDataClient(
-    api_key=settings.ALPACA_API_KEY,
-    secret_key=settings.ALPACA_SECRET_KEY,
+    api_key=settings.ALPACA_PAPER1_API_KEY,
+    secret_key=settings.ALPACA_PAPER1_SECRET_KEY,
 )
 
 _stock_client = StockHistoricalDataClient(
-    api_key=settings.ALPACA_API_KEY,
-    secret_key=settings.ALPACA_SECRET_KEY,
+    api_key=settings.ALPACA_PAPER1_API_KEY,
+    secret_key=settings.ALPACA_PAPER1_SECRET_KEY,
 )
 
 
@@ -163,8 +163,8 @@ def start_option_stream(symbols: list[str], on_quote, on_trade) -> None:
         on_trade: Async callback ``async def(trade) -> None`` for trade updates.
     """
     stream = OptionDataStream(
-        api_key=settings.ALPACA_API_KEY,
-        secret_key=settings.ALPACA_SECRET_KEY,
+        api_key=settings.ALPACA_PAPER1_API_KEY,
+        secret_key=settings.ALPACA_PAPER1_SECRET_KEY,
     )
     stream.subscribe_quotes(on_quote, *symbols)
     stream.subscribe_trades(on_trade, *symbols)

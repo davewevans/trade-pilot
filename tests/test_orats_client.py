@@ -3,7 +3,7 @@
 import pytest
 from unittest.mock import patch, MagicMock
 
-from data.orats_client import ORATSClient, _summary_cache, _earnings_cache
+from data.orats_client import ORATSClient, _summary_cache, _earnings_cache, _cores_cache
 
 
 SAMPLE_SUMMARY_RESPONSE = {
@@ -34,13 +34,54 @@ SAMPLE_EARNINGS_RESPONSE = {
 }
 
 
+SAMPLE_CORES_RESPONSE = {
+    "data": [{
+        "ticker": "AAPL",
+        "nextErn": "2025-07-28",
+        "daysToNextErn": 90,
+        "absAvgErnMv": 0.048,
+        "impliedEarningsMove": 0.055,
+        "ivHvXernRatio": 1.15,
+        "ivHvXernRatio1y": 1.10,
+        "volOfVol": 0.18,
+        "slopepctile": 65.0,
+        "slopeavg1y": 0.05,
+        "orHv20d": 0.22,
+        "orHv30d": 0.24,
+        "orHvXern20d": 0.20,
+        "rip": 0.72,
+        "bestEtf": "QQQ",
+        "sectorName": "Technology",
+        # New forecast fields
+        "orFcst20d": 0.21,
+        "orIvFcst20d": 0.26,
+        "orFcstInf": 0.23,
+        "exErnIv20d": 0.27,
+        "exErnIv30d": 0.28,
+        "slope": 0.052,
+        "slopeFcst": 0.048,
+        "slopeInf": 0.050,
+        "contango": 0.03,
+        "contangoFcst": 0.025,
+        "deriv": 0.001,
+        "fwdRatio2030": 1.05,
+        "fwdRatio3060": 1.03,
+        "fwdRatio6090": 1.02,
+        "confidence": 0.85,
+        "rSquared": 0.92,
+    }]
+}
+
+
 @pytest.fixture(autouse=True)
 def _clear_caches():
     _summary_cache.clear()
     _earnings_cache.clear()
+    _cores_cache.clear()
     yield
     _summary_cache.clear()
     _earnings_cache.clear()
+    _cores_cache.clear()
 
 
 def _mock_resp(payload, status=200):
@@ -134,3 +175,61 @@ def test_classify_iv_environment_high():
 
 def test_classify_iv_environment_unknown():
     assert ORATSClient.classify_iv_environment(None) == "UNKNOWN"
+
+
+# ── get_cores() new forecast fields ─────────────────────────
+
+
+@patch("data.orats_client.requests.get")
+def test_get_cores_returns_new_forecast_fields(mock_get):
+    mock_get.return_value = _mock_resp(SAMPLE_CORES_RESPONSE)
+    result = ORATSClient(api_key="k").get_cores("AAPL")
+
+    assert result is not None
+    assert result["or_fcst_20d"] == 0.21
+    assert result["or_iv_fcst_20d"] == 0.26
+    assert result["or_fcst_inf"] == 0.23
+    assert result["ex_ern_iv_20d"] == 0.27
+    assert result["ex_ern_iv_30d"] == 0.28
+    assert result["slope"] == 0.052
+    assert result["slope_fcst"] == 0.048
+    assert result["slope_inf"] == 0.050
+    assert result["contango"] == 0.03
+    assert result["contango_fcst"] == 0.025
+    assert result["deriv"] == 0.001
+    assert result["fwd_ratio_20_30"] == 1.05
+    assert result["fwd_ratio_30_60"] == 1.03
+    assert result["fwd_ratio_60_90"] == 1.02
+    assert result["confidence"] == 0.85
+    assert result["r_squared"] == 0.92
+
+
+@patch("data.orats_client.requests.get")
+def test_get_cores_missing_forecast_fields_return_none(mock_get):
+    """When new fields are absent from the API response, they should be None."""
+    mock_get.return_value = _mock_resp({"data": [{
+        "ticker": "AAPL",
+        "nextErn": None,
+        "daysToNextErn": 90,
+        # no orFcst20d, orIvFcst20d, etc.
+    }]})
+    result = ORATSClient(api_key="k").get_cores("AAPL")
+
+    assert result is not None
+    assert result["or_fcst_20d"] is None
+    assert result["or_iv_fcst_20d"] is None
+    assert result["contango"] is None
+    assert result["confidence"] is None
+    assert result["r_squared"] is None
+
+
+@patch("data.orats_client.requests.get")
+def test_get_cores_existing_fields_still_present(mock_get):
+    """Existing fields are unaffected by the new additions."""
+    mock_get.return_value = _mock_resp(SAMPLE_CORES_RESPONSE)
+    result = ORATSClient(api_key="k").get_cores("AAPL")
+
+    assert result["skew_percentile"] == 65.0
+    assert result["hv_20d"] == 0.22
+    assert result["sector_name"] == "Technology"
+    assert result["best_etf"] == "QQQ"

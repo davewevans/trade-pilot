@@ -61,8 +61,8 @@ class AlpacaBroker(BaseBroker):
         secret_key: str | None = None,
         paper: bool | None = None,
     ):
-        _api_key = api_key or settings.ALPACA_API_KEY
-        _secret_key = secret_key or settings.ALPACA_SECRET_KEY
+        _api_key = api_key or settings.ALPACA_PAPER1_API_KEY
+        _secret_key = secret_key or settings.ALPACA_PAPER1_SECRET_KEY
         _paper = paper if paper is not None else settings.ALPACA_PAPER
 
         self._api_key = _api_key

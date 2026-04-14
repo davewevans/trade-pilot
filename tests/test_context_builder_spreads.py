@@ -4,7 +4,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from data.context_builder import ContextBuilder
+from data.context_builder import (
+    ContextBuilder,
+    _compute_iv_overvalued_label,
+    _compute_contango_label,
+)
 
 
 # ── Helpers ─────────────────────────────────────────────────
@@ -39,13 +43,18 @@ def _make_snapshot(bid, ask, delta, oi=500, theta=-0.05):
 
 @pytest.fixture
 def builder():
-    """ContextBuilder with a mocked broker."""
+    """ContextBuilder with a mocked broker and ORATS client."""
     broker = MagicMock()
     with patch("data.context_builder._news_client"):
         cb = ContextBuilder.__new__(ContextBuilder)
         cb.broker = broker
         cb.journal = MagicMock()
         cb._regime_filter = MagicMock()
+        # Return empty ORATS data so all snapshots fall back to Alpaca mock,
+        # preserving existing test assertions unchanged.
+        orats_client = MagicMock()
+        orats_client.get_snapshots_by_strike.return_value = {}
+        cb._orats_client = orats_client
     return cb
 
 
@@ -402,3 +411,131 @@ class TestCalculateCurrentSpreadValue:
         # pnl_pct = 1.60 / 2.00 * 100 = 80.0
         assert result["original_credit"] == 2.00
         assert result["pnl_pct"] == 80.0
+
+
+# ── ORATS IV overvalued label ────────────────────────────────
+
+
+class TestComputeIVOvervaluedLabel:
+    def test_overvalued_when_current_above_forecast(self):
+        # current_iv = 0.30, iv_fcst = 0.25 → ratio = (0.30-0.25)/0.30 = 0.1667 > 0.05
+        ratio, label = _compute_iv_overvalued_label(0.30, 0.25)
+        assert label == "OVERVALUED"
+        assert ratio == pytest.approx(0.1667, abs=0.001)
+
+    def test_undervalued_when_current_below_forecast(self):
+        # current_iv = 0.25, iv_fcst = 0.30 → ratio = (0.25-0.30)/0.25 = -0.20 < -0.05
+        ratio, label = _compute_iv_overvalued_label(0.25, 0.30)
+        assert label == "UNDERVALUED"
+        assert ratio == pytest.approx(-0.20, abs=0.001)
+
+    def test_fair_when_near_forecast(self):
+        # current_iv = 0.285, iv_fcst = 0.280 → ratio ≈ 0.0175, within ±0.05
+        ratio, label = _compute_iv_overvalued_label(0.285, 0.280)
+        assert label == "FAIR"
+        assert abs(ratio) < 0.05
+
+    def test_none_when_current_iv_missing(self):
+        ratio, label = _compute_iv_overvalued_label(None, 0.25)
+        assert ratio is None
+        assert label is None
+
+    def test_none_when_forecast_missing(self):
+        ratio, label = _compute_iv_overvalued_label(0.30, None)
+        assert ratio is None
+        assert label is None
+
+    def test_none_when_current_iv_zero(self):
+        ratio, label = _compute_iv_overvalued_label(0.0, 0.25)
+        assert ratio is None
+        assert label is None
+
+
+# ── ORATS contango label ─────────────────────────────────────
+
+
+class TestComputeContangoLabel:
+    def test_normal_when_contango_positive(self):
+        assert _compute_contango_label(0.03) == "NORMAL"
+        assert _compute_contango_label(0.021) == "NORMAL"
+
+    def test_flat_when_near_zero(self):
+        assert _compute_contango_label(0.02) == "FLAT"
+        assert _compute_contango_label(0.0) == "FLAT"
+        assert _compute_contango_label(-0.019) == "FLAT"
+
+    def test_backwardation_when_strongly_negative(self):
+        assert _compute_contango_label(-0.02) == "BACKWARDATION"
+        assert _compute_contango_label(-0.05) == "BACKWARDATION"
+
+    def test_none_when_value_missing(self):
+        assert _compute_contango_label(None) is None
+
+
+# ── ORATS snapshot enrichment ────────────────────────────────
+
+
+class TestORATSSnapshotEnrichment:
+    """Tests for _enrich_with_orats_snapshots() on ContextBuilder."""
+
+    def _make_contracts(self):
+        return [
+            _make_contract("SPY250502P00530000", 530, "2025-05-02"),
+            _make_contract("SPY250502P00525000", 525, "2025-05-02"),
+        ]
+
+    def test_orats_covers_all_no_alpaca_called(self, builder):
+        """When ORATS returns data for all contracts, Alpaca is not called."""
+        orats_snap_530 = _make_snapshot(bid=3.00, ask=3.20, delta=-0.25)
+        orats_snap_525 = _make_snapshot(bid=1.80, ask=2.00, delta=-0.15)
+        builder._orats_client.get_snapshots_by_strike.return_value = {
+            ("2025-05-02", 530.0): orats_snap_530,
+            ("2025-05-02", 525.0): orats_snap_525,
+        }
+
+        contracts = self._make_contracts()
+        result = builder._enrich_with_orats_snapshots(
+            contracts=contracts,
+            symbol="SPY",
+            option_type="put",
+            dte_min=1,
+            dte_max=60,
+            delta_min=0.15,
+            delta_max=0.30,
+        )
+
+        assert result["SPY250502P00530000"] is orats_snap_530
+        assert result["SPY250502P00525000"] is orats_snap_525
+        builder.broker.get_option_snapshots.assert_not_called()
+
+    def test_partial_miss_falls_back_to_alpaca(self, builder):
+        """When ORATS misses some contracts, Alpaca is called only for those."""
+        orats_snap_530 = _make_snapshot(bid=3.00, ask=3.20, delta=-0.25)
+        builder._orats_client.get_snapshots_by_strike.return_value = {
+            ("2025-05-02", 530.0): orats_snap_530,
+            # 525 strike is absent — long leg outside delta range
+        }
+        alpaca_snap_525 = _make_snapshot(bid=1.80, ask=2.00, delta=-0.15)
+        builder.broker.get_option_snapshots.return_value = {
+            "SPY250502P00525000": alpaca_snap_525,
+        }
+
+        contracts = self._make_contracts()
+        result = builder._enrich_with_orats_snapshots(
+            contracts=contracts,
+            symbol="SPY",
+            option_type="put",
+            dte_min=1,
+            dte_max=60,
+            delta_min=0.15,
+            delta_max=0.30,
+        )
+
+        # ORATS win for the short leg
+        assert result["SPY250502P00530000"] is orats_snap_530
+        # Alpaca fallback for the long leg
+        assert result["SPY250502P00525000"] is alpaca_snap_525
+        # Alpaca was called only for the missing contract
+        builder.broker.get_option_snapshots.assert_called_once_with(
+            ["SPY250502P00525000"]
+        )

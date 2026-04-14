@@ -50,6 +50,16 @@ SUPPORTED_STRATEGIES = [
     "long_call_vertical",
 ]
 
+# ORATS slippage model: leg count → percent of bid-ask width traveled past mid
+_STRATEGY_LEG_COUNTS: dict[str, int] = {
+    "wheel_csp": 1,
+    "bull_put_spread": 2,
+    "bear_call_spread": 2,
+    "long_call_vertical": 2,
+    "iron_condor": 4,
+}
+_ORATS_SLIPPAGE_BY_LEGS: dict[int, float] = {1: 0.75, 2: 0.66, 4: 0.53}
+
 
 @dataclass
 class BacktestParams:
@@ -65,6 +75,10 @@ class BacktestParams:
     contracts: int = 1
     # Spread width in strike units (for bull/bear/condor)
     spread_width_strikes: int = 5
+    # Slippage model: "orats" uses ORATS calibrated percentages by leg count,
+    # "none" disables slippage, "custom" uses custom_slippage_pct for all legs.
+    slippage_model: str = "orats"
+    custom_slippage_pct: float = 0.0
 
 
 @dataclass
@@ -111,6 +125,7 @@ class BacktestResult:
     winning_trades: int = 0
     monthly_returns: list[dict] = field(default_factory=list)   # [{month, pnl}]
     equity_curve: list[dict] = field(default_factory=list)       # [{date, cumulative}]
+    total_slippage_cost: float = 0.0                             # total cost of slippage across all trades
 
 
 # ── Open position tracker ─────────────────────────────────────────────────────
@@ -141,6 +156,62 @@ class OpenPosition:
     earnings_date: Optional[str] = None          # next earnings date at time of entry
 
 
+# ── Slippage helpers ──────────────────────────────────────────────────────────
+
+def _apply_slippage(
+    mid_price: float,
+    strategy: str,
+    side: str,
+    slippage_model: str = "orats",
+    custom_slippage_pct: float = 0.0,
+    bid: Optional[float] = None,
+    ask: Optional[float] = None,
+) -> float:
+    """Apply ORATS slippage model to a mid price and return the adjusted price.
+
+    Args:
+        mid_price: The theoretical mid price of the contract or spread.
+        strategy: Strategy name — determines leg count and therefore slippage %.
+        side: ``"entry"`` or ``"exit"``.  For credit strategies entry=sell and
+            exit=buy; for ``long_call_vertical`` it is the reverse.
+        slippage_model: ``"orats"`` | ``"none"`` | ``"custom"``.
+        custom_slippage_pct: Used only when slippage_model == ``"custom"``.
+        bid / ask: If provided, use the real spread; otherwise synthesise a 3%
+            spread around mid (bid = mid × 0.985, ask = mid × 1.015).
+
+    Returns:
+        Adjusted price that is *worse* than mid for the trader (they receive
+        less when selling, or pay more when buying).
+    """
+    if slippage_model == "none" or mid_price <= 0:
+        return mid_price
+
+    legs = _STRATEGY_LEG_COUNTS.get(strategy, 1)
+    if slippage_model == "orats":
+        slippage_pct = _ORATS_SLIPPAGE_BY_LEGS.get(legs, 0.75)
+    else:  # "custom"
+        slippage_pct = custom_slippage_pct
+
+    if bid is None or ask is None:
+        # Synthetic spread: 3% of mid (conservative but better than raw mid)
+        bid = mid_price * 0.985
+        ask = mid_price * 1.015
+
+    spread = ask - bid
+
+    # For credit strategies: entry=sell, exit=buy
+    # For long_call_vertical: entry=buy, exit=sell
+    is_debit_strategy = (strategy == "long_call_vertical")
+    is_sell = (side == "entry") != is_debit_strategy  # XOR
+
+    if is_sell:
+        # Seller receives less than mid: ask - spread * pct
+        return ask - spread * slippage_pct
+    else:
+        # Buyer pays more than mid: bid + spread * pct
+        return bid + spread * slippage_pct
+
+
 # ── Engine ────────────────────────────────────────────────────────────────────
 
 class BacktestEngine:
@@ -149,6 +220,9 @@ class BacktestEngine:
     def __init__(self) -> None:
         from data.orats_historical import ORATSHistorical
         self._orats = ORATSHistorical()
+        self._slippage_model: str = "orats"
+        self._custom_slippage_pct: float = 0.0
+        self._total_slippage_cost: float = 0.0
 
     def run(
         self,
@@ -162,8 +236,12 @@ class BacktestEngine:
             if progress_cb:
                 progress_cb(msg)
 
+        self._slippage_model = params.slippage_model
+        self._custom_slippage_pct = params.custom_slippage_pct
+        self._total_slippage_cost = 0.0
+
         log(f"Backtest starting: {params.strategy} | {params.symbols} | "
-            f"{params.start_date} → {params.end_date}")
+            f"{params.start_date} → {params.end_date} | slippage={params.slippage_model}")
 
         # ── 1. Load market data (VIX, SPY SMAs) from yfinance ──────────────
         log("Fetching historical VIX + SPY price data from yfinance...")
@@ -234,8 +312,10 @@ class BacktestEngine:
 
         # ── 4. Compute metrics ───────────────────────────────────────────────
         result = self._compute_metrics(params, completed_trades)
+        result.total_slippage_cost = round(self._total_slippage_cost, 2)
         log(f"Backtest complete: {result.total_trades} trades, "
-            f"P&L=${result.total_pnl:.0f}, win rate={result.win_rate:.1f}%")
+            f"P&L=${result.total_pnl:.0f}, win rate={result.win_rate:.1f}%, "
+            f"slippage cost=${result.total_slippage_cost:.0f}")
         return result
 
     # ── Entry simulation ─────────────────────────────────────────────────
@@ -343,6 +423,15 @@ class BacktestEngine:
             if net_credit <= 0:
                 return None
 
+            raw_credit = net_credit
+            net_credit = _apply_slippage(
+                net_credit, strategy, "entry",
+                self._slippage_model, self._custom_slippage_pct,
+            )
+            if net_credit <= 0:
+                return None
+            self._total_slippage_cost += (raw_credit - net_credit) * params.contracts * 100
+
             return OpenPosition(
                 symbol=symbol,
                 strategy=strategy,
@@ -400,6 +489,15 @@ class BacktestEngine:
 
             if net_credit <= 0:
                 return None
+
+            raw_credit = net_credit
+            net_credit = _apply_slippage(
+                net_credit, strategy, "entry",
+                self._slippage_model, self._custom_slippage_pct,
+            )
+            if net_credit <= 0:
+                return None
+            self._total_slippage_cost += (raw_credit - net_credit) * params.contracts * 100
 
             return OpenPosition(
                 symbol=symbol,
@@ -459,6 +557,14 @@ class BacktestEngine:
             if net_debit <= 0:
                 return None
 
+            # For debit strategy, entry is a BUY → slippage increases cost
+            raw_debit = net_debit
+            net_debit = _apply_slippage(
+                net_debit, strategy, "entry",
+                self._slippage_model, self._custom_slippage_pct,
+            )
+            self._total_slippage_cost += (net_debit - raw_debit) * params.contracts * 100
+
             # Store as negative credit (debit paid)
             return OpenPosition(
                 symbol=symbol,
@@ -513,6 +619,16 @@ class BacktestEngine:
             if exit_debit is None:
                 exit_debit = abs(pos.entry_credit) * 0.10 if pos.entry_credit > 0 else abs(pos.entry_credit) * 1.50
 
+            raw_exit = exit_debit
+            exit_debit = _apply_slippage(
+                exit_debit, pos.strategy, "exit",
+                self._slippage_model, self._custom_slippage_pct,
+            )
+            if pos.strategy == "long_call_vertical":
+                self._total_slippage_cost += (raw_exit - exit_debit) * pos.contracts * 100
+            else:
+                self._total_slippage_cost += (exit_debit - raw_exit) * pos.contracts * 100
+
             return self._build_trade(pos, trade_date, exit_debit, "dte_expired")
 
         # Only do full price lookup every 3 days to reduce API calls
@@ -550,10 +666,30 @@ class BacktestEngine:
             current_spread_value = exit_debit
             gain_pct = (current_spread_value - entry_debit) / entry_debit if entry_debit else 0
             if gain_pct >= 1.0:  # 100% gain on debit
-                return self._build_trade(pos, trade_date, -current_spread_value, "profit_target")
+                raw_val = current_spread_value
+                slipped_val = _apply_slippage(
+                    raw_val, pos.strategy, "exit",
+                    self._slippage_model, self._custom_slippage_pct,
+                )
+                self._total_slippage_cost += (raw_val - slipped_val) * pos.contracts * 100
+                return self._build_trade(pos, trade_date, -slipped_val, "profit_target")
             if gain_pct <= -0.50:  # 50% loss stop
-                return self._build_trade(pos, trade_date, -current_spread_value, "max_loss")
+                raw_val = current_spread_value
+                slipped_val = _apply_slippage(
+                    raw_val, pos.strategy, "exit",
+                    self._slippage_model, self._custom_slippage_pct,
+                )
+                self._total_slippage_cost += (raw_val - slipped_val) * pos.contracts * 100
+                return self._build_trade(pos, trade_date, -slipped_val, "max_loss")
             return None
+
+        # Apply exit slippage to the spread price (BUY to close credit spread)
+        raw_exit = exit_debit
+        exit_debit = _apply_slippage(
+            exit_debit, pos.strategy, "exit",
+            self._slippage_model, self._custom_slippage_pct,
+        )
+        self._total_slippage_cost += (exit_debit - raw_exit) * pos.contracts * 100
 
         # ── Rule: profit target (50% of credit) ──────────────────────────
         initial_credit = abs(pos.entry_credit)
@@ -602,6 +738,16 @@ class BacktestEngine:
         )
         if exit_debit is None:
             exit_debit = 0.0  # assume expires worthless
+        else:
+            raw_exit = exit_debit
+            exit_debit = _apply_slippage(
+                exit_debit, pos.strategy, "exit",
+                self._slippage_model, self._custom_slippage_pct,
+            )
+            if pos.strategy == "long_call_vertical":
+                self._total_slippage_cost += (raw_exit - exit_debit) * pos.contracts * 100
+            else:
+                self._total_slippage_cost += (exit_debit - raw_exit) * pos.contracts * 100
 
         return self._build_trade(pos, last_day, exit_debit, "still_open")
 

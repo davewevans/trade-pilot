@@ -305,8 +305,8 @@ export function HowBacktestingWorks() {
 
       <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
         <ParamCard label="Strategy">
-          Which strategy to simulate: Wheel/CSP, Bull Put Spread, Bear Call Spread, Iron Condor, or
-          Long Call Vertical.
+          Which strategy to simulate: Wheel/CSP, Bull Put Spread, Bear Call Spread, Iron Condor,
+          Long Call Vertical, Short Strangle, or Calendar Spread.
         </ParamCard>
         <ParamCard label="Symbols">
           Which stocks to test. Pick individual symbols or use preset groups: Index ETFs, Tech,
@@ -570,47 +570,93 @@ export function HowBacktestingWorks() {
         </Card>
       </div>
 
-      {/* ── Section 7: Live Decision Connection (Future) ─────────────── */}
+      {/* ── Section 7: Live Decision Connection ─────────────────────── */}
       <SectionHeader>How Backtests Feed Into Live Decisions</SectionHeader>
       <P>
-        The backtester is currently a research tool — you run it manually to evaluate strategy
-        changes. Planned enhancements will connect it directly to the bot's live decision-making:
+        The backtester is both a research tool and a live intelligence system. The following
+        features are implemented and actively feeding data into Claude's decision-making context:
       </P>
 
       <div className="grid gap-4 md:grid-cols-2">
-        <Card topAccent="var(--text-muted)">
+        <Card topAccent="var(--green)">
           <div
             className="text-[10px] uppercase tracking-wider font-semibold mb-2"
-            style={{ color: 'var(--text-muted)' }}
+            style={{ color: 'var(--green)' }}
           >
-            Planned
+            Live
           </div>
           <CardTitle>Weekly Pre-Computed Stats</CardTitle>
           <P>
-            Every Sunday evening, the bot would automatically run backtests across the full
-            watchlist and cache the results. When Claude evaluates a trade on Monday morning, its
-            context would include: "Bull put spreads on SPY with these parameters have a 73% win
-            rate over 847 historical trades." This gives Claude a statistical baseline to weigh
-            against current market conditions — not just rules, but evidence.
+            Every Sunday at 5:00 PM ET, the bot automatically runs backtests across the full
+            watchlist for each active strategy. Results are persisted to the database and cached
+            as a summary snapshot. When Claude evaluates a trade on Monday morning, its context
+            includes the historical win rate, average P&amp;L, and Sharpe ratio from these
+            backtests. For example: "Bull put spreads on SPY with these parameters have a 68%
+            win rate over 423 historical trades (Sharpe: 1.24)." This gives Claude a statistical
+            baseline backed by ORATS data with realistic slippage modeling. The context builder
+            injects this data as the <code className="font-mono text-xs">backtest_stats</code>{' '}
+            field.
           </P>
         </Card>
-        <Card topAccent="var(--text-muted)">
+        <Card topAccent="var(--green)">
           <div
             className="text-[10px] uppercase tracking-wider font-semibold mb-2"
-            style={{ color: 'var(--text-muted)' }}
+            style={{ color: 'var(--green)' }}
           >
-            Planned
+            Live
           </div>
           <CardTitle>Similar Trade Matching</CardTitle>
           <P>
-            When the bot finds a specific candidate — say SPY bull put spread, IVR 48, delta -0.25,
-            28 DTE — it would search the historical trade database for the 5 most similar past
-            trades and include their outcomes in Claude's context. "Three of the five similar trades
-            were profitable, and both losers occurred during VIX spikes above 28." Claude could
-            then factor in whether today's conditions look more like the winners or the losers.
+            When the bot finds a specific candidate — say SPY bull put spread, IVR 48, delta
+            -0.25, 28 DTE — it searches the backtest trade database for the 5 most similar
+            historical trades using a weighted distance metric across IVR, delta, DTE, regime,
+            and VIX. Their individual outcomes are included in Claude's context: "Three of five
+            similar trades were profitable. Winners averaged +$71, losers averaged -$215. Both
+            losers occurred during VIX spikes above 25." Claude factors in whether today's
+            conditions look more like the winners or the losers.
+          </P>
+        </Card>
+        <Card topAccent="var(--green)">
+          <div
+            className="text-[10px] uppercase tracking-wider font-semibold mb-2"
+            style={{ color: 'var(--green)' }}
+          >
+            Live
+          </div>
+          <CardTitle>Environment Matching</CardTitle>
+          <P>
+            At decision time, the bot queries the backtest database filtered by conditions
+            matching the current market environment — IVR range, market regime, SMA position,
+            and VIX level. This provides aggregate statistics: "In similar conditions (IVR 40-55,
+            VIX 16-22, above 50-SMA), SPY bull put spreads had a 74% win rate across 89
+            historical trades." This is broader than Similar Trade Matching — it gives a
+            statistical overview of how the strategy performs in this type of environment.
+          </P>
+        </Card>
+        <Card topAccent="var(--green)">
+          <div
+            className="text-[10px] uppercase tracking-wider font-semibold mb-2"
+            style={{ color: 'var(--green)' }}
+          >
+            Live
+          </div>
+          <CardTitle>Backtest vs Reality</CardTitle>
+          <P>
+            The bot compares its actual live trading performance to what the backtest predicted
+            for the same strategy, symbol, and conditions. If backtests predicted a 68% win rate
+            but live trading shows 45%, the gap is flagged in Claude's context and in the weekly
+            report. Severity levels (LOW/MODERATE/HIGH) help Claude calibrate its confidence.
+            Early on, most gaps will show HIGH severity due to small sample sizes — this is
+            expected and the bot accounts for it.
           </P>
         </Card>
       </div>
+
+      <Callout>
+        You can explore all four of these intelligence features interactively at{' '}
+        <strong>Research → Backtest Intel</strong>. The page shows live environment match results,
+        similar trade lookups, and the full backtest vs. reality comparison table.
+      </Callout>
 
       {/* ── Section 8: Limitations ──────────────────────────────────── */}
       <SectionHeader>Limitations — What Backtesting Can't Tell You</SectionHeader>
@@ -621,12 +667,14 @@ export function HowBacktestingWorks() {
 
       <div className="grid gap-3 md:grid-cols-2">
         <Card>
-          <CardTitle>No slippage modeling</CardTitle>
+          <CardTitle>Slippage modeling is approximate</CardTitle>
           <P>
-            The backtester enters and exits at the historical mid-price. In live trading, you won't
-            always get the mid — especially on multi-leg spreads where each leg has its own
-            bid/ask spread. Real P&L will typically be slightly worse than backtest P&L, particularly
-            for iron condors with four legs.
+            The backtester uses the ORATS realistic slippage model by default — 75% of the
+            bid-ask spread for single legs, 66% for two-leg spreads, 53% for iron condors, based
+            on 20 years of market-making data. You can also run with no slippage (raw mid prices)
+            to see the difference. Real-world fill quality still varies by time of day, market
+            conditions, and broker — so treat slippage-adjusted results as a reasonable
+            approximation, not a guarantee.
           </P>
         </Card>
         <Card>

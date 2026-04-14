@@ -163,7 +163,7 @@ def validate_startup() -> None:
 
     # 1. Required env vars (Settings._require already enforces these
     #    at import time, but be explicit for clarity)
-    for var in ("ALPACA_API_KEY", "ALPACA_SECRET_KEY", "ANTHROPIC_API_KEY"):
+    for var in ("ALPACA_PAPER1_API_KEY", "ALPACA_PAPER1_SECRET_KEY", "ANTHROPIC_API_KEY"):
         if not getattr(settings, var, None):
             logger.error("Missing required environment variable: %s", var)
             sys.exit(1)

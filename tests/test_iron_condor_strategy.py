@@ -407,3 +407,44 @@ class TestStatePersistence:
         data = json.loads(strategy._state_path.read_text())
         assert data["state"] == "OPEN"
         assert data["open_spread_id"] == "test-id"
+
+
+# ================================================================
+# IV forecast and contango checks (Prompt 3)
+# ================================================================
+
+
+class TestIVForecastAndContango:
+    def test_undervalued_iv_blocks_entry(self, strategy):
+        ctx = _base_context()
+        ctx["volatility"] = {"iv_overvalued_label": "UNDERVALUED"}
+        reason, score = strategy.pre_check_entry(ctx)
+        assert reason is not None
+        assert "UNDERVALUED" in reason
+        assert score == 0.0
+
+    def test_backwardation_blocks_entry(self, strategy):
+        ctx = _base_context()
+        ctx["volatility"] = {"contango_label": "BACKWARDATION"}
+        reason, score = strategy.pre_check_entry(ctx)
+        assert reason is not None
+        assert "BACKWARDATION" in reason
+        assert score == 0.0
+
+    def test_overvalued_iv_boosts_score(self, strategy):
+        ctx_ov = _base_context()
+        ctx_ov["volatility"] = {"iv_overvalued_label": "OVERVALUED"}
+        ctx_base = _base_context()
+        _, score_base = strategy.pre_check_entry(ctx_base)
+        _, score_ov = strategy.pre_check_entry(ctx_ov)
+        assert score_ov == pytest.approx(score_base * 1.20, rel=0.01)
+
+    def test_normal_contango_and_fair_iv_passes(self, strategy):
+        ctx = _base_context()
+        ctx["volatility"] = {
+            "iv_overvalued_label": "FAIR",
+            "contango_label": "NORMAL",
+        }
+        reason, score = strategy.pre_check_entry(ctx)
+        assert reason is None
+        assert score > 0

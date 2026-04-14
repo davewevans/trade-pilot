@@ -52,6 +52,7 @@ def _base_context(**overrides):
                     "break_even": 529.0,
                     "credit_to_width_ratio": 0.20,
                     "liquidity_ok": True,
+                    "spread_yield": 0.00185,  # 1.00 / 540.0
                 },
             },
         },
@@ -153,7 +154,8 @@ class TestIdleEntry:
 
     def test_skip_when_credit_too_low(self, strategy):
         ctx = _base_context()
-        ctx["spread_candidates"]["bull_put_spread"]["best_candidate"]["net_credit"] = 0.30
+        ctx["spread_candidates"]["bull_put_spread"]["best_candidate"]["net_credit"] = 0.20
+        ctx["spread_candidates"]["bull_put_spread"]["best_candidate"]["spread_yield"] = 0.00037
         result = strategy.run_cycle(ctx, advisor=strategy._advisor)
         assert result["action"] == "SKIP"
         assert "credit" in result["reasoning"].lower()
@@ -389,3 +391,53 @@ class TestStatePersistence:
         data = json.loads(strategy._state_path.read_text())
         assert data["state"] == "OPEN"
         assert data["open_spread_id"] == "persist-id"
+
+
+# ================================================================
+# Spread yield and IV overvaluation checks (Prompt 2)
+# ================================================================
+
+
+class TestSpreadYieldAndIVForecast:
+    def test_pre_check_rejects_low_spread_yield(self, strategy):
+        ctx = _base_context()
+        ctx["spread_candidates"]["bull_put_spread"]["best_candidate"]["spread_yield"] = 0.0005
+        reason, score = strategy.pre_check_entry(ctx)
+        assert reason is not None
+        assert "spread_yield" in reason.lower() or "0.001" in reason
+        assert score == 0.0
+
+    def test_pre_check_accepts_valid_spread_yield_below_old_075_threshold(self, strategy):
+        """Regression test: credit of $0.50 on a $540 stock (yield=0.00093) should
+        still pass yield check but might fail other checks. Credit of $0.60 at 0.00111
+        spread yield should pass."""
+        ctx = _base_context()
+        ctx["spread_candidates"]["bull_put_spread"]["best_candidate"]["net_credit"] = 0.60
+        ctx["spread_candidates"]["bull_put_spread"]["best_candidate"]["spread_yield"] = 0.00111
+        reason, score = strategy.pre_check_entry(ctx)
+        # Should NOT be rejected by the old $0.75 check (which no longer exists)
+        assert reason is None or "spread_yield" not in (reason or "")
+
+    def test_pre_check_rejects_absolute_credit_below_030(self, strategy):
+        ctx = _base_context()
+        # spread_yield is fine (0.001 minimum), but absolute credit is too low
+        ctx["spread_candidates"]["bull_put_spread"]["best_candidate"]["net_credit"] = 0.25
+        ctx["spread_candidates"]["bull_put_spread"]["best_candidate"]["spread_yield"] = 0.002
+        reason, score = strategy.pre_check_entry(ctx)
+        assert reason is not None
+        assert "$0.30" in reason
+        assert score == 0.0
+
+    def test_pre_check_iv_overvalued_boosts_score(self, strategy):
+        ctx = _base_context()
+        ctx["volatility"] = {"iv_overvalued_label": "OVERVALUED"}
+        _, score_base = strategy.pre_check_entry(_base_context())
+        _, score_ov = strategy.pre_check_entry(ctx)
+        assert score_ov == pytest.approx(score_base * 1.15, rel=0.01)
+
+    def test_pre_check_iv_undervalued_reduces_score(self, strategy):
+        ctx = _base_context()
+        ctx["volatility"] = {"iv_overvalued_label": "UNDERVALUED"}
+        _, score_base = strategy.pre_check_entry(_base_context())
+        _, score_uv = strategy.pre_check_entry(ctx)
+        assert score_uv == pytest.approx(score_base * 0.85, rel=0.01)

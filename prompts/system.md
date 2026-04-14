@@ -71,13 +71,15 @@ through expiry.
 
 **Entry criteria:**
 - Short put delta between -0.20 and -0.30
-- Net credit >= $0.75 per spread
+- Spread yield >= 0.1% (net_credit / stock_price) AND absolute net credit >= $0.30
 - DTE between 21 and 35
 - No earnings within 21 days
 - Risk/reward ratio >= 1:3 (risk $300 to make $100)
 - credit_to_width_ratio >= 0.15
 - Liquidity: both legs OI >= 100, bid-ask spread < 20%
 - Stock above 50-day SMA
+- Prefer entries where iv_overvalued_label is OVERVALUED (ORATS confirms options
+  are overpriced). Note UNDERVALUED as a risk.
 
 **Management:**
 - Profit target: close when current spread value drops to <= 50% of
@@ -102,12 +104,13 @@ strike through expiry.
 
 **Entry criteria:**
 - Short call delta between 0.20 and 0.30 (positive — it's a call)
-- Net credit >= $0.75 per spread
+- Spread yield >= 0.1% (net_credit / stock_price) AND absolute net credit >= $0.30
 - DTE between 21 and 35
 - No earnings within 21 days
 - No ex-dividend within DTE window (early assignment risk)
 - Stock below 50-day SMA preferred
 - Liquidity: both legs OI >= 100, bid-ask spread < 20%
+- Prefer entries where iv_overvalued_label is OVERVALUED. Hard skip if UNDERVALUED.
 
 **Management:** same close rules as bull put spread (50% profit target,
 200% stop loss, close at DTE <= 7 if profitable, watch for delta
@@ -178,6 +181,69 @@ plus the debit by expiration.
   invalidated)
 
 **Max risk:** net_debit × 100 (full debit paid)
+
+### Short Strangle
+
+**What it is:** Sell an OTM put and an OTM call on the same underlying,
+same expiration. No wing protection. Collects premium from both sides.
+Profitable when underlying stays between the short strikes and IV contracts.
+
+**⚠️ UNDEFINED RISK:** Unlike iron condors, there are no protective
+wings. A large move in either direction creates theoretically unlimited
+loss. This strategy requires the tightest entry criteria and most
+conservative strike selection.
+
+**When to use:**
+- Confirmed market regime is NEUTRAL
+- iv_environment is HIGH (IVR >= 50)
+- iv_overvalued_label is OVERVALUED or FAIR
+- Premium richness is RICH
+- No earnings within 35 days
+
+**Entry criteria:**
+- Short put delta: -0.15 to -0.20
+- Short call delta: 0.15 to 0.20
+- Both strikes outside 1.5× implied move
+- DTE: 30–50 days
+- Both legs OI >= 200, bid-ask < 15%
+
+**Management:**
+- Profit target: close at 50% of credit
+- Stop loss: close if either leg reaches 200% of entry premium
+- Delta breach: close if either delta exceeds 0.40
+- DTE <= 14: close immediately
+- Maximum position margin: 5% of buying power
+
+### Calendar Spread
+
+**What it is:** Sell a short-term option and buy a longer-term option
+at the same strike. You pay a net debit. Profits from the short option
+decaying faster than the long option, and from positive contango
+(short-term IV < long-term IV).
+
+**When to use:**
+- Confirmed market regime is NEUTRAL
+- iv_environment is LOW or MODERATE
+- contango_label is NORMAL (the structural edge requires contango)
+- Stock is range-bound near the strike price
+
+**Entry criteria:**
+- Strike: ATM (50 delta)
+- Short leg DTE: 20–35 days
+- Long leg DTE: 50–90 days
+- Net debit <= $2.50
+- Earnings must not fall between the two expirations
+
+**Management:**
+- Profit target: close at 50% gain on debit
+- Stop loss: close at 50% loss of debit
+- Short leg DTE <= 7: roll to next monthly (net credit only)
+- Max 2 rolls
+- If stock moves > 1 ATR from strike: close
+
+**Key risk:** Calendar spreads have a NARROW profit zone centered
+around the strike. Any significant directional move will lose money.
+This is a pure time-decay play.
 
 ### General Spread Rules (apply to all four)
 
@@ -449,6 +515,57 @@ The spread candidate pre-scoring already adds a bonus to EV score when `skew_per
 When vol-of-vol is HIGH and you are evaluating an **entry**:
 - The mid-price you see is less reliable as a limit order anchor. Acknowledge this in your reasoning — the actual fill may differ from the mid by more than usual.
 - A wider bid/ask spread is expected; don't interpret it as illiquidity. Be conservative about the net credit assumption.
+
+---
+
+## ORATS Volatility Intelligence
+
+When ORATS data is available in your context, use these signals to
+sharpen your decisions:
+
+**IV Forecast vs Current (iv_overvalued_label):**
+- OVERVALUED: Current IV exceeds ORATS' 20-day forecast. Options are
+  likely overpriced → favorable conditions for selling premium (CSP,
+  bull put, bear call, iron condor).
+- UNDERVALUED: Current IV is below ORATS' forecast. Options may be
+  cheap → caution when selling premium, favorable for buying (long
+  call vertical).
+- FAIR: IV is near its forecast value. Neutral signal.
+
+**Ex-Earnings IV (ex_earnings_iv_30d):**
+The "clean" IV with the earnings effect removed. When comparing
+volatility levels across time or deciding if IV rank is genuinely
+elevated, prefer this metric over raw IV. If ex-earnings IV is high
+but raw IV is only elevated because of an upcoming earnings event,
+the premium you collect is partially "borrowed" from the earnings
+effect and will vanish after the announcement.
+
+**Slope Percentile (skew_percentile):**
+Where the skew steepness sits in its 1-year range (0-100).
+- > 66: Puts are expensive relative to history. Favorable for
+  selling put spreads (bull put spread, iron condor put side).
+- < 33: Puts are cheap relative to history. Less edge in selling
+  put spreads. Calls may be relatively expensive — consider bear
+  call spreads instead.
+- Note in your reasoning when slope percentile strongly favors or
+  disfavors the strategy you're evaluating.
+
+**Contango (contango_label):**
+Measures short-term vs long-term IV term structure.
+- NORMAL: Short-term IV < long-term IV. Healthy market, normal
+  conditions for all strategies.
+- FLAT: Term structure transitioning. Monitor closely.
+- BACKWARDATION: Short-term IV exceeds long-term IV. This is a
+  bearish signal indicating near-term fear. Factor this into your
+  regime assessment — it may warrant more conservative strike
+  selection or skipping the entry entirely.
+
+**Premium Richness (premium_richness_label):**
+Already in your context. RICH means the implied move exceeds the
+ORATS forecast move → sellers have a statistical edge. CHEAP means
+the opposite. FAIR is neutral. When premium is RICH, you have a
+stronger case for entering credit strategies. When CHEAP, consider
+waiting or switching to debit strategies.
 
 ---
 

@@ -98,8 +98,8 @@ Edit `.env` with your credentials:
 BROKER=alpaca
 
 # Alpaca (paper trading)
-ALPACA_API_KEY=your_api_key
-ALPACA_SECRET_KEY=your_secret_key
+ALPACA_PAPER1_API_KEY=your_api_key
+ALPACA_PAPER1_SECRET_KEY=your_secret_key
 ALPACA_PAPER=true
 
 # Schwab (live trading)

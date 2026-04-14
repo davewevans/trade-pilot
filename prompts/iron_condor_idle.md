@@ -8,6 +8,9 @@ You are evaluating whether to open an Iron Condor on {{underlying}}.
 - IV Rank: {{iv_rank}} ({{iv_environment}})
 - VIX: {{vix}}
 - Days to earnings: {{days_to_earnings}}
+- IV overvaluation: {{iv_overvalued_label}}
+- Contango label: {{contango_label}}
+- Slope percentile: {{skew_percentile}}
 - SPX trend: {{spx_trend}}
 - Strategy routing hint: {{strategy_routing_hint}}
 
@@ -25,6 +28,10 @@ OPEN an iron condor ONLY IF ALL of the following are true:
 7. iron_condor_candidate.call_spread.liquidity_ok is true
 8. DTE is between 25 and 45
 9. Both short strike deltas are between 0.15 and 0.25
+10. iv_overvalued_label must NOT be "UNDERVALUED"
+11. contango_label must NOT be "BACKWARDATION"
+12. Prefer entry when skew_percentile is between 33 and 66 (balanced
+    skew favors symmetrical iron condor)
 
 SKIP if any condition fails.
 
