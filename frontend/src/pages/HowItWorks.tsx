@@ -26,9 +26,9 @@ const STEPS: Step[] = [
   {
     num: 3,
     label: 'Build Market Context',
-    oneLine: 'Alpaca + yfinance + FRED + Finnhub + ORATS → one JSON package',
+    oneLine: 'Alpaca + yfinance + FRED + Finnhub + ORATS + CNN Fear & Greed → one JSON package',
     body:
-      "Before asking Claude anything, the bot collects data from five different sources and combines it into a single snapshot of current market conditions. This includes current stock prices, how volatile options are right now compared to recent history (IV rank), what the broader market is doing (VIX, Fear & Greed), and when each company's next earnings report is scheduled. Claude sees all of this — not just the price.",
+      "Before asking Claude anything, the bot collects data from six different sources and combines it into a single snapshot of current market conditions. This includes current stock prices, how volatile options are right now compared to recent history (IV rank), what the broader market is doing (VIX, Fear & Greed), and when each company's next earnings report is scheduled. Claude sees all of this — not just the price.",
   },
   {
     num: 4,
@@ -49,7 +49,7 @@ const STEPS: Step[] = [
     label: 'Pre-condition Check',
     oneLine: 'Per-strategy hard filters — failure means SKIP without calling Claude',
     body:
-      "Each strategy has a list of hard filters it checks itself, before spending money on a Claude API call. Earnings windows, IV thresholds, existing positions, allocation caps — all checked here. If any fail, the trade is skipped and logged with the exact reason. Claude is never bothered with trades that obviously can't happen.",
+      "Each strategy has a list of hard filters it checks itself, before spending money on a Claude API call. Earnings windows, IV thresholds, existing positions, allocation caps — all checked here. For spread strategies in IDLE state, the bot pre-checks every symbol in the strategy's watchlist, scores the qualifying candidates, and only calls Claude once for the single best setup. If no symbol passes, the entire strategy skips. Claude is never bothered with trades that obviously can't happen.",
   },
   {
     num: 7,

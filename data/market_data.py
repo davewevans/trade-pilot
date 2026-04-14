@@ -329,6 +329,26 @@ def get_orats_cores(symbol: str) -> dict | None:
         return None
 
 
+def get_orats_monies(symbol: str) -> list[dict]:
+    """Return ORATS implied monies (vol smile) for a symbol.
+
+    Each row covers one expiration and contains vol5…vol100 — the
+    smoothed IV at standardized delta levels.  vol100 ≈ ATM;
+    vol30 = 30-delta put; vol5 = 5-delta put.
+
+    Returns an empty list when ORATS is unavailable.
+    """
+    if not settings.ORATS_API_KEY:
+        return []
+    try:
+        from data.orats_client import ORATSClient
+
+        return ORATSClient().get_monies(symbol)
+    except Exception:
+        logger.warning("ORATS monies failed for %s", symbol, exc_info=True)
+        return []
+
+
 def get_orats_iv_rank_batch(symbols: list[str]) -> dict[str, dict]:
     """Return ORATS IV rank/percentile for a batch of tickers."""
     if not settings.ORATS_API_KEY or not symbols:

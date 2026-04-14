@@ -20,12 +20,14 @@ _EARNINGS_TTL = 6 * 3600
 _IVRANK_TTL = 30 * 60
 _CORES_TTL = 6 * 3600
 _STRIKES_TTL = 15 * 60
+_MONIES_TTL = 30 * 60
 
 _summary_cache: dict[str, tuple[float, dict]] = {}
 _earnings_cache: dict[str, tuple[float, dict]] = {}
 _ivrank_cache: dict[str, tuple[float, dict]] = {}
 _cores_cache: dict[str, tuple[float, dict]] = {}
 _strikes_cache: dict[str, tuple[float, list]] = {}
+_monies_cache: dict[str, tuple[float, list]] = {}
 
 
 class ORATSClient:
@@ -284,6 +286,65 @@ class ORATSClient:
         except Exception:
             logger.warning("ORATS /cores failed for %s", key, exc_info=True)
             return None
+
+    def get_monies(self, symbol: str) -> list[dict]:
+        """Fetch implied volatility at standardized delta levels (the vol smile).
+
+        Calls ``/monies/implied`` which returns one row per expiration, each
+        containing the smoothed IV at delta-level buckets:
+
+            vol5  … vol100   where vol100 ≈ ATM, vol95 = 95-delta put,
+                              vol30 = 30-delta put, vol5 = 5-delta put.
+
+        These are ORATS' model-smoothed (SMV) vols so they are free of
+        bid/ask noise and reflect the true vol surface shape.
+
+        Cached for 30 minutes per symbol. Returns an empty list on failure.
+        """
+        key = symbol.upper()
+        cached = _monies_cache.get(key)
+        if cached:
+            ts, data = cached
+            if time.monotonic() - ts < _MONIES_TTL:
+                return data
+
+        try:
+            resp = requests.get(
+                f"{self.BASE_URL}/monies/implied",
+                params={"token": self.api_key, "ticker": key},
+                timeout=self.TIMEOUT,
+            )
+            resp.raise_for_status()
+            rows = resp.json().get("data", []) or []
+        except requests.HTTPError as e:
+            if e.response is not None and e.response.status_code == 401:
+                logger.error("ORATS API key is invalid or expired (monies)")
+            else:
+                logger.warning("ORATS /monies/implied HTTP error for %s: %s", key, e)
+            return []
+        except Exception:
+            logger.warning("ORATS /monies/implied failed for %s", key, exc_info=True)
+            return []
+
+        # Normalize: pull all vol{N} fields plus metadata
+        normalized: list[dict] = []
+        for row in rows:
+            entry: dict = {
+                "ticker": key,
+                "expir_date": str(row.get("expirDate", "")),
+            }
+            # Extract volXX fields (vol5, vol10, …, vol95, vol100)
+            for delta_level in (5, 10, 15, 20, 25, 30, 35, 40, 45, 50,
+                                 55, 60, 65, 70, 75, 80, 85, 90, 95, 100):
+                field = f"vol{delta_level}"
+                entry[field] = self._safe_float(row.get(field))
+            normalized.append(entry)
+
+        _monies_cache[key] = (time.monotonic(), normalized)
+        logger.info(
+            "ORATS monies for %s: %d expiration rows fetched", key, len(normalized),
+        )
+        return normalized
 
     def get_strikes_by_delta(
         self,

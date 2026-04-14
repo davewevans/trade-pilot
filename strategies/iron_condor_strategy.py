@@ -132,8 +132,11 @@ class IronCondorStrategy:
         if not ic_legs:
             return "No viable iron condor candidates found", 0.0
 
-        total_credit = float(ic_legs.get("total_credit", 0))
-        return None, total_credit
+        # Rank by combined EV score (ORATS-adjusted POP × max_gain - loss risk,
+        # summed across both legs).  Falls back to total_credit when unavailable.
+        ev = ic_legs.get("total_ev_score")
+        score = float(ev) if ev is not None else float(ic_legs.get("total_credit", 0))
+        return None, score
 
     def _check_entry_conditions(self, context: dict) -> str | None:
         """Return a skip reason string, or None if all conditions pass."""
@@ -264,10 +267,19 @@ class IronCondorStrategy:
             breached = True
 
         # Hard exit conditions
-        if pnl_pct >= 50:
+        # When vol_of_vol is HIGH, option prices whip around intraday —
+        # take profits sooner (40%) before they evaporate.
+        vov_label = (context.get("volatility") or {}).get("vol_of_vol_label")
+        profit_target_pct = 40 if vov_label == "HIGH" else 50
+
+        if pnl_pct >= profit_target_pct:
             return {
                 "action": "CLOSE",
-                "reasoning": f"Captured {pnl_pct}% of max profit (>= 50% target)",
+                "reasoning": (
+                    f"Captured {pnl_pct}% of max profit "
+                    f"(>= {profit_target_pct}% target"
+                    + (" — tightened due to high vol-of-vol)" if vov_label == "HIGH" else ")")
+                ),
                 "urgency": "normal",
                 "spread_id": self.open_spread_id,
                 "limit_price": round(current_value, 2),

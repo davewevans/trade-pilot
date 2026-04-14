@@ -7,6 +7,91 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-04-13
+
+### Added
+
+- **Backtesting engine** — `BacktestEngine` simulates historical strategy
+  performance day-by-day using ORATS historical data (`backtesting/engine.py`).
+  Supports all five strategies with full regime routing, same entry/exit rules
+  as live trading (50% profit close, 200% stop loss, DTE ≤ 7). Earnings-in-window
+  detection tracks implied vs. realised earnings moves on positions held through
+  an event.
+- **ORATS historical data layer** — `ORATSHistorical` fetches and caches
+  `/hist/summaries`, `/hist/ivrank`, and `/hist/strikes` in a local SQLite
+  database (`data/orats_historical.py`). Eliminates redundant API calls on
+  repeated backtest runs.
+- **Backtester page** — interactive UI (`frontend/src/pages/Backtest.tsx`) with
+  configurable params (strategy, symbols, date range, delta, DTE, IVR threshold,
+  profit-close %, spread width), background job runner with live progress, equity
+  curve, monthly returns bar chart, and full trade table with winner/loser filter.
+- **ORATS expansion** — client now calls nine endpoints: `/summaries`,
+  `/cores`, `/ivrank` (batch, up to 10 tickers), `/strikes`, `/monies/implied`,
+  `/earnings`, `/hist/summaries`, `/hist/ivrank`, `/hist/strikes`.
+  Per-endpoint TTLs: summaries/ivrank/monies 30 min, strikes 15 min,
+  cores/earnings 6 hr.
+- **Volatility surface** — `/monies/implied` provides model-smoothed IV at
+  standardised delta levels (5–100) across all expirations, used for full-skew
+  assessment in spread candidate scoring (`data/orats_client.py`).
+- **EV scoring for spread candidates** — `build_spread_candidates()` in
+  `context_builder.py` computes expected-value scores incorporating skew
+  percentile adjustments. Put-selling strategies receive a premium when skew is
+  elevated (put side overpriced vs. historical norm); call-selling strategies
+  receive a discount.
+- **Vol-of-vol classification** — ORATS `/cores` `vol_of_vol` field used to
+  flag unstable IV environments. High vol-of-vol down-weights iron condor and
+  theta strategies that require predictable conditions.
+- **IV/HV ratio checks** — strategies compare current implied volatility to
+  ORATS realised HV (`iv_hv_ratio` from `/cores`) before recommending premium
+  sales. Ratio < 1.0 (IV cheaper than realised) suppresses put-selling signals.
+- **Earnings volatility analysis** — context builder captures ORATS implied
+  earnings move, historical average earnings move, and IV premium at entry.
+  Engine and live bot record whether earnings fell inside a position's holding
+  window and what the actual stock move was.
+- **IV History chart** — `/api/iv-history` endpoint serves per-symbol
+  historical IV rank from ORATS `/hist/ivrank`; Volatility dashboard renders
+  it as a time-series line chart.
+- **Source health tracking** — `data/source_health.py` records per-source
+  success/failure counts and consecutive failures with atomic writes. Dashboard
+  displays live coloured status dots; `DataSources` page shows last-success age
+  per card.
+- **Dashboard circuit breaker reset** — `/api/admin/reset-circuit-breaker`
+  endpoint deletes `HALTED.lock` and the state file. Reset button appears in
+  `TopBar` and on the `CircuitBreakers` page when status is RED or HALTED.
+- **Per-strategy watchlists** — `WATCHLIST`, `IRON_CONDOR_WATCHLIST`, and
+  `SPREAD_WATCHLIST` loaded from `data/watchlist.json`; editable from the
+  dashboard Watchlist page without redeployment.
+- **Watchlist page** — dashboard UI for viewing and editing per-strategy
+  watchlists (`frontend/src/pages/Watchlist.tsx`).
+- **Volatility dashboard page** — IV rank, term structure, skew, and IV
+  history for any watchlist symbol (`frontend/src/pages/Volatility.tsx`).
+- **How Backtesting Works** — new Learn page documenting the backtesting
+  engine, parameter guide, result interpretation, benchmarks, and limitations
+  (`frontend/src/pages/HowBacktestingWorks.tsx`).
+
+### Changed
+
+- **Sidebar** — collapsible section groups (Overview, Research, Accounts,
+  Learn) with localStorage persistence and auto-expand when navigating directly
+  to a Learn route. Learn defaults to collapsed. Sidebar is now scrollable with
+  a thin themed scrollbar.
+- **Research navigation group** — Backtester and Volatility moved out of
+  Overview into a dedicated Research section.
+- **TopBar logo** — logo and wordmark now link to the dashboard homepage.
+- **CircuitBreakers page** — documents DRY_RUN bypass (always GREEN), stale
+  peak guard (re-seeds peak when apparent drawdown > 50%), and both reset
+  options (dashboard button and Render Shell file deletion).
+- **Strategies page** — documents per-strategy watchlists (wheel, iron condor,
+  spreads each have their own), full-watchlist scanning per cycle, and dashboard
+  watchlist management.
+- **DataSources page** — ORATS card expanded to cover all nine endpoints with
+  per-endpoint cache TTLs; fallback chain updated; intro updated to "six
+  external data providers."
+- **HowItWorks page** — Step 3 updated to six data sources (adds CNN Fear &
+  Greed); Step 6 describes full-watchlist pre-scanning for spread strategies.
+- **About page** — data stack updated to include CNN Fear & Greed and full
+  ORATS scope; Gather step updated to "six data sources."
+
 ## [1.0.0] - 2026-04-12
 
 Initial public release.

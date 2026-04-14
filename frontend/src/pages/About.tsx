@@ -9,7 +9,7 @@ const STEPS: Step[] = [
     num: 1,
     label: 'Gather',
     body:
-      'Fetches live prices, IV rank, macro data, earnings dates, and account state from five data sources every cycle.',
+      'Fetches live prices, IV rank, macro data, earnings dates, and account state from six data sources every cycle.',
   },
   {
     num: 2,
@@ -66,7 +66,7 @@ const GOALS = [
   {
     title: 'Learn and improve',
     body:
-      'All decisions, skip reasons, and outcomes are logged to a trade journal. The system is designed to be analyzed and refined over time based on actual performance data.',
+      'All decisions, skip reasons, and outcomes are logged to a trade journal. The backtester lets you replay historical scenarios using ORATS historical data. The system is designed to be analyzed and refined over time based on actual performance data.',
   },
   {
     title: 'Manage risk first',
@@ -79,7 +79,7 @@ const STACK = [
   { label: 'AI', value: 'Claude Sonnet (Anthropic)' },
   { label: 'Broker', value: 'Alpaca (paper trading)' },
   { label: 'Language', value: 'Python 3.11+' },
-  { label: 'Data', value: 'Alpaca Market Data, yfinance, FRED, Finnhub, ORATS' },
+  { label: 'Data', value: 'Alpaca Market Data, yfinance, FRED, Finnhub, CNN Fear & Greed, ORATS (IV analytics, options data, volatility surface, earnings, historical backtesting)' },
   { label: 'Scheduler', value: 'Python schedule library' },
   { label: 'API', value: 'FastAPI' },
   { label: 'Dashboard', value: 'React' },

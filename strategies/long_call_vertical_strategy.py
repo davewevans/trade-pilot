@@ -141,6 +141,12 @@ class LongCallVerticalStrategy:
                 0.0,
             )
 
+        # Rank by EV score when available (accounts for whether call options
+        # are cheap relative to ORATS' forecast — key for debit spreads where
+        # overpriced IV hurts). Falls back to reward/risk ratio.
+        ev = best.get("ev_score")
+        if ev is not None:
+            return None, float(ev)
         max_gain = best.get("max_gain") or 0
         score = (float(max_gain) / float(net_debit)) if max_gain else (1.0 / float(net_debit))
         return None, float(score)
@@ -157,6 +163,12 @@ class LongCallVerticalStrategy:
         ivr = context.get("iv_rank")
         if ivr is not None and ivr >= 30:
             return f"IV rank {ivr} >= 30 (need < 30 for debit spread)"
+
+        iv_hv = (context.get("volatility") or {}).get("iv_hv_ratio")
+        if iv_hv is not None and iv_hv > 1.30:
+            return (
+                f"IV/HV ratio {iv_hv:.2f} > 1.30 — options overpriced for debit strategy"
+            )
 
         tech = context.get("technicals") or {}
         if tech.get("above_sma_50") is not True:

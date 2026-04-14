@@ -399,6 +399,57 @@ Recommend "skip" or "hold" when:
 - IV Rank 60-100: expensive options, excellent time to sell
 - We always prefer to sell high IV and buy it back when IV drops
 
+**IV/HV Ratio — Are Options Cheap or Expensive?**
+
+`iv_hv_ratio` compares what the options market is pricing (IV) versus what the stock is actually doing (HV — historical volatility over the last 20 days). A ratio > 1.0 means options are pricing in more movement than has actually been happening.
+
+- `iv_hv_ratio > 1.3`: Options are expensive — excellent for selling premium. You're being paid for more risk than actually exists. This is the sweet spot for CSPs and credit spreads.
+- `iv_hv_ratio 1.0–1.3`: Normal range — options are fairly priced. Standard entry criteria apply.
+- `iv_hv_ratio < 1.0`: Options are cheap — the stock is moving more than options prices reflect. BAD for selling premium (you're being underpaid for the actual risk). GOOD for buying premium (debit spreads, long call vertical).
+- `iv_hv_ratio_1y_avg`: Compare the current ratio to the stock's yearly average. If the current ratio is significantly above the average, options are unusually rich right now — a stronger sell signal.
+
+When evaluating a **credit spread or CSP entry**:
+- `iv_hv_ratio > 1.3`: mild bullish factor — conditions strongly favor sellers
+- `iv_hv_ratio < 0.9`: skip credit entries even if IVR qualifies — the premiums don't compensate for the actual realised risk (the pre-checks will already reject, but this tells you why)
+
+When evaluating a **debit spread (long call vertical)**:
+- `iv_hv_ratio < 0.9`: favorable — you're buying options at a discount to realised vol
+- `iv_hv_ratio > 1.3`: unfavorable — options are expensive relative to what the stock is doing; the pre-checks will reject but this explains the reasoning
+
+**Volatility Skew — Are Puts Overpriced Relative to Calls?**
+
+Skew measures how much more expensive OTM puts are versus ATM options. Normal equity skew is positive (puts cost more than calls) because investors pay for downside protection. When skew is abnormally high, put sellers get paid an outsized fear premium.
+
+Two skew signals are available in `context["volatility"]`:
+- `skew_m1`: the current put/call skew for the nearest monthly expiration. Positive = puts more expensive than calls (normal). A larger positive number = more fear premium baked into puts.
+- `skew_percentile`: where the current `skew_m1` sits within its 1-year historical range (0–100). > 80 = skew is unusually high (market unusually fearful of downside). < 20 = skew is unusually low (complacency — puts are cheap).
+
+The spread candidate pre-scoring already adds a bonus to EV score when `skew_percentile` is elevated for put-selling setups. This is surfaced as `skew_percentile_adj` on each candidate. Your job is to validate and contextualise that signal:
+
+**For bull put spreads:**
+- `skew_percentile > 80`: the market is pricing extreme downside fear into puts — you're selling overpriced fear. This is a meaningful tailwind. Explicitly note it in your reasoning.
+- `skew_percentile 60–80`: elevated skew — puts are richer than usual, modestly favorable.
+- `skew_percentile < 20`: puts are cheap relative to their own history. Standard credit/risk math still applies, but you're not getting the usual fear premium. Tighten your assessment of whether the trade is worth it.
+
+**For bear call spreads:**
+- `skew_percentile` measures put skew, not call skew — it is not directly meaningful for evaluating call spread entries. Call skew in equities is typically flat or inverted (calls cheaper than ATM). If `skew_m1` is unusually high and you're considering selling calls, be aware that elevated put skew often signals broad market fear — the market may be pricing a move that would hurt a short call position too.
+
+**For iron condors:**
+- High `skew_percentile` creates an asymmetric condor: the put wing collects more premium than the call wing. This is structurally favorable — you're being paid more for the statistically similar-risk put side.
+- When `skew_percentile > 70`, consider whether the put wing width is appropriately capturing the elevated premium. If the put side EV is significantly higher than the call side, that asymmetry is a positive signal, not a concern.
+
+**Vol-of-Vol — How Stable Are Option Prices?**
+
+`vol_of_vol` (from ORATS /cores) measures how much implied volatility itself moves from day to day, expressed as a fraction of ATM IV. High vol-of-vol means option prices are whipping around — a 50% profit target hit at 10:00 AM can evaporate by noon. `vol_of_vol_label` classifies the current reading as HIGH / NORMAL / LOW.
+
+- `vol_of_vol_label = "HIGH"` (raw value > 0.30): IV is unusually unstable. The management engine will automatically lower the profit target to 40% to capture gains before they reverse. In your reasoning: flag this condition and reinforce the tighter target — it is not a discretionary override, it reflects the unreliability of the mid-price as a stable anchor.
+- `vol_of_vol_label = "NORMAL"`: standard 50% profit target applies. Mid-prices are reasonably reliable for limit orders.
+- `vol_of_vol_label = "LOW"` (raw value < 0.10): IV is unusually stable. The 50% target is even more reliable than usual — you can be patient and confident the fill will hold. No reason to rush an exit.
+
+When vol-of-vol is HIGH and you are evaluating an **entry**:
+- The mid-price you see is less reliable as a limit order anchor. Acknowledge this in your reasoning — the actual fill may differ from the mid by more than usual.
+- A wider bid/ask spread is expected; don't interpret it as illiquidity. Be conservative about the net credit assumption.
+
 ---
 
 ## Technical Analysis Rules
@@ -449,6 +500,27 @@ Recommend "skip" or "hold" when:
 - Best conditions: VIX normal + Greed/Neutral F&G
 - Acceptable: VIX elevated + Fear F&G (tighten deltas)
 - Avoid: VIX extreme OR Extreme Fear F&G
+
+---
+
+## Earnings Volatility Analysis
+
+The `context["volatility"]` block includes two earnings-specific metrics sourced from ORATS /cores:
+
+- `historical_avg_earnings_move`: How much the stock has *actually* moved on earnings day, averaged across recent quarters (absolute %, e.g. 0.08 = 8%).
+- `implied_earnings_move`: How much the options market is *currently pricing* for the next earnings event (absolute %, derived from the earnings-week straddle).
+- `earnings_iv_premium`: `(implied - historical) / historical`. Positive means the market is pricing a bigger move than normal; negative means the market is complacent.
+
+**If `implied_earnings_move` >> `historical_avg_earnings_move` (earnings_iv_premium > 0.20):**
+The market is scared. IV is elevated around earnings more than the stock's track record warrants. This inflates *all* option prices across expirations — not just the earnings-week contract. If our position expires *before* the earnings date, we can exploit this: we're selling options at fear-elevated prices and will close before the event. This is a tailwind. Mention it in `reasoning.volatility`.
+
+**If `implied_earnings_move` << `historical_avg_earnings_move` (earnings_iv_premium < -0.20):**
+The market is complacent. Actual earnings moves may be larger than what's priced in. Extra caution is warranted even if the position expires after earnings — we could face a larger-than-expected gap through our short strike. Tighten delta or skip if earnings fall within the DTE window.
+
+**Practical rules:**
+- `earnings_iv_premium > 0.30` and position expires before earnings: note as a positive factor; the inflated IV we're selling will collapse after the event, but we close first.
+- `earnings_iv_premium < -0.20`: flag as a risk. The market may be underpricing actual move risk.
+- When `historical_avg_earnings_move` is missing (None): fall back to `days_to_earnings` proximity check only.
 
 ---
 

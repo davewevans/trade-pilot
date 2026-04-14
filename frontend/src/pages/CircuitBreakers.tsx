@@ -312,9 +312,45 @@ export function CircuitBreakers() {
         }}
       >
         The 15% drawdown lock is the only threshold that does not reset automatically. It requires
-        a human to review the situation and manually delete the <code className="font-mono">HALTED.lock</code> file
-        before the bot will trade again.
+        a human to review the situation and reset via the dashboard button or by deleting the{' '}
+        <code className="font-mono">HALTED.lock</code> file before the bot will trade again.
       </div>
+
+      {/* DRY_RUN note */}
+      {dryRun && (
+        <div
+          className="mt-4 p-3 rounded text-xs"
+          style={{
+            backgroundColor: 'color-mix(in srgb, var(--accent) 8%, transparent)',
+            color: 'var(--text-secondary)',
+            borderLeft: '3px solid var(--accent)',
+          }}
+        >
+          <strong>Dry run mode is active.</strong> The circuit breaker calculates all metrics —
+          daily P&L, weekly P&L, drawdown from peak — but always returns GREEN status. No
+          thresholds can trigger YELLOW, RED, or HALTED while dry run is enabled. This lets
+          the bot run through its full decision flow without being blocked by paper-account
+          equity data that doesn't reflect real risk. The dashboard header shows{' '}
+          <code className="font-mono">(dry run)</code> next to the circuit status badge when
+          this bypass is active.
+        </div>
+      )}
+      {!dryRun && (
+        <div
+          className="mt-4 p-3 rounded text-xs"
+          style={{
+            backgroundColor: 'color-mix(in srgb, var(--accent) 8%, transparent)',
+            color: 'var(--text-secondary)',
+            borderLeft: '3px solid var(--accent)',
+          }}
+        >
+          <strong>Dry run mode:</strong> When <code className="font-mono">DRY_RUN=true</code>,
+          the circuit breaker still calculates all metrics but always returns GREEN — no
+          thresholds trigger. This lets the bot make decisions without being blocked by
+          paper-account equity data. The dashboard shows{' '}
+          <code className="font-mono">(dry run)</code> next to the status badge when active.
+        </div>
+      )}
 
       {/* Section 3 */}
       <SectionHeader>How Status Affects Each Account</SectionHeader>
@@ -360,12 +396,18 @@ export function CircuitBreakers() {
           Every Monday at market open, the week's starting equity resets. Weekly loss counters
           restart from zero.
         </ResetCard>
-        <ResetCard num={3} title="Drawdown Lock (manual only)">
+        <ResetCard num={3} title="Drawdown Lock (requires human review)">
           If the portfolio drops 15% from its peak, the bot writes a <code className="font-mono">HALTED.lock</code> file
-          and stops completely. To resume trading, a human must:
-          <ul className="mt-2 space-y-1 text-xs">
-            <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Review what caused the drawdown</li>
-            <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Delete the <code className="font-mono">data/HALTED.lock</code> file from the server</li>
+          and stops completely. To resume trading, a human must review what caused the drawdown,
+          then reset via one of two options:
+          <div className="mt-2 text-xs font-semibold" style={{ color: 'var(--text-primary)' }}>Option 1 — Dashboard</div>
+          <ul className="mt-1 space-y-1 text-xs">
+            <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Click the <strong>Reset Circuit Breaker</strong> button in the dashboard header or at the top of this page (visible when status is RED or HALTED)</li>
+            <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> The lock file and state file are deleted; peak equity is re-seeded on the next cycle</li>
+          </ul>
+          <div className="mt-2 text-xs font-semibold" style={{ color: 'var(--text-primary)' }}>Option 2 — Server (if dashboard is inaccessible)</div>
+          <ul className="mt-1 space-y-1 text-xs">
+            <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Open a Render Shell and delete <code className="font-mono">data/HALTED.lock</code> manually</li>
             <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Restart or allow the next scheduler cycle to run</li>
           </ul>
         </ResetCard>
@@ -382,6 +424,21 @@ export function CircuitBreakers() {
         The drawdown peak tracks the highest portfolio value ever recorded. After a loss, the peak
         does not drop — only new highs update it. This means a portfolio that recovers from a 10%
         drawdown and then drops again will trigger the threshold again relative to the same (or new) peak.
+      </div>
+
+      <div
+        className="mt-3 p-3 rounded text-xs"
+        style={{
+          backgroundColor: 'color-mix(in srgb, var(--accent) 8%, transparent)',
+          color: 'var(--text-secondary)',
+          borderLeft: '3px solid var(--accent)',
+        }}
+      >
+        <strong>Stale peak guard:</strong> If the recorded peak is more than 50% above the current
+        equity — implying a drawdown so severe that the 15% lock would have already fired — the
+        peak is almost certainly stale from a previous session or account reset. Rather than
+        triggering a false HALTED, the bot re-seeds the peak to the current equity and logs a
+        warning. This protects against corrupt state data without silently masking real drawdowns.
       </div>
 
       <PageAudioPlayer contentRef={contentRef} />

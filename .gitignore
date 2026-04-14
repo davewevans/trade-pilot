@@ -3,6 +3,11 @@
 schwab_token.json
 venv/
 
+# auto-generated runtime data
+data/cache/
+data/snapshots/
+data/watchlist.json
+
 # frontend build artifacts (Vite outputs into api/static/)
 node_modules/
 frontend/dist/

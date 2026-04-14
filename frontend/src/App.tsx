@@ -7,6 +7,7 @@ import { ReasoningExplorer } from './pages/ReasoningExplorer'
 import { Guardrails } from './pages/Guardrails'
 import { Strategies } from './pages/Strategies'
 import { HowItWorks } from './pages/HowItWorks'
+import { HowBacktestingWorks } from './pages/HowBacktestingWorks'
 import { OptionsBasics } from './pages/OptionsBasics'
 import { TradeLifecycle } from './pages/TradeLifecycle'
 import { SkipReasons } from './pages/SkipReasons'
@@ -17,6 +18,8 @@ import { FAQ } from './pages/FAQ'
 import { About } from './pages/About'
 import { DataSources } from './pages/DataSources'
 import { Watchlist } from './pages/Watchlist'
+import { Backtest } from './pages/Backtest'
+import { Volatility } from './pages/Volatility'
 
 export function App() {
   return (
@@ -25,12 +28,15 @@ export function App() {
         <Routes>
           <Route path="/" element={<Dashboard />} />
           <Route path="/watchlist" element={<Watchlist />} />
+          <Route path="/backtest" element={<Backtest />} />
+          <Route path="/volatility" element={<Volatility />} />
           <Route path="/account/:account" element={<AccountDetail />} />
           <Route path="/decisions" element={<DecisionLog />} />
           <Route path="/reasoning" element={<ReasoningExplorer />} />
           <Route path="/guardrails" element={<Guardrails />} />
           <Route path="/strategies" element={<Strategies />} />
           <Route path="/how-it-works" element={<HowItWorks />} />
+          <Route path="/how-backtesting-works" element={<HowBacktestingWorks />} />
           <Route path="/options-basics" element={<OptionsBasics />} />
           <Route path="/trade-lifecycle" element={<TradeLifecycle />} />
           <Route path="/skip-reasons" element={<SkipReasons />} />

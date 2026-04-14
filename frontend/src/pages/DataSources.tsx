@@ -95,33 +95,85 @@ const SOURCES: Source[] = [
   },
   {
     name: 'ORATS (Options Research & Technology Services)',
-    tagline: 'Professional-grade implied volatility analytics',
+    tagline: 'Volatility analytics, options data, and historical backtesting data',
     website: 'orats.io',
     healthKeys: ['ORATS'],
-    cache: '30 minutes per symbol.',
+    cache:
+      '/summaries 30 min · /ivrank 30 min · /monies 30 min · /strikes 15 min · /cores 6 hr · /earnings 6 hr. Historical /hist endpoints are not cached — each backtest run fetches fresh data.',
     fallback:
-      'If ORATS is unavailable (API key missing or API error), IV rank returns as unavailable and is logged. Strategies that require IV rank will skip rather than proceed without it.',
+      'If live ORATS endpoints fail, IV rank returns as unavailable and affected strategies skip rather than proceed without it. If historical endpoints fail (/hist/ivrank, /hist/strikes, /hist/summaries), the backtester degrades gracefully — live trading is unaffected.',
     body: (
       <>
         <p className="text-sm leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
-          ORATS is the bot's primary source for implied volatility data. Unlike basic IV
-          calculations derived from a single option price, ORATS computes IV analytics across the
-          full options surface using institutional-grade models.
+          ORATS is the bot's primary source for implied volatility data, options analytics, and
+          historical backtesting data. It calls nine distinct endpoints — from live IV rank to
+          the full volatility surface to historical option chains for replaying past scenarios.
         </p>
-        <Section heading="What the bot fetches">
-          <Bullets
-            items={[
-              <><strong style={{ color: 'var(--text-primary)' }}>IV Rank (1-year):</strong> Where current IV sits within its 52-week range. 0 = at the yearly low, 100 = at the yearly high. The primary entry filter — most strategies require IVR ≥ 30.</>,
-              <><strong style={{ color: 'var(--text-primary)' }}>IV Rank (1-month):</strong> Same calculation over the past 30 days. Useful for detecting recent IV spikes vs. sustained elevation.</>,
-              <><strong style={{ color: 'var(--text-primary)' }}>IV Percentile (1-year and 1-month):</strong> The percentage of days in the past year (or month) where IV was lower than today. Different from IV rank — a single spike can distort rank but not percentile.</>,
-              <><strong style={{ color: 'var(--text-primary)' }}>ATM IV across four expiration months (M1–M4):</strong> The at-the-money implied volatility for the nearest four monthly expirations. Used to assess the volatility term structure.</>,
-              <><strong style={{ color: 'var(--text-primary)' }}>Term Structure Slope:</strong> The difference between M2 and M1 ATM IV. Positive (contango) = normal; negative (backwardation) = near-term fear or event premium.</>,
-              <><strong style={{ color: 'var(--text-primary)' }}>Skew (M1 and M2):</strong> The difference in IV between OTM puts and OTM calls. High put skew means downside risk is being priced more aggressively than upside.</>,
-              <><strong style={{ color: 'var(--text-primary)' }}>Implied Move %:</strong> ORATS' estimate of the expected price move over the next 30 days based on current options pricing.</>,
-              <><strong style={{ color: 'var(--text-primary)' }}>Forecast Move %:</strong> ORATS' model-based forecast of expected move, distinct from the market-implied move.</>,
-            ]}
-          />
-        </Section>
+
+        <SubHead>/summaries — IV rank &amp; volatility analytics</SubHead>
+        <Bullets
+          items={[
+            <><strong style={{ color: 'var(--text-primary)' }}>IV Rank (1-year):</strong> Where current IV sits within its 52-week range. 0 = at the yearly low, 100 = at the yearly high. The primary entry filter — most strategies require IVR ≥ 30.</>,
+            <><strong style={{ color: 'var(--text-primary)' }}>IV Rank (1-month):</strong> Same calculation over the past 30 days. Useful for detecting recent IV spikes vs. sustained elevation.</>,
+            <><strong style={{ color: 'var(--text-primary)' }}>IV Percentile (1-year and 1-month):</strong> The percentage of days in the past year (or month) where IV was lower than today. Different from IV rank — a single spike can distort rank but not percentile.</>,
+            <><strong style={{ color: 'var(--text-primary)' }}>ATM IV across four expiration months (M1–M4):</strong> At-the-money implied volatility for the nearest four monthly expirations. Used to assess the volatility term structure.</>,
+            <><strong style={{ color: 'var(--text-primary)' }}>Term Structure Slope:</strong> The difference between M2 and M1 ATM IV. Positive (contango) = normal; negative (backwardation) = near-term fear or event premium.</>,
+            <><strong style={{ color: 'var(--text-primary)' }}>Skew (M1 and M2):</strong> The difference in IV between OTM puts and OTM calls. High put skew = downside risk priced more aggressively than upside.</>,
+            <><strong style={{ color: 'var(--text-primary)' }}>Implied Move %:</strong> ORATS' estimate of the expected price move over the next 30 days based on current options pricing.</>,
+            <><strong style={{ color: 'var(--text-primary)' }}>Forecast Move %:</strong> ORATS' model-based forecast of expected move, distinct from the market-implied move.</>,
+          ]}
+        />
+
+        <SubHead>/cores — Historical volatility &amp; risk metrics</SubHead>
+        <Bullets
+          items={[
+            <><strong style={{ color: 'var(--text-primary)' }}>IV/HV Ratio:</strong> How current implied volatility compares to realized (historical) volatility. A ratio above 1.0 means options are pricing in more volatility than the stock has recently delivered — a premium-selling signal.</>,
+            <><strong style={{ color: 'var(--text-primary)' }}>Vol-of-Vol:</strong> The volatility of implied volatility itself. High vol-of-vol means the IV is unstable — a warning sign for iron condors and theta strategies that depend on calm, predictable conditions.</>,
+            <><strong style={{ color: 'var(--text-primary)' }}>Skew Percentile:</strong> Where the current put/call skew sits relative to its 1-year history. Feeds into EV scoring adjustments for put-selling strategies.</>,
+            <><strong style={{ color: 'var(--text-primary)' }}>HV-20d and HV-30d:</strong> ORATS' model-computed realized volatility over 20 and 30 days — more accurate than raw price-based HV calculations.</>,
+          ]}
+        />
+
+        <SubHead>/ivrank — Batch watchlist screening</SubHead>
+        <p className="text-sm leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
+          Fetches IV rank for up to 10 tickers in a single API call. Used when scanning the full
+          watchlist to quickly identify which symbols have elevated IV before doing deeper analysis.
+          Results are cached per-ticker so repeated calls within the same cycle are free.
+        </p>
+
+        <SubHead>/strikes — Strike-level data for spread selection</SubHead>
+        <p className="text-sm leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
+          Returns individual option contracts filtered by delta range and DTE range. Used during
+          spread candidate selection to identify the specific strikes that meet the strategy's
+          entry criteria — along with ORATS' model-smoothed IV, Greeks, and bid/ask data for each.
+        </p>
+
+        <SubHead>/monies/implied — Volatility surface</SubHead>
+        <p className="text-sm leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
+          Returns the full volatility smile across standardized delta levels (5-delta through
+          100-delta) for each expiration. ORATS' model-smoothed values are free of bid/ask noise.
+          Used to assess the shape of the vol surface — whether skew is elevated on one side,
+          whether the term structure is steep or flat — across the full curve rather than just one
+          expiration.
+        </p>
+
+        <SubHead>/earnings — Earnings calendar</SubHead>
+        <p className="text-sm leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
+          Returns upcoming earnings dates directly from ORATS. Used as a secondary earnings
+          source alongside Finnhub — if Finnhub data is stale or missing, ORATS earnings data
+          fills the gap. Also provides the after-close flag (whether the company reports before
+          or after the market closes).
+        </p>
+
+        <SubHead>/hist/ivrank · /hist/strikes · /hist/summaries — Historical data</SubHead>
+        <p className="text-sm leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
+          Used exclusively by the backtester. These endpoints return historical IV rank,
+          option chains, and summary data for past dates, allowing the backtester to replay
+          historical scenarios using the same data the bot would have seen at the time.
+          The IV History chart on the Volatility dashboard also draws on <code className="font-mono">/hist/ivrank</code>.
+          These endpoints are independent of live trading — if they fail, the backtester
+          degrades but the daily trading cycle is unaffected.
+        </p>
       </>
     ),
   },
@@ -272,7 +324,7 @@ const SOURCES: Source[] = [
     body: (
       <>
         <p className="text-sm leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
-          Claude is not a passive tool — it is the decision-maker. After all six data sources are
+          Claude is not a passive tool — it is the decision-maker. After all the data sources are
           assembled into a single context package, the full package is sent to Claude with a
           strategy-specific prompt. Claude reads the data, applies the strategy rules, and returns
           a structured JSON recommendation.
@@ -463,12 +515,15 @@ function SourceCard({
 }
 
 const FALLBACK_CHAIN = [
-  { label: 'Earnings date', chain: 'Finnhub → yfinance → marked unavailable' },
-  { label: 'IV Rank', chain: 'ORATS → marked unavailable (strategies skip without it)' },
+  { label: 'Earnings date', chain: 'Finnhub → ORATS /earnings → yfinance → marked unavailable' },
+  { label: 'IV Rank', chain: 'ORATS /summaries → ORATS /ivrank → marked unavailable (strategies skip without it)' },
+  { label: 'Vol surface', chain: 'ORATS /monies/implied → unavailable (EV scoring proceeds without skew surface data)' },
+  { label: 'Strike candidates', chain: 'ORATS /strikes → Alpaca chain → unavailable (spread skips)' },
   { label: 'Risk-free rate', chain: 'FRED → 5.0% default' },
   { label: 'VIX', chain: 'yfinance → None (regime defaults to NEUTRAL)' },
   { label: 'Fear & Greed', chain: 'CNN → None (EUPHORIA regime blocked, others unaffected)' },
   { label: 'Technicals', chain: 'yfinance → None values passed to Claude with warning' },
+  { label: 'Historical backtesting', chain: 'ORATS /hist endpoints → backtest unavailable; live trading unaffected' },
   { label: 'Alpaca', chain: 'No fallback — cycle cannot run without the broker connection' },
 ]
 
@@ -487,10 +542,12 @@ export function DataSources() {
           Data Sources
         </h1>
         <p className="text-sm mt-2 leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
-          Every decision cycle, the bot assembles a context package from seven data sources before
-          asking Claude anything. The quality of that context directly determines the quality of
-          the decisions. This page explains what each source provides, how fresh the data is, and
-          what happens when a source is unavailable.
+          Every decision cycle, the bot assembles a context package from six external data providers
+          before asking Claude anything. The quality of that context directly determines the quality
+          of the decisions. This page explains what each source provides, how fresh the data is, and
+          what happens when a source is unavailable. The bot tracks the health of every source
+          in real time — the colored dots on the main Dashboard show live success/failure status,
+          and each card below reflects that same status.
         </p>
       </div>
 

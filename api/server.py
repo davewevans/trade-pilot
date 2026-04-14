@@ -12,10 +12,12 @@ import logging
 import os
 import secrets
 import sqlite3
+import threading
 import time
+import uuid
 from collections import Counter
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, Query, Request, Response
@@ -1082,6 +1084,262 @@ def get_watchlist():
         "spreads": list(settings.SPREAD_WATCHLIST),
         "updated_at": None,
     }
+
+
+# ── Backtest job store ───────────────────────────────────────────────────────
+# ── IV history in-memory cache (24h TTL) ─────────────────────────────────────
+# ORATS hist/ivrank is already persisted in SQLite (immutable historical data).
+# This layer avoids even the SQLite lookup on repeated dashboard refreshes.
+_IV_HISTORY_CACHE: dict[str, tuple[float, dict]] = {}
+_IV_HISTORY_CACHE_TTL = 24 * 60 * 60  # seconds
+
+
+@app.get("/api/iv-history")
+def iv_history(
+    symbol: str = Query(..., min_length=1, max_length=10),
+    days: int = Query(default=365, ge=30, le=1095),
+):
+    """Daily IV rank history for a symbol, plus trade entry markers.
+
+    Response shape::
+
+        {
+          "symbol": "AAPL",
+          "days": 365,
+          "iv_history": [
+            {"date": "2024-01-02", "iv_rank_1y": 45.2, "iv_rank_1m": 38.1, "iv": 0.22},
+            ...
+          ],
+          "trade_markers": [
+            {"date": "2024-03-15", "iv_rank": 62.1, "strategy_type": "bull_put_spread", "trade_type": "sell_to_open"},
+            ...
+          ]
+        }
+    """
+    sym = symbol.upper()
+    cache_key = f"{sym}:{days}"
+    now = time.monotonic()
+
+    cached = _IV_HISTORY_CACHE.get(cache_key)
+    if cached and (now - cached[0]) < _IV_HISTORY_CACHE_TTL:
+        return cached[1]
+
+    end_dt = date.today()
+    start_dt = end_dt - timedelta(days=days)
+
+    try:
+        from data.orats_historical import ORATSHistorical
+        raw_rows = ORATSHistorical().get_iv_rank_history(
+            sym, start_dt.isoformat(), end_dt.isoformat(),
+        )
+    except Exception:
+        logger.exception("IV history fetch failed for %s", sym)
+        return JSONResponse(status_code=503, content={"error": "IV history unavailable"})
+
+    # Normalise raw ORATS camelCase fields to friendly snake_case for the frontend.
+    iv_history_points = []
+    for row in raw_rows:
+        trade_date = row.get("tradeDate") or row.get("trade_date") or ""
+        iv_rank_1y = row.get("ivRank1y") or row.get("iv_rank_1y")
+        iv_rank_1m = row.get("ivRank1m") or row.get("iv_rank_1m")
+        iv_raw = row.get("iv")
+        if not trade_date:
+            continue
+        iv_history_points.append({
+            "date": str(trade_date)[:10],
+            "iv_rank_1y": round(float(iv_rank_1y), 1) if iv_rank_1y is not None else None,
+            "iv_rank_1m": round(float(iv_rank_1m), 1) if iv_rank_1m is not None else None,
+            "iv": round(float(iv_raw) * 100, 2) if iv_raw is not None else None,  # as pct
+        })
+
+    iv_history_points.sort(key=lambda x: x["date"])
+
+    # ── Trade entry markers ──────────────────────────────────────────────────
+    trade_markers: list[dict] = []
+    conn = _open_db()
+    if conn is not None:
+        try:
+            repo = TradeRepository(conn)
+            filled = repo.get_filled(underlying=sym)
+            # Only show sell-to-open trades (entries, not exits)
+            for t in filled:
+                if t.get("trade_type") not in ("sell_to_open", "buy_to_open"):
+                    continue
+                filled_date = (t.get("filled_at") or "")[:10]
+                if not filled_date or filled_date < start_dt.isoformat():
+                    continue
+                trade_markers.append({
+                    "date": filled_date,
+                    "iv_rank": round(float(t["iv_rank_at_entry"]), 1)
+                    if t.get("iv_rank_at_entry") is not None else None,
+                    "strategy_type": t.get("strategy_type"),
+                    "trade_type": t.get("trade_type"),
+                })
+        except Exception:
+            logger.warning("Trade marker fetch failed for %s", sym)
+        finally:
+            conn.close()
+
+    result = {
+        "symbol": sym,
+        "days": days,
+        "iv_history": iv_history_points,
+        "trade_markers": trade_markers,
+    }
+    _IV_HISTORY_CACHE[cache_key] = (now, result)
+    return result
+
+
+# Jobs run in background threads. Results are stored in memory until retrieved.
+# Keys: job_id (str) → dict with status/progress/result fields.
+
+_BACKTEST_JOBS: dict[str, dict] = {}
+_BACKTEST_JOBS_LOCK = threading.Lock()
+
+
+def _run_backtest_job(job_id: str, params_dict: dict) -> None:
+    """Background thread target: run the backtest and store result."""
+    from backtesting.engine import BacktestEngine, BacktestParams
+    from dataclasses import asdict
+
+    log_lines: list[str] = []
+
+    def progress(msg: str) -> None:
+        log_lines.append(msg)
+        with _BACKTEST_JOBS_LOCK:
+            if job_id in _BACKTEST_JOBS:
+                _BACKTEST_JOBS[job_id]["progress"] = msg
+                _BACKTEST_JOBS[job_id]["log"] = list(log_lines)
+
+    with _BACKTEST_JOBS_LOCK:
+        _BACKTEST_JOBS[job_id]["status"] = "running"
+
+    try:
+        params = BacktestParams(
+            strategy=params_dict.get("strategy", "bull_put_spread"),
+            symbols=params_dict.get("symbols", ["SPY"]),
+            start_date=params_dict.get("start_date", "2023-01-01"),
+            end_date=params_dict.get("end_date", "2023-12-31"),
+            delta=float(params_dict.get("delta", 0.30)),
+            dte_min=int(params_dict.get("dte_min", 21)),
+            dte_max=int(params_dict.get("dte_max", 45)),
+            ivr_threshold=float(params_dict.get("ivr_threshold", 30.0)),
+            profit_close_pct=float(params_dict.get("profit_close_pct", 0.50)),
+            contracts=int(params_dict.get("contracts", 1)),
+            spread_width_strikes=int(params_dict.get("spread_width_strikes", 5)),
+        )
+
+        engine = BacktestEngine()
+        result = engine.run(params, progress_cb=progress)
+
+        # Serialize trades
+        trades_out = []
+        for t in result.trades:
+            trades_out.append(asdict(t))
+
+        with _BACKTEST_JOBS_LOCK:
+            _BACKTEST_JOBS[job_id].update({
+                "status": "complete",
+                "result": {
+                    "params": result.params,
+                    "total_pnl": result.total_pnl,
+                    "win_rate": result.win_rate,
+                    "avg_trade_pnl": result.avg_trade_pnl,
+                    "max_drawdown": result.max_drawdown,
+                    "avg_duration_days": result.avg_duration_days,
+                    "total_trades": result.total_trades,
+                    "winning_trades": result.winning_trades,
+                    "monthly_returns": result.monthly_returns,
+                    "equity_curve": result.equity_curve,
+                    "trades": trades_out,
+                },
+            })
+
+    except Exception as exc:
+        logger.exception("Backtest job %s failed", job_id)
+        with _BACKTEST_JOBS_LOCK:
+            _BACKTEST_JOBS[job_id].update({
+                "status": "error",
+                "error": str(exc),
+            })
+
+
+@app.post("/api/backtest")
+async def start_backtest(request: Request):
+    """Start a backtest job. Returns a job_id for polling."""
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(status_code=400, content={"error": "invalid JSON body"})
+
+    # Validate required fields
+    strategy = body.get("strategy", "bull_put_spread")
+    from backtesting.engine import SUPPORTED_STRATEGIES
+    if strategy not in SUPPORTED_STRATEGIES:
+        return JSONResponse(
+            status_code=400,
+            content={"error": f"strategy must be one of: {SUPPORTED_STRATEGIES}"},
+        )
+
+    symbols = body.get("symbols", [])
+    if not symbols or not isinstance(symbols, list):
+        return JSONResponse(status_code=400, content={"error": "symbols must be a non-empty list"})
+
+    try:
+        start_date = body["start_date"]
+        end_date = body["end_date"]
+        from datetime import date as _date
+        _date.fromisoformat(start_date)
+        _date.fromisoformat(end_date)
+        if start_date >= end_date:
+            raise ValueError("start_date must be before end_date")
+    except (KeyError, ValueError) as e:
+        return JSONResponse(status_code=400, content={"error": f"Invalid date range: {e}"})
+
+    job_id = str(uuid.uuid4())
+    with _BACKTEST_JOBS_LOCK:
+        _BACKTEST_JOBS[job_id] = {
+            "job_id": job_id,
+            "status": "queued",
+            "progress": "Starting...",
+            "log": [],
+            "result": None,
+            "error": None,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+    t = threading.Thread(
+        target=_run_backtest_job,
+        args=(job_id, body),
+        daemon=True,
+        name=f"backtest-{job_id[:8]}",
+    )
+    t.start()
+
+    return {"job_id": job_id, "status": "queued"}
+
+
+@app.get("/api/backtest/{job_id}")
+def get_backtest_result(job_id: str):
+    """Poll for backtest job status and results."""
+    with _BACKTEST_JOBS_LOCK:
+        job = _BACKTEST_JOBS.get(job_id)
+
+    if job is None:
+        return JSONResponse(status_code=404, content={"error": "job not found"})
+
+    # Return everything except full trade list until complete (to keep response light)
+    response = {
+        "job_id": job["job_id"],
+        "status": job["status"],
+        "progress": job["progress"],
+        "error": job.get("error"),
+        "created_at": job.get("created_at"),
+    }
+    if job["status"] == "complete" and job.get("result"):
+        response["result"] = job["result"]
+
+    return response
 
 
 @app.post("/api/watchlist")

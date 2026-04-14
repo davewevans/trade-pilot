@@ -157,7 +157,11 @@ class BullPutSpreadStrategy:
                 0.0,
             )
 
-        return None, float(net_credit)
+        # Rank by EV score (ORATS-adjusted probability × max_gain - loss risk).
+        # Falls back to net_credit when EV data is unavailable.
+        ev = best.get("ev_score")
+        score = float(ev) if ev is not None else float(net_credit)
+        return None, score
 
     def _check_entry_conditions(self, context: dict) -> str | None:
         """Return a skip reason string, or None if all conditions pass."""
@@ -177,6 +181,12 @@ class BullPutSpreadStrategy:
         dte_earnings = fund.get("days_to_earnings")
         if dte_earnings is not None and dte_earnings <= 25:
             return f"Earnings in {dte_earnings} days (need > 25)"
+
+        iv_hv = (context.get("volatility") or {}).get("iv_hv_ratio")
+        if iv_hv is not None and iv_hv < 0.90:
+            return (
+                f"IV/HV ratio {iv_hv:.2f} < 0.90 — options underpriced for premium selling"
+            )
 
         # Already have an active spread on same underlying (includes
         # PENDING_OPEN / PENDING_CLOSE — must not double-submit).
@@ -275,10 +285,19 @@ class BullPutSpreadStrategy:
         )
 
         # Exit conditions
-        if pnl_pct >= 50:
+        # When vol_of_vol is HIGH, option prices whip around intraday —
+        # take profits sooner (40%) before they evaporate.
+        vov_label = (context.get("volatility") or {}).get("vol_of_vol_label")
+        profit_target_pct = 40 if vov_label == "HIGH" else 50
+
+        if pnl_pct >= profit_target_pct:
             return {
                 "action": "CLOSE",
-                "reasoning": f"Captured {pnl_pct}% of max profit (>= 50% target)",
+                "reasoning": (
+                    f"Captured {pnl_pct}% of max profit "
+                    f"(>= {profit_target_pct}% target"
+                    + (" — tightened due to high vol-of-vol)" if vov_label == "HIGH" else ")")
+                ),
                 "spread_id": self.open_spread_id,
                 "limit_price": round(current_value, 2),
             }
