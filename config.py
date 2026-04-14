@@ -23,17 +23,17 @@ class Settings:
 
         self.BROKER: str = os.getenv("BROKER", "alpaca")
 
-        self.ALPACA_API_KEY: str = self._require("ALPACA_API_KEY")
-        self.ALPACA_SECRET_KEY: str = self._require("ALPACA_SECRET_KEY")
+        self.ALPACA_PAPER1_API_KEY: str = self._require("ALPACA_PAPER1_API_KEY")
+        self.ALPACA_PAPER1_SECRET_KEY: str = self._require("ALPACA_PAPER1_SECRET_KEY")
         self.ALPACA_PAPER: bool = os.getenv("ALPACA_PAPER", "true").lower() == "true"
 
-        # Wheel Strategy account credentials
-        self.ALPACA_WHEEL_API_KEY: str = os.getenv("ALPACA_WHEEL_API_KEY", "")
-        self.ALPACA_WHEEL_SECRET_KEY: str = os.getenv("ALPACA_WHEEL_SECRET_KEY", "")
+        # Paper Account 2 credentials
+        self.ALPACA_PAPER2_API_KEY: str = os.getenv("ALPACA_PAPER2_API_KEY", "")
+        self.ALPACA_PAPER2_SECRET_KEY: str = os.getenv("ALPACA_PAPER2_SECRET_KEY", "")
 
-        # Iron Condor account credentials
-        self.ALPACA_IRON_CONDOR_API_KEY: str = os.getenv("ALPACA_IRON_CONDOR_API_KEY", "")
-        self.ALPACA_IRON_CONDOR_SECRET_KEY: str = os.getenv("ALPACA_IRON_CONDOR_SECRET_KEY", "")
+        # Paper Account 3 credentials
+        self.ALPACA_PAPER3_API_KEY: str = os.getenv("ALPACA_PAPER3_API_KEY", "")
+        self.ALPACA_PAPER3_SECRET_KEY: str = os.getenv("ALPACA_PAPER3_SECRET_KEY", "")
 
         if self.ALPACA_PAPER:
             self.ALPACA_TRADE_URL = "https://paper-api.alpaca.markets"
@@ -142,13 +142,13 @@ class Settings:
     }
 
     # Maps each strategy to its account's env var names.
-    # Three strategies share the default account (ALPACA_API_KEY).
+    # Three strategies share Paper Account 1 (ALPACA_PAPER1_API_KEY).
     STRATEGY_ACCOUNT_MAP: dict[str, tuple[str, str]] = {
-        "wheel":              ("ALPACA_WHEEL_API_KEY",       "ALPACA_WHEEL_SECRET_KEY"),
-        "iron_condor":        ("ALPACA_IRON_CONDOR_API_KEY", "ALPACA_IRON_CONDOR_SECRET_KEY"),
-        "bull_put_spread":    ("ALPACA_API_KEY",             "ALPACA_SECRET_KEY"),
-        "bear_call_spread":   ("ALPACA_API_KEY",             "ALPACA_SECRET_KEY"),
-        "long_call_vertical": ("ALPACA_API_KEY",             "ALPACA_SECRET_KEY"),
+        "wheel":              ("ALPACA_PAPER2_API_KEY", "ALPACA_PAPER2_SECRET_KEY"),
+        "iron_condor":        ("ALPACA_PAPER3_API_KEY", "ALPACA_PAPER3_SECRET_KEY"),
+        "bull_put_spread":    ("ALPACA_PAPER1_API_KEY", "ALPACA_PAPER1_SECRET_KEY"),
+        "bear_call_spread":   ("ALPACA_PAPER1_API_KEY", "ALPACA_PAPER1_SECRET_KEY"),
+        "long_call_vertical": ("ALPACA_PAPER1_API_KEY", "ALPACA_PAPER1_SECRET_KEY"),
     }
 
     def get_broker_credentials(self, strategy_name: str) -> tuple[str, str]:

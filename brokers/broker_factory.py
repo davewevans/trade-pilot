@@ -33,7 +33,7 @@ def get_broker() -> BaseBroker:
     from config import settings
     if settings.BROKER != "alpaca":
         raise ValueError(f"Unknown broker: {settings.BROKER}")
-    return make_broker_cached(settings.ALPACA_API_KEY, settings.ALPACA_SECRET_KEY)
+    return make_broker_cached(settings.ALPACA_PAPER1_API_KEY, settings.ALPACA_PAPER1_SECRET_KEY)
 
 
 def make_broker(strategy_name: str) -> BaseBroker:

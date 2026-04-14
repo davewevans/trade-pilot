@@ -54,8 +54,8 @@ def _record_health(source_name: str, success: bool, detail: str = "") -> None:
             )
 
 _news_client = NewsClient(
-    api_key=settings.ALPACA_API_KEY,
-    secret_key=settings.ALPACA_SECRET_KEY,
+    api_key=settings.ALPACA_PAPER1_API_KEY,
+    secret_key=settings.ALPACA_PAPER1_SECRET_KEY,
 )
 
 

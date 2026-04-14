@@ -68,8 +68,8 @@ Go to your service → Environment → Add the following:
 
 | Variable | Value | Notes |
 |----------|-------|-------|
-| ALPACA_API_KEY | your_key | Paper trading key |
-| ALPACA_SECRET_KEY | your_secret | Paper trading secret |
+| ALPACA_PAPER1_API_KEY | your_key | Paper Account 1 key |
+| ALPACA_PAPER1_SECRET_KEY | your_secret | Paper Account 1 secret |
 | ALPACA_PAPER | true | Keep true until strategy is proven |
 | ANTHROPIC_API_KEY | your_key | Claude API key |
 | FRED_API_KEY | your_key | Risk-free rate |
