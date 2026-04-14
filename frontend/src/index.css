@@ -44,6 +44,17 @@ html, body, #root {
   height: 100%;
 }
 
+aside::-webkit-scrollbar {
+  width: 4px;
+}
+aside::-webkit-scrollbar-track {
+  background: transparent;
+}
+aside::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 2px;
+}
+
 body {
   margin: 0;
   background-color: var(--bg-primary);
