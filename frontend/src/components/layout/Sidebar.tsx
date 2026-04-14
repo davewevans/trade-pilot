@@ -22,6 +22,7 @@ const LEARN_ROUTES = [
   '/options-basics',
   '/trade-lifecycle',
   '/how-it-works',
+  '/how-backtesting-works',
   '/strategies',
   '/guardrails',
   '/circuit-breakers',
@@ -153,6 +154,9 @@ export function Sidebar() {
         </NavLink>
         <NavLink to="/strategies" className={linkClass} style={({ isActive }) => linkStyle(isActive)}>
           Strategies
+        </NavLink>
+        <NavLink to="/how-backtesting-works" className={linkClass} style={({ isActive }) => linkStyle(isActive)}>
+          How Backtesting Works
         </NavLink>
         <NavLink to="/guardrails" className={linkClass} style={({ isActive }) => linkStyle(isActive)}>
           Guardrails

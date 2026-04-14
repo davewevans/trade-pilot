@@ -7,6 +7,7 @@ import { ReasoningExplorer } from './pages/ReasoningExplorer'
 import { Guardrails } from './pages/Guardrails'
 import { Strategies } from './pages/Strategies'
 import { HowItWorks } from './pages/HowItWorks'
+import { HowBacktestingWorks } from './pages/HowBacktestingWorks'
 import { OptionsBasics } from './pages/OptionsBasics'
 import { TradeLifecycle } from './pages/TradeLifecycle'
 import { SkipReasons } from './pages/SkipReasons'
@@ -35,6 +36,7 @@ export function App() {
           <Route path="/guardrails" element={<Guardrails />} />
           <Route path="/strategies" element={<Strategies />} />
           <Route path="/how-it-works" element={<HowItWorks />} />
+          <Route path="/how-backtesting-works" element={<HowBacktestingWorks />} />
           <Route path="/options-basics" element={<OptionsBasics />} />
           <Route path="/trade-lifecycle" element={<TradeLifecycle />} />
           <Route path="/skip-reasons" element={<SkipReasons />} />
