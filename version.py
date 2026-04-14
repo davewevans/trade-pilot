@@ -5,9 +5,10 @@ section to CHANGELOG.md. Other modules read this via ``settings.VERSION``
 rather than importing this file directly.
 """
 
-VERSION = "1.0.0"
-VERSION_DATE = "2026-04-12"
+VERSION = "1.1.0"
+VERSION_DATE = "2026-04-13"
 VERSION_NOTES = (
-    "Initial release — wheel strategy, four spread strategies, "
-    "circuit breaker, guardrails, dashboard with auth."
+    "Backtesting engine, ORATS expansion (9 endpoints), EV scoring, "
+    "vol-of-vol classification, IV history chart, source health tracking, "
+    "collapsible sidebar, and dashboard circuit breaker reset."
 )
