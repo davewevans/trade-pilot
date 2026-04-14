@@ -674,7 +674,16 @@ export function BacktestIntel() {
         </h1>
         <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
           Live decision-support data surfaced from the backtest database — environment match,
-          similar trades, and backtest vs. reality comparison.
+          similar trades, and backtest vs. reality comparison.{' '}
+          <a
+            href="https://orats.com/university/backtesting-methodology"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline underline-offset-2"
+            style={{ color: 'var(--accent)' }}
+          >
+            Learn about ORATS backtesting methodology →
+          </a>
         </p>
       </div>
 
