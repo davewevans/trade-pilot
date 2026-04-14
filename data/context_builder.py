@@ -409,11 +409,17 @@ class ContextBuilder:
                             candidates = self.build_spread_candidates(
                                 symbol, st, underlying_price=current_price,
                             )
-                            # Enrich all candidates + best_candidate with EV scores
+                            # Enrich all candidates + best_candidate with EV scores.
+                            # Merge skew_percentile (from /cores) into the summary
+                            # dict so _enrich_with_ev can use it for put-selling bonus.
+                            enriched_summary = {
+                                **(orats or {}),
+                                "skew_percentile": cores.get("skew_percentile"),
+                            }
                             _enrich_with_ev(
                                 candidates,
                                 strategy_type=st,
-                                orats_summary=orats or {},
+                                orats_summary=enriched_summary,
                                 monies_rows=monies_rows,
                             )
                             all_candidates[st] = candidates
@@ -1343,6 +1349,28 @@ def compute_ev_score(
     }
 
 
+def _skew_percentile_adj(skew_percentile: float | None, is_put_seller: bool) -> float:
+    """Return an EV score additive bonus (in dollars) based on skew richness.
+
+    For put-selling strategies, high skew_percentile means OTM puts are
+    trading at unusually high vol relative to history → premium sellers get
+    paid more than average.  For call-selling (bear call spread) the
+    skew_percentile signal is irrelevant — it measures put skew, not call skew.
+
+    Thresholds are conservative: a 0.10 bonus moves a 0.50-EV candidate to
+    0.60, enough to prefer a high-skew symbol when two are otherwise equal.
+    """
+    if skew_percentile is None or not is_put_seller:
+        return 0.0
+    if skew_percentile >= 80:
+        return 0.10   # puts very rich vs 1-year history — strong seller edge
+    if skew_percentile >= 60:
+        return 0.05   # puts elevated — modest seller edge
+    if skew_percentile <= 20:
+        return -0.03  # puts cheap — slight penalty (selling underpriced fear)
+    return 0.0
+
+
 def _enrich_with_ev(
     candidates_result: dict,
     strategy_type: str,
@@ -1352,7 +1380,8 @@ def _enrich_with_ev(
     """Mutate a ``build_spread_candidates`` result in-place: add EV fields.
 
     Enriches every candidate in ``candidates_result["candidates"]`` with the
-    output of ``compute_ev_score()``, then re-selects ``best_candidate`` using
+    output of ``compute_ev_score()``, then applies a skew-percentile bonus for
+    put-selling strategies, and re-selects ``best_candidate`` using the final
     EV score as the primary sort key.
 
     Iron condor candidates are enriched on each leg and the combined entry
@@ -1361,6 +1390,9 @@ def _enrich_with_ev(
     from data.context_builder import ContextBuilder  # avoid circular for _pick*
 
     raw_candidates: list[dict] = candidates_result.get("candidates", [])
+
+    # Skew percentile bonus: pull from orats_summary (merged in at call site)
+    skew_pct = orats_summary.get("skew_percentile")
 
     # Determine option_type for the EV computation
     if strategy_type == "bull_put_spread":
@@ -1372,11 +1404,16 @@ def _enrich_with_ev(
     else:  # iron_condor — treat put/call sides separately below
         otype = "put"
 
+    is_put_seller = strategy_type in ("bull_put_spread", "wheel_csp")
+    skew_adj = _skew_percentile_adj(skew_pct, is_put_seller)
+
     for c in raw_candidates:
-        # Iron condor candidates may be mixed put+call; detect by presence of
-        # the iron_condor_legs structure rather than individual candidates.
         ev = compute_ev_score(c, otype, orats_summary, monies_rows)
         c.update(ev)
+        # Apply skew-percentile bonus on top of monies-derived EV score
+        if skew_adj != 0.0 and c.get("ev_score") is not None:
+            c["ev_score"] = round(c["ev_score"] + skew_adj, 2)
+        c["skew_percentile_adj"] = round(skew_adj, 4)
 
     # Re-elect best_candidate using ev_score
     if strategy_type == "iron_condor":
@@ -1384,10 +1421,19 @@ def _enrich_with_ev(
         put_candidates = [c for c in raw_candidates if (c.get("short_leg") or {}).get("delta", 0) < 0]
         call_candidates = [c for c in raw_candidates if (c.get("short_leg") or {}).get("delta", 0) > 0]
 
-        # Enrich call candidates separately (use "call" otype for skew direction)
+        # Enrich call candidates with their own EV (no skew bonus on call side)
+        put_skew_adj = _skew_percentile_adj(skew_pct, is_put_seller=True)
         for c in call_candidates:
             ev = compute_ev_score(c, "call", orats_summary, monies_rows)
             c.update(ev)
+            c["skew_percentile_adj"] = 0.0  # call side unaffected by put skew
+
+        # Apply put-side skew bonus (put_candidates already enriched in loop above)
+        if put_skew_adj != 0.0:
+            for c in put_candidates:
+                if c.get("ev_score") is not None:
+                    c["ev_score"] = round(c["ev_score"] + put_skew_adj, 2)
+                c["skew_percentile_adj"] = round(put_skew_adj, 4)
 
         best_put = ContextBuilder._pick_best(put_candidates)
         best_call = ContextBuilder._pick_best(call_candidates)

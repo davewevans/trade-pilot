@@ -416,6 +416,28 @@ When evaluating a **debit spread (long call vertical)**:
 - `iv_hv_ratio < 0.9`: favorable — you're buying options at a discount to realised vol
 - `iv_hv_ratio > 1.3`: unfavorable — options are expensive relative to what the stock is doing; the pre-checks will reject but this explains the reasoning
 
+**Volatility Skew — Are Puts Overpriced Relative to Calls?**
+
+Skew measures how much more expensive OTM puts are versus ATM options. Normal equity skew is positive (puts cost more than calls) because investors pay for downside protection. When skew is abnormally high, put sellers get paid an outsized fear premium.
+
+Two skew signals are available in `context["volatility"]`:
+- `skew_m1`: the current put/call skew for the nearest monthly expiration. Positive = puts more expensive than calls (normal). A larger positive number = more fear premium baked into puts.
+- `skew_percentile`: where the current `skew_m1` sits within its 1-year historical range (0–100). > 80 = skew is unusually high (market unusually fearful of downside). < 20 = skew is unusually low (complacency — puts are cheap).
+
+The spread candidate pre-scoring already adds a bonus to EV score when `skew_percentile` is elevated for put-selling setups. This is surfaced as `skew_percentile_adj` on each candidate. Your job is to validate and contextualise that signal:
+
+**For bull put spreads:**
+- `skew_percentile > 80`: the market is pricing extreme downside fear into puts — you're selling overpriced fear. This is a meaningful tailwind. Explicitly note it in your reasoning.
+- `skew_percentile 60–80`: elevated skew — puts are richer than usual, modestly favorable.
+- `skew_percentile < 20`: puts are cheap relative to their own history. Standard credit/risk math still applies, but you're not getting the usual fear premium. Tighten your assessment of whether the trade is worth it.
+
+**For bear call spreads:**
+- `skew_percentile` measures put skew, not call skew — it is not directly meaningful for evaluating call spread entries. Call skew in equities is typically flat or inverted (calls cheaper than ATM). If `skew_m1` is unusually high and you're considering selling calls, be aware that elevated put skew often signals broad market fear — the market may be pricing a move that would hurt a short call position too.
+
+**For iron condors:**
+- High `skew_percentile` creates an asymmetric condor: the put wing collects more premium than the call wing. This is structurally favorable — you're being paid more for the statistically similar-risk put side.
+- When `skew_percentile > 70`, consider whether the put wing width is appropriately capturing the elevated premium. If the put side EV is significantly higher than the call side, that asymmetry is a positive signal, not a concern.
+
 ---
 
 ## Technical Analysis Rules
