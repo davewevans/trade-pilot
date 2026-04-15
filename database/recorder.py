@@ -286,6 +286,7 @@ _SPREAD_OPEN_TRADE_TYPE = {
     "bull_put_spread":     "SELL_BULL_PUT_SPREAD",
     "bear_call_spread":    "SELL_BEAR_CALL_SPREAD",
     "iron_condor":         "SELL_IRON_CONDOR",
+    "iron_butterfly":      "SELL_IRON_BUTTERFLY",
     "long_call_vertical":  "BUY_LONG_CALL_VERTICAL",
     "calendar_spread":     "BUY_CALENDAR_SPREAD",
 }
