@@ -49,5 +49,12 @@
   },
   "iv_environment": {
     "allowed": ["LOW", "MODERATE"]
+  },
+  "alpaca_notes": {
+    "mleg_supported": true,
+    "different_expirations": true,
+    "rolling_supported": true,
+    "rolling_implementation": "deferred_to_phase_4",
+    "rolling_note": "Roll short leg as single atomic mleg: buy_to_close old short + sell_to_open new short"
   }
 }
