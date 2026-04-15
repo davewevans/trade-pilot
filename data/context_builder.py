@@ -611,7 +611,7 @@ class ContextBuilder:
         result: dict = {
             "underlying": underlying_symbol,
             "underlying_price": underlying_price,
-            "strategy_type": "short_strangle",
+            "strategy_type": "strangle",
             "candidates": [],
             "best_candidate": None,
         }
