@@ -40,7 +40,8 @@ class ShortStrangleStrategy:
         self.cb_status_at_entry: str | None = None
         self.state = ShortStrangleState.IDLE
         self.open_spread_id: str | None = None
-        self.pending_order_id: str | None = None
+        self.pending_order_id: str | None = None       # put leg order ID
+        self.pending_call_order_id: str | None = None  # call leg order ID
 
         self._state_path = settings.SNAPSHOTS_DIR / "short_strangle_state.json"
         self._load_state()
@@ -55,6 +56,7 @@ class ShortStrangleStrategy:
             self.state = ShortStrangleState(data.get("state", "IDLE"))
             self.open_spread_id = data.get("open_spread_id")
             self.pending_order_id = data.get("pending_order_id")
+            self.pending_call_order_id = data.get("pending_call_order_id")
         except Exception:
             logger.exception("Failed to load short strangle state — starting IDLE")
 
@@ -64,12 +66,159 @@ class ShortStrangleStrategy:
             "state": self.state.value,
             "open_spread_id": self.open_spread_id,
             "pending_order_id": self.pending_order_id,
+            "pending_call_order_id": self.pending_call_order_id,
             "updated_at": datetime.now().isoformat(timespec="seconds"),
         })
 
     def reconcile_pending(self) -> None:
-        from strategies._spread_lifecycle import reconcile_pending_state
-        reconcile_pending_state(self)
+        """Custom two-order reconciliation for strangle entry.
+
+        PENDING_CLOSE delegates to the shared lifecycle (standard mleg close).
+        PENDING_OPEN checks both put and call orders independently — both must
+        fill for the strangle to be OPEN. If one fills and the other dies, the
+        filled leg is closed immediately to avoid an orphaned naked position.
+        """
+        if self.state == ShortStrangleState.PENDING_CLOSE:
+            from strategies._spread_lifecycle import reconcile_pending_state
+            reconcile_pending_state(self)
+            return
+
+        if self.state != ShortStrangleState.PENDING_OPEN:
+            return
+
+        put_id = self.pending_order_id
+        call_id = self.pending_call_order_id
+
+        if not put_id or not call_id:
+            logger.warning(
+                "ShortStrangle in PENDING_OPEN but missing order IDs "
+                "(put=%s, call=%s) — leaving for manual review",
+                put_id, call_id,
+            )
+            return
+
+        try:
+            put_order = self.broker.get_order(put_id)
+            call_order = self.broker.get_order(call_id)
+        except Exception:
+            logger.warning(
+                "ShortStrangle reconcile: get_order failed — will retry next cycle",
+                exc_info=True,
+            )
+            return
+
+        put_status = str(put_order.get("status", "")).lower()
+        call_status = str(call_order.get("status", "")).lower()
+        put_filled = put_status == "filled"
+        call_filled = call_status == "filled"
+        put_dead = put_status in ("canceled", "cancelled", "rejected", "expired")
+        call_dead = call_status in ("canceled", "cancelled", "rejected", "expired")
+
+        # ── Both filled → OPEN ──────────────────────────────
+        if put_filled and call_filled:
+            put_price = put_order.get("filled_avg_price")
+            call_price = call_order.get("filled_avg_price")
+            combined_credit = None
+            if put_price is not None and call_price is not None:
+                combined_credit = abs(float(put_price)) + abs(float(call_price))
+
+            if self.spread_tracker and self.open_spread_id:
+                self.spread_tracker.mark_open(
+                    self.open_spread_id,
+                    fill_price=-combined_credit if combined_credit else None,
+                )
+            self.state = ShortStrangleState.OPEN
+            self.pending_order_id = None
+            self.pending_call_order_id = None
+            self._save_state()
+            logger.info(
+                "ShortStrangle reconcile: BOTH legs filled → OPEN "
+                "(put=%s, call=%s, combined_credit=%.2f)",
+                put_id, call_id, combined_credit or 0,
+            )
+            from strategies._spread_lifecycle import _record_spread_open_to_db
+            _record_spread_open_to_db(
+                self, self.open_spread_id, put_id,
+                -combined_credit if combined_credit else None,
+            )
+            return
+
+        # ── One filled, other dead → close filled leg, revert IDLE ──
+        if (put_filled and call_dead) or (call_filled and put_dead):
+            filled_side = "put" if put_filled else "call"
+            filled_id = put_id if put_filled else call_id
+            filled_symbol = None
+
+            if self.spread_tracker and self.open_spread_id:
+                spread = self.spread_tracker._find(self.open_spread_id)
+                if spread:
+                    for leg in spread.get("legs", []):
+                        if leg.get("order_id") == filled_id:
+                            filled_symbol = leg.get("symbol")
+                            break
+
+            dead_status = call_status if put_filled else put_status
+            logger.warning(
+                "ShortStrangle reconcile: %s leg filled but other leg %s — "
+                "closing filled leg to avoid orphaned naked position",
+                filled_side, dead_status,
+            )
+
+            if filled_symbol:
+                try:
+                    self.broker.place_order(
+                        symbol=filled_symbol,
+                        qty=1,
+                        side="buy",
+                        order_type="market",
+                        time_in_force="day",
+                    )
+                    logger.info(
+                        "Submitted buy-to-close for orphaned %s leg: %s",
+                        filled_side, filled_symbol,
+                    )
+                except Exception:
+                    logger.exception(
+                        "CRITICAL: Failed to close orphaned %s leg %s — "
+                        "MANUAL INTERVENTION REQUIRED",
+                        filled_side, filled_symbol,
+                    )
+
+            if self.spread_tracker and self.open_spread_id:
+                self.spread_tracker.cancel_pending_open(
+                    self.open_spread_id,
+                    reason=f"partial_fill_{filled_side}_only",
+                )
+            self.state = ShortStrangleState.IDLE
+            self.open_spread_id = None
+            self.pending_order_id = None
+            self.pending_call_order_id = None
+            self._save_state()
+            return
+
+        # ── Both dead → revert IDLE ──────────────────────────
+        if put_dead and call_dead:
+            if self.spread_tracker and self.open_spread_id:
+                self.spread_tracker.cancel_pending_open(
+                    self.open_spread_id,
+                    reason=f"both_legs_failed_put_{put_status}_call_{call_status}",
+                )
+            self.state = ShortStrangleState.IDLE
+            self.open_spread_id = None
+            self.pending_order_id = None
+            self.pending_call_order_id = None
+            self._save_state()
+            logger.warning(
+                "ShortStrangle reconcile: both legs failed (put=%s, call=%s) → IDLE",
+                put_status, call_status,
+            )
+            return
+
+        # Still pending — wait for next cycle
+        logger.debug(
+            "ShortStrangle reconcile: still pending (put=%s, call=%s)",
+            put_status, call_status,
+        )
 
     def get_state(self) -> ShortStrangleState:
         return self.state
@@ -295,27 +444,72 @@ class ShortStrangleStrategy:
     # ── execution ───────────────────────────────────────────
 
     def execute_entry(self, decision: dict) -> bool:
-        """Place the 2-leg mleg order and register with spread_tracker."""
-        legs = [
-            {"symbol": decision["put_symbol"], "side": "sell",
-             "ratio_qty": 1, "position_intent": "sell_to_open"},
-            {"symbol": decision["call_symbol"], "side": "sell",
-             "ratio_qty": 1, "position_intent": "sell_to_open"},
-        ]
+        """Place two separate single-leg sell orders for the strangle.
 
+        Alpaca rejects mleg orders with two uncovered short legs (Level 3
+        restriction). Entry is therefore NOT atomic — one leg could fill while
+        the other is rejected. reconcile_pending() handles the partial-fill
+        case by immediately closing any orphaned filled leg.
+        """
+        put_symbol = decision["put_symbol"]
+        call_symbol = decision["call_symbol"]
+        put_limit = decision.get("put_limit_price") or decision.get("limit_price")
+        call_limit = decision.get("call_limit_price") or decision.get("limit_price")
+
+        # ── Leg 1: Short Put ────────────────────────────────
         try:
-            order = self.broker.place_mleg_order(
-                legs=legs,
-                order_type="limit",
-                limit_price=decision["limit_price"],
+            put_order = self.broker.place_order(
+                symbol=put_symbol,
                 qty=1,
+                side="sell",
+                order_type="limit",
+                time_in_force="day",
+                limit_price=put_limit,
             )
         except Exception:
-            logger.exception("Failed to place short strangle order")
+            logger.exception("Failed to place short put order for strangle")
             return False
 
-        order_id = order.get("id")
-        logger.info("Short strangle order placed: %s", order_id)
+        put_order_id = put_order.get("id")
+        logger.info("Short strangle PUT leg submitted: %s", put_order_id)
+
+        # ── Leg 2: Short Call ───────────────────────────────
+        try:
+            call_order = self.broker.place_order(
+                symbol=call_symbol,
+                qty=1,
+                side="sell",
+                order_type="limit",
+                time_in_force="day",
+                limit_price=call_limit,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to place short call order for strangle — "
+                "attempting to cancel put order %s", put_order_id,
+            )
+            try:
+                self.broker.cancel_order(put_order_id)
+                logger.info("Cancelled orphaned put order %s", put_order_id)
+            except Exception:
+                logger.exception(
+                    "CRITICAL: Could not cancel orphaned put order %s — "
+                    "manual intervention required", put_order_id,
+                )
+            return False
+
+        call_order_id = call_order.get("id")
+        logger.info("Short strangle CALL leg submitted: %s", call_order_id)
+
+        # ── Register with spread tracker ────────────────────
+        legs = [
+            {"symbol": put_symbol, "side": "sell",
+             "ratio_qty": 1, "position_intent": "sell_to_open",
+             "order_id": put_order_id},
+            {"symbol": call_symbol, "side": "sell",
+             "ratio_qty": 1, "position_intent": "sell_to_open",
+             "order_id": call_order_id},
+        ]
 
         if self.spread_tracker:
             spread_id = self.spread_tracker.register_spread(
@@ -325,16 +519,29 @@ class ShortStrangleStrategy:
                 entry_credit=abs(decision.get("total_credit", 0)),
                 entry_date=datetime.now().date().isoformat(),
                 expiration=decision.get("expiration", ""),
-                max_loss=None,  # undefined risk
+                max_loss=0,  # undefined risk — no defined max loss
                 max_gain=abs(decision.get("total_credit", 0)) * 100,
-                entry_order_id=order_id,
+                entry_order_id=put_order_id,  # primary ID for lifecycle tracking
                 cb_status_at_entry=self.cb_status_at_entry,
             )
             self.open_spread_id = spread_id
 
-        self.pending_order_id = order_id
+        self.pending_order_id = put_order_id
+        self.pending_call_order_id = call_order_id
         self.state = ShortStrangleState.PENDING_OPEN
         self._save_state()
+
+        if self.state_writer:
+            try:
+                self.state_writer.write_decision(
+                    decision_dict=decision,
+                    reasoning=decision.get("reasoning", ""),
+                    action_taken=True,
+                    underlying=decision.get("underlying", ""),
+                )
+            except Exception:
+                logger.warning("Failed to write short strangle decision snapshot")
+
         return True
 
     def execute_exit(self, spread_id: str, limit_price: float | None = None) -> bool:

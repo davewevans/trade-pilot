@@ -45,6 +45,14 @@ SKIP if any condition fails. This is an undefined-risk strategy —
 stricter criteria than credit spreads. Explain all passing and
 failing conditions in your reasoning.
 
+## Order Execution Note
+
+This strategy enters as **two separate single-leg limit orders** (one for the
+put, one for the call) because Alpaca does not permit multi-leg orders with
+two uncovered short legs. Provide an individual limit price for each leg based
+on the mid-price of that option. The combined `limit_price` field is kept for
+reference and guardrail validation.
+
 ## Required Response Format (JSON only):
 ```json
 {
@@ -56,11 +64,14 @@ failing conditions in your reasoning.
   "put_credit": 0.0,
   "call_credit": 0.0,
   "total_credit": 0.0,
+  "put_limit_price": 0.0,
+  "call_limit_price": 0.0,
   "limit_price": 0.0,
   "reasoning": "str",
   "skip_reason": null
 }
 ```
 
-IMPORTANT: limit_price must be NEGATIVE (net credit received).
-For example, -2.50 means you receive $2.50 combined credit.
+IMPORTANT: All limit prices must be NEGATIVE (credits received).
+For example, put_limit_price -1.30 means you receive $1.30 for the put leg.
+limit_price is the combined total (put_limit_price + call_limit_price).
