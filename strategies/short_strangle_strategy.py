@@ -266,34 +266,23 @@ class ShortStrangleStrategy:
                 "limit_price": round(current_value, 2),
             }
 
-        # Stop loss: current value >= 200% of original credit (leg doubled)
-        if original_credit > 0 and current_value >= original_credit * 2:
+        # Stop loss: current value >= 150% of original credit (tighter than IC — undefined risk)
+        if original_credit > 0 and current_value >= original_credit * 1.5:
             return {
                 "action": "CLOSE",
                 "reasoning": (
-                    f"Stop loss: current value ${current_value:.2f} >= 200% of "
+                    f"Stop loss: current value ${current_value:.2f} >= 150% of "
                     f"entry credit ${original_credit:.2f}"
                 ),
                 "spread_id": self.open_spread_id,
                 "limit_price": round(current_value, 2),
             }
 
-        # Max loss: unrealized loss > 1× original credit
-        if original_credit > 0 and (current_value - original_credit) > original_credit:
+        # DTE <= 10: gamma risk amplified without wing protection (exit earlier than IC)
+        if dte_remaining is not None and dte_remaining <= 10:
             return {
                 "action": "CLOSE",
-                "reasoning": (
-                    f"Max loss exceeded: unrealized loss > 1× original credit ${original_credit:.2f}"
-                ),
-                "spread_id": self.open_spread_id,
-                "limit_price": round(current_value, 2),
-            }
-
-        # DTE <= 14: gamma risk amplified without wing protection
-        if dte_remaining is not None and dte_remaining <= 14:
-            return {
-                "action": "CLOSE",
-                "reasoning": f"DTE {dte_remaining} <= 14 (gamma risk — no wing protection)",
+                "reasoning": f"DTE {dte_remaining} <= 10 (gamma risk — no wing protection)",
                 "spread_id": self.open_spread_id,
                 "limit_price": round(current_value, 2),
             }
