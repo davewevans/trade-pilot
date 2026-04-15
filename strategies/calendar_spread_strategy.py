@@ -5,6 +5,26 @@ Net debit paid. Profits from theta differential (short decays faster)
 and positive contango (short-term IV < long-term IV).
 
 State persisted in ``settings.SNAPSHOTS_DIR / "calendar_spread_state.json"``.
+
+# NOTE (Alpaca compatibility, confirmed 2026-04-15):
+# Calendar spread mleg orders with different-expiration legs are supported.
+# Alpaca's official calendar spread tutorial demonstrates this pattern.
+# The execute_entry method below correctly uses place_mleg_order with
+# sell_to_open (near-term) and buy_to_open (far-term) legs at different
+# expirations encoded in their OCC symbols — this is valid as an mleg order
+# because the buy_to_open leg covers the sell_to_open leg.
+#
+# Rolling the short leg is also possible as a single atomic mleg order:
+#   buy_to_close (old short leg) + sell_to_open (new short leg, next expiry)
+# This avoids closing the long leg and preserves its time value.
+# See: https://alpaca.markets/learn/calendar-spread
+#
+# TODO: Implement true short-leg rolling as a single atomic mleg order.
+# Alpaca supports this: buy_to_close old short + sell_to_open new short
+# in one mleg order. This avoids closing the long leg and preserves its
+# time value. Currently the ROLL_SHORT action is returned by management
+# but the execution path falls back to close-and-reopen. Deferred to
+# Phase 4 (calendar rolling enhancement).
 """
 
 import json

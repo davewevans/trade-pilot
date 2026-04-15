@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
-import { ACCOUNTS } from '../api/client'
 import { useDecisions } from '../hooks/useDecisions'
+import { useAccounts } from '../hooks/useAccounts'
 import { Badge } from '../components/shared/Badge'
 import { EmptyState } from '../components/shared/EmptyState'
 import { LoadingSpinner } from '../components/shared/LoadingSpinner'
@@ -142,6 +142,7 @@ export function DecisionLog() {
   const [underlying, setUnderlying] = useState<string>('')
   const [action, setAction] = useState<string>('')
   const [expanded, setExpanded] = useState<number | null>(null)
+  const { accounts } = useAccounts()
 
   const params = useMemo(() => ({
     account: account || undefined,
@@ -173,8 +174,8 @@ export function DecisionLog() {
             }}
           >
             <option value="">All</option>
-            {ACCOUNTS.map((a) => (
-              <option key={a.account} value={a.account}>{a.label}</option>
+            {accounts.map((a) => (
+              <option key={a.account_id} value={a.account_id}>{a.label}</option>
             ))}
           </select>
         </label>

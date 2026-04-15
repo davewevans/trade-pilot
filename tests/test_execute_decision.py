@@ -1,8 +1,22 @@
 """Tests for main.execute_decision — roll and close actions."""
 
+import pytest
 from unittest.mock import MagicMock
 
+from config import settings
 from main import execute_decision
+
+
+@pytest.fixture(autouse=True)
+def _dry_run(monkeypatch):
+    """Keep DRY_RUN=True for all tests in this module.
+
+    execute_decision's inline fill confirmation (30-second sleep + broker
+    get_order call) is gated on DRY_RUN=False.  With DRY_RUN=True the
+    confirmation step is skipped entirely, so tests remain fast and the
+    result dict is not mutated with fill_price / fill_status keys.
+    """
+    monkeypatch.setattr(settings, "DRY_RUN", True)
 
 
 def _mk_broker(place_returns=None):

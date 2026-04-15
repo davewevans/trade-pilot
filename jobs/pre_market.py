@@ -90,6 +90,65 @@ def run() -> None:
     except Exception:
         logger.warning("Failed to check/cancel stale orders", exc_info=True)
 
+    # ── Validate wheel state against NTA events ─────────────
+    try:
+        from strategies.wheel_strategy import WheelStrategy
+        wheel_strategy = WheelStrategy(broker)
+
+        nta_events = broker.get_account_activities(
+            ["OPASN", "OPEXP", "OPEXC"],
+        )
+
+        for event in nta_events:
+            act_type = event.get("activity_type", "")
+            symbol = event.get("symbol", "")
+
+            # Extract underlying root from OCC symbol (letters before first digit)
+            underlying = ""
+            for ch in symbol:
+                if ch.isalpha():
+                    underlying += ch
+                else:
+                    break
+            underlying = underlying.upper()
+
+            if not underlying or underlying not in settings.WATCHLIST:
+                continue
+
+            current_state = wheel_strategy.get_current_state(underlying)
+
+            if act_type == "OPASN":
+                # Assignment happened — wheel should be transitioning to LONG_STOCK
+                if current_state.value == "SHORT_PUT":
+                    logger.warning(
+                        "NTA CORRECTION: %s was assigned (OPASN) but "
+                        "state machine says SHORT_PUT. Positions will "
+                        "be re-read on next cycle to correct.",
+                        underlying,
+                    )
+                elif current_state.value == "SHORT_CALL":
+                    logger.warning(
+                        "NTA CORRECTION: %s call was assigned (OPASN) — "
+                        "shares called away. State machine says "
+                        "SHORT_CALL, will re-read positions.",
+                        underlying,
+                    )
+
+            elif act_type == "OPEXP":
+                # Option expired — position should have been cleared
+                if current_state.value in ("SHORT_PUT", "SHORT_CALL"):
+                    logger.info(
+                        "NTA: %s option expired (OPEXP) while in %s — "
+                        "position should be cleared. Will verify on "
+                        "next cycle.",
+                        underlying, current_state.value,
+                    )
+
+    except Exception:
+        logger.warning(
+            "Wheel NTA state validation failed (non-fatal)", exc_info=True,
+        )
+
     # ── Batch IV rank screen (one ORATS call) ───────────────
     briefing_lines: list[str] = []
     iv_ranks: dict[str, dict] = {}

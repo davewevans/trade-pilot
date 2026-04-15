@@ -7,6 +7,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-04-15
+
+### Added
+- **Iron Butterfly strategy** (`strategies/iron_butterfly_strategy.py`) — sells ATM put + ATM
+  call at the same center strike with OTM wings for protection. Defined-risk credit strategy
+  with higher premium than iron condor but narrower profit zone. NEUTRAL + HIGH IV only.
+  Assigned to Paper Account 4 (inactive until tested). Valid as single mleg order because
+  wings cover both short legs.
+- **Iron butterfly guardrails** — ATM short-strike validation ensures both short legs share the
+  same center strike before order submission.
+- **Calendar Spread strategy** (`strategies/calendar_spread_strategy.py`) — buys a longer-dated
+  ATM option and sells a shorter-dated ATM option at the same strike. First vega-positive strategy
+  in trade-pilot. NEUTRAL/BULL + LOW/MODERATE IV. Assigned to Paper Account 5 (inactive until
+  tested).
+- **Paper Accounts 4, 5, 6** added to account configuration with dedicated API keys.
+- **Account configuration system** (`AccountManager`) — centralises per-account API key loading
+  and strategy assignment; accounts are no longer hard-coded in job files.
+- **Strategy definition JSON files** — each strategy now declares its entry rules, thresholds,
+  and eligibility criteria in a JSON definition file; the strategy router and guardrails read
+  from these files rather than hard-coded constants.
+- **Account management API endpoints** — `/api/accounts` exposes account list and assignment;
+  frontend renders accounts dynamically instead of from a hard-coded list.
+- **Strategy name display** on `AccountCard` component — shows which strategy is assigned to
+  each paper account.
+- **Startup reconciler** — on service start, open trades with `PENDING_*` state are reconciled
+  against Alpaca to recover from restarts that interrupted an in-flight order.
+- **Fill quality and NTA events endpoints** — `/api/fill-quality` and `/api/nta-events` expose
+  order fill analysis and near-the-ask event counts; both rendered in the frontend.
+- **Option snapshot batching** — large symbol lists are split into batches before calling the
+  Alpaca option snapshot endpoint to avoid request-size limits.
+- **Strategy params injected into prompt templates** — `inject_strategy_params()` replaces
+  placeholder tokens in Claude prompt files with live values before each API call, removing the
+  need to hard-code thresholds inside prompt text.
+
+### Changed
+- **Strategy router** now reads eligibility criteria directly from strategy definition files
+  rather than per-strategy conditional logic in the router module.
+- **Guardrails** now read all numeric thresholds from strategy definition files.
+- **Strategies page** and scheduler wired for Iron Butterfly (Paper Account 4) and Calendar
+  Spread (Paper Account 5).
+- **ORATS caches migrated from in-memory to SQLite** — cache survives service restarts,
+  eliminating cold-start API storms after Render redeploys.
+
+### Fixed
+- Option snapshots now handle large symbol lists without hitting Alpaca payload limits.
+- Short strangle entry corrected to submit two single-leg orders (Alpaca mleg rules reject two
+  uncovered sell-to-open legs in a single order) — partial-fill risk was still unacceptable,
+  which is why the strategy was ultimately replaced by Iron Butterfly.
+
+### Removed
+- **Short Strangle strategy** — replaced by Iron Butterfly. Alpaca's Level 3 mleg rules reject
+  orders with two uncovered sell-to-open legs, making the strangle's entry non-atomic with
+  unacceptable partial-fill risk.
+
 ## [1.2.0] - 2026-04-14
 
 ### Added

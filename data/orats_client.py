@@ -12,6 +12,7 @@ from typing import Optional
 import requests
 
 from config import settings
+from data.orats_cache import ORATSCache
 
 logger = logging.getLogger(__name__)
 
@@ -22,12 +23,7 @@ _CORES_TTL = 6 * 3600
 _STRIKES_TTL = 15 * 60
 _MONIES_TTL = 30 * 60
 
-_summary_cache: dict[str, tuple[float, dict]] = {}
-_earnings_cache: dict[str, tuple[float, dict]] = {}
-_ivrank_cache: dict[str, tuple[float, dict]] = {}
-_cores_cache: dict[str, tuple[float, dict]] = {}
-_strikes_cache: dict[str, tuple[float, list]] = {}
-_monies_cache: dict[str, tuple[float, list]] = {}
+_cache = ORATSCache()
 
 
 class ORATSClient:
@@ -46,11 +42,9 @@ class ORATSClient:
         move, and term structure fields.  Cached for 30 minutes.
         Returns None on failure.
         """
-        cached = _summary_cache.get(symbol)
-        if cached:
-            ts, data = cached
-            if time.monotonic() - ts < _SUMMARY_TTL:
-                return data
+        cached = _cache.get("summaries", symbol.upper(), _SUMMARY_TTL)
+        if cached is not None:
+            return cached
 
         try:
             resp = requests.get(
@@ -99,7 +93,7 @@ class ORATSClient:
                 "rip": self._safe_float(row.get("rip")),
             }
 
-            _summary_cache[symbol] = (time.monotonic(), result)
+            _cache.set("summaries", symbol.upper(), result, _SUMMARY_TTL)
             logger.info(
                 "ORATS summary for %s: iv_rank_1y=%.1f atm_iv_m1=%.3f "
                 "skew_m1=%.3f implied_move=%.1f%%",
@@ -126,11 +120,9 @@ class ORATSClient:
         Returns ``{next_earnings_date, after_close, days_to_earnings}``
         or None on failure.  Cached for 6 hours.
         """
-        cached = _earnings_cache.get(symbol)
-        if cached:
-            ts, data = cached
-            if time.monotonic() - ts < _EARNINGS_TTL:
-                return data
+        cached = _cache.get("earnings", symbol.upper(), _EARNINGS_TTL)
+        if cached is not None:
+            return cached
 
         try:
             resp = requests.get(
@@ -169,7 +161,7 @@ class ORATSClient:
                     "days_to_earnings": (ed - today).days,
                 }
 
-            _earnings_cache[symbol] = (time.monotonic(), result)
+            _cache.set("earnings", symbol.upper(), result, _EARNINGS_TTL)
             logger.info(
                 "ORATS earnings for %s: date=%s days=%s",
                 symbol, result["next_earnings_date"], result["days_to_earnings"],
@@ -191,12 +183,11 @@ class ORATSClient:
             return {}
 
         result: dict[str, dict] = {}
-        now = time.monotonic()
         misses: list[str] = []
         for sym in symbols:
-            cached = _ivrank_cache.get(sym.upper())
-            if cached and now - cached[0] < _IVRANK_TTL:
-                result[sym.upper()] = cached[1]
+            cached = _cache.get("ivrank", sym.upper(), _IVRANK_TTL)
+            if cached is not None:
+                result[sym.upper()] = cached
             else:
                 misses.append(sym.upper())
 
@@ -231,7 +222,7 @@ class ORATSClient:
                     "ivRank1m": self._safe_float(row.get("ivRank1m")),
                     "ivPct1m": self._safe_float(row.get("ivPct1m")),
                 }
-                _ivrank_cache[ticker] = (time.monotonic(), entry)
+                _cache.set("ivrank", ticker, entry, _IVRANK_TTL)
                 result[ticker] = entry
 
         return result
@@ -242,9 +233,9 @@ class ORATSClient:
         Cached for 6 hours. Returns None on failure.
         """
         key = symbol.upper()
-        cached = _cores_cache.get(key)
-        if cached and time.monotonic() - cached[0] < _CORES_TTL:
-            return cached[1]
+        cached = _cache.get("cores", key, _CORES_TTL)
+        if cached is not None:
+            return cached
 
         try:
             resp = requests.get(
@@ -297,7 +288,7 @@ class ORATSClient:
                 "confidence": self._safe_float(row.get("confidence")),
                 "r_squared": self._safe_float(row.get("rSquared")),
             }
-            _cores_cache[key] = (time.monotonic(), result)
+            _cache.set("cores", key, result, _CORES_TTL)
             return result
 
         except Exception:
@@ -319,11 +310,9 @@ class ORATSClient:
         Cached for 30 minutes per symbol. Returns an empty list on failure.
         """
         key = symbol.upper()
-        cached = _monies_cache.get(key)
-        if cached:
-            ts, data = cached
-            if time.monotonic() - ts < _MONIES_TTL:
-                return data
+        cached = _cache.get("monies", key, _MONIES_TTL)
+        if cached is not None:
+            return cached
 
         try:
             resp = requests.get(
@@ -357,7 +346,7 @@ class ORATSClient:
                 entry[field] = self._safe_float(row.get(field))
             normalized.append(entry)
 
-        _monies_cache[key] = (time.monotonic(), normalized)
+        _cache.set("monies", key, normalized, _MONIES_TTL)
         logger.info(
             "ORATS monies for %s: %d expiration rows fetched", key, len(normalized),
         )
@@ -388,9 +377,9 @@ class ORATSClient:
             raise ValueError(f"option_type must be 'put' or 'call', got {option_type!r}")
 
         cache_key = f"{symbol.upper()}|{side}|{delta_min}|{delta_max}|{dte_min}|{dte_max}"
-        cached = _strikes_cache.get(cache_key)
-        if cached and time.monotonic() - cached[0] < _STRIKES_TTL:
-            return cached[1]
+        cached = _cache.get("strikes", cache_key, _STRIKES_TTL)
+        if cached is not None:
+            return cached
 
         # Puts come back with negative deltas — invert and swap the bounds.
         if side == "put":
@@ -453,7 +442,7 @@ class ORATSClient:
                 "opt_value": opt_value,
             })
 
-        _strikes_cache[cache_key] = (time.monotonic(), contracts)
+        _cache.set("strikes", cache_key, contracts, _STRIKES_TTL)
         return contracts
 
     def get_snapshots_by_strike(

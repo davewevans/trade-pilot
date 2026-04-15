@@ -1,0 +1,60 @@
+{
+  "name": "calendar_spread",
+  "display_name": "Calendar Spread",
+  "description": "Buy a longer-dated ATM option and sell a shorter-dated ATM option at the same strike. Profits from differential time decay and IV expansion. Vega positive — complements high-IV strategies.",
+  "type": "calendar",
+  "composite": false,
+  "risk_type": "defined",
+  "multi_expiration": true,
+  "entry": {
+    "option_type": "put",
+    "strike_selection": "atm",
+    "short_dte_min": 20,
+    "short_dte_max": 40,
+    "long_dte_min": 50,
+    "long_dte_max": 90,
+    "min_dte_spread": 25,
+    "max_net_debit": 3.00,
+    "min_net_debit": 0.50,
+    "iv_rank_max": 30,
+    "earnings_buffer_days": 45,
+    "min_open_interest": 200,
+    "max_bid_ask_spread_pct": 15,
+    "max_risk_pct_of_bp": 2,
+    "max_concurrent_positions": 2,
+    "underlying_near_strike": true,
+    "min_avg_daily_volume": 2000000
+  },
+  "management": {
+    "profit_target_pct": 25,
+    "stop_loss_pct": 50,
+    "short_leg_roll_dte_threshold": 7,
+    "max_rolls": 2,
+    "roll_same_strike": true,
+    "close_long_dte_threshold": 10,
+    "close_if_underlying_moves_beyond_strike_pct": 5
+  },
+  "guardrails": {
+    "short_dte_hard_min": 14,
+    "short_dte_hard_max": 50,
+    "long_dte_hard_min": 40,
+    "long_dte_hard_max": 120,
+    "min_net_debit_hard": 0.25,
+    "max_net_debit_hard": 5.00,
+    "max_risk_hard_pct_of_bp": 3,
+    "max_rolls_hard": 3
+  },
+  "regime": {
+    "allowed": ["NEUTRAL", "BULL"]
+  },
+  "iv_environment": {
+    "allowed": ["LOW", "MODERATE"]
+  },
+  "alpaca_notes": {
+    "mleg_supported": true,
+    "different_expirations": true,
+    "rolling_supported": true,
+    "rolling_implementation": "deferred_to_phase_4",
+    "rolling_note": "Roll short leg as single atomic mleg: buy_to_close old short + sell_to_open new short"
+  }
+}

@@ -1,5 +1,8 @@
 # Commands
 
+## Repository folder
+cd C:\Users\davew\repos\trade-pilot
+
 ## Backend (FastAPI)
 
 Activate the virtual environment first:

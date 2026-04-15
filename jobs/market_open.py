@@ -34,7 +34,9 @@ def run() -> None:
     from main import execute_decision
     from strategies.bear_call_spread_strategy import BearCallSpreadStrategy
     from strategies.bull_put_spread_strategy import BullPutSpreadStrategy
+    from strategies.calendar_spread_strategy import CalendarSpreadStrategy
     from strategies.circuit_breaker import CircuitBreaker
+    from strategies.iron_butterfly_strategy import IronButterflyStrategy
     from strategies.guardrails import Guardrails
     from strategies.iron_condor_strategy import IronCondorStrategy
     from strategies.long_call_vertical_strategy import LongCallVerticalStrategy
@@ -141,6 +143,31 @@ def run() -> None:
         "bear_call_spread": BearCallSpreadStrategy(broker=default_broker, state_writer=sw, spread_tracker=tracker, recorder=recorder),
         "long_call_vertical": LongCallVerticalStrategy(broker=default_broker, state_writer=sw, spread_tracker=tracker, recorder=recorder),
     }
+
+    # Paper Account 4 — Iron Butterfly (inactive until tested; only wired when active)
+    _am = settings.get_account_manager()
+    _paper4 = _am.get_account("paper_4") if _am else None
+    if _paper4 and _paper4.get("status") == "active":
+        try:
+            paper4_broker = make_broker("iron_butterfly")
+        except ValueError:
+            logger.warning("Iron butterfly account credentials not set — using default")
+            paper4_broker = broker
+        spread_strategies["iron_butterfly"] = IronButterflyStrategy(
+            broker=paper4_broker, state_writer=sw, spread_tracker=tracker, recorder=recorder,
+        )
+
+    # Paper Account 5 — Calendar Spread (inactive until tested; only wired when active)
+    _paper5 = _am.get_account("paper_5") if _am else None
+    if _paper5 and _paper5.get("status") == "active":
+        try:
+            paper5_broker = make_broker("calendar_spread")
+        except ValueError:
+            logger.warning("Calendar spread account credentials not set — using default")
+            paper5_broker = broker
+        spread_strategies["calendar_spread"] = CalendarSpreadStrategy(
+            broker=paper5_broker, state_writer=sw, spread_tracker=tracker, recorder=recorder,
+        )
     # Stamp current circuit-breaker color on each strategy so any spread
     # opened this cycle records the CB status it was entered under.
     for _s in spread_strategies.values():
@@ -637,9 +664,11 @@ def run() -> None:
 
 _GUARDRAIL_MAP = {
     "iron_condor": "validate_iron_condor_entry",
+    "iron_butterfly": "validate_iron_butterfly_entry",
     "bull_put_spread": "validate_bull_put_spread_entry",
     "bear_call_spread": "validate_bear_call_spread_entry",
     "long_call_vertical": "validate_long_call_vertical_entry",
+    "calendar_spread": "validate_calendar_spread_entry",
 }
 
 
@@ -662,6 +691,8 @@ def _handle_spread_open(
     open_spreads = tracker.get_active_spreads(strategy_type=name)
     if name == "iron_condor":
         is_valid, rejection = validator(decision, context, account, open_condors=open_spreads)
+    elif name == "iron_butterfly":
+        is_valid, rejection = validator(decision, context, account, open_butterflies=open_spreads)
     else:
         is_valid, rejection = validator(decision, context, account, open_spreads=open_spreads)
 

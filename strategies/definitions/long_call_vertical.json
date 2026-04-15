@@ -1,0 +1,39 @@
+{
+  "name": "long_call_vertical",
+  "display_name": "Long Call Vertical",
+  "description": "Debit spread buying an ATM/ITM call and selling an OTM call. Profits on bullish moves in low IV environments.",
+  "type": "spread",
+  "composite": false,
+  "entry": {
+    "long_delta_min": 0.45,
+    "long_delta_max": 0.60,
+    "dte_min": 30,
+    "dte_max": 60,
+    "max_net_debit": 2.00,
+    "min_net_debit": 0.20,
+    "earnings_buffer_days_beyond_dte": 5,
+    "require_cahold_signal": true,
+    "above_sma_50": true,
+    "max_risk_pct_of_bp": 1,
+    "max_concurrent_positions": 2
+  },
+  "management": {
+    "profit_target_pct": 50,
+    "stop_loss_pct": 100,
+    "close_dte_threshold": 7,
+    "delta_double_check": true
+  },
+  "guardrails": {
+    "dte_hard_min": 25,
+    "dte_hard_max": 65,
+    "min_net_debit_hard": 0.10,
+    "max_net_debit_hard": 3.00,
+    "max_risk_hard_pct_of_bp": 2
+  },
+  "regime": {
+    "allowed": ["BULL"]
+  },
+  "iv_environment": {
+    "allowed": ["LOW"]
+  }
+}

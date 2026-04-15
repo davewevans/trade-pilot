@@ -26,13 +26,13 @@ net credit. Profit if the underlying stays below the short call strike.
 OPEN if ALL of the following:
 1. confirmed_market_regime is BEAR or NEUTRAL
 2. iv_rank >= 40
-3. days_to_earnings > 25
+3. days_to_earnings > {{earnings_buffer_days}}
 4. days_to_ex_dividend > DTE (must avoid early assignment at ex-div)
-5. best_candidate.spread_yield >= 0.001 AND net_credit >= $0.30
-6. best_candidate.credit_to_width_ratio >= 0.15
+5. best_candidate.spread_yield >= 0.001 AND net_credit >= ${{min_net_credit}}
+6. best_candidate.credit_to_width_ratio >= {{credit_to_width_min}}
 7. best_candidate.liquidity_ok is true
-8. DTE between 21 and 40
-9. Short call delta between 0.20 and 0.30
+8. DTE between {{dte_min}} and {{dte_max}}
+9. Short call delta between {{short_delta_min}} and {{short_delta_max}}
 10. Bearish technical justification: underlying at resistance,
     below 50-day SMA, or RSI >= 60 (overbought)
 11. Prefer entry when iv_overvalued_label is "OVERVALUED". Hard skip

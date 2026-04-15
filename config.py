@@ -35,6 +35,18 @@ class Settings:
         self.ALPACA_PAPER3_API_KEY: str = os.getenv("ALPACA_PAPER3_API_KEY", "")
         self.ALPACA_PAPER3_SECRET_KEY: str = os.getenv("ALPACA_PAPER3_SECRET_KEY", "")
 
+        # Paper Account 4 credentials
+        self.ALPACA_PAPER4_API_KEY: str = os.getenv("ALPACA_PAPER4_API_KEY", "")
+        self.ALPACA_PAPER4_SECRET_KEY: str = os.getenv("ALPACA_PAPER4_SECRET_KEY", "")
+
+        # Paper Account 5 credentials
+        self.ALPACA_PAPER5_API_KEY: str = os.getenv("ALPACA_PAPER5_API_KEY", "")
+        self.ALPACA_PAPER5_SECRET_KEY: str = os.getenv("ALPACA_PAPER5_SECRET_KEY", "")
+
+        # Paper Account 6 credentials
+        self.ALPACA_PAPER6_API_KEY: str = os.getenv("ALPACA_PAPER6_API_KEY", "")
+        self.ALPACA_PAPER6_SECRET_KEY: str = os.getenv("ALPACA_PAPER6_SECRET_KEY", "")
+
         if self.ALPACA_PAPER:
             self.ALPACA_TRADE_URL = "https://paper-api.alpaca.markets"
             self.ALPACA_STREAM_URL = "wss://paper-api.alpaca.markets/stream"
@@ -97,8 +109,21 @@ class Settings:
         else:
             log.info("Running in LOCAL mode")
 
+    def get_account_manager(self):
+        """Return the AccountManager singleton (lazy init).
+
+        Prefer this over direct AccountManager imports to share a single instance.
+        """
+        if not hasattr(self, "_account_manager"):
+            from data.account_manager import AccountManager
+            self._account_manager = AccountManager()
+        return self._account_manager
+
     def _load_watchlist(self) -> None:
-        """Load WATCHLIST and SPREAD_WATCHLIST from data/watchlist.json."""
+        """Load WATCHLIST and SPREAD_WATCHLIST from data/watchlist.json.
+
+        # DEPRECATED: Watchlists now live in account_config.json per account.
+        """
         watchlist_path = self.DATA_DIR / "watchlist.json"
         if watchlist_path.exists():
             try:
@@ -143,12 +168,15 @@ class Settings:
 
     # Maps each strategy to its account's env var names.
     # Three strategies share Paper Account 1 (ALPACA_PAPER1_API_KEY).
+    # DEPRECATED: Use AccountManager instead. Will be removed in v1.1.
     STRATEGY_ACCOUNT_MAP: dict[str, tuple[str, str]] = {
         "wheel":              ("ALPACA_PAPER2_API_KEY", "ALPACA_PAPER2_SECRET_KEY"),
         "iron_condor":        ("ALPACA_PAPER3_API_KEY", "ALPACA_PAPER3_SECRET_KEY"),
         "bull_put_spread":    ("ALPACA_PAPER1_API_KEY", "ALPACA_PAPER1_SECRET_KEY"),
         "bear_call_spread":   ("ALPACA_PAPER1_API_KEY", "ALPACA_PAPER1_SECRET_KEY"),
         "long_call_vertical": ("ALPACA_PAPER1_API_KEY", "ALPACA_PAPER1_SECRET_KEY"),
+        "iron_butterfly":     ("ALPACA_PAPER4_API_KEY", "ALPACA_PAPER4_SECRET_KEY"),
+        "calendar_spread":    ("ALPACA_PAPER5_API_KEY", "ALPACA_PAPER5_SECRET_KEY"),
     }
 
     def get_broker_credentials(self, strategy_name: str) -> tuple[str, str]:

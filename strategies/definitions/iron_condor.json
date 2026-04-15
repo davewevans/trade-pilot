@@ -1,0 +1,41 @@
+{
+  "name": "iron_condor",
+  "display_name": "Iron Condor",
+  "description": "Sell an OTM put spread + OTM call spread simultaneously. Profits when the underlying stays range-bound in high IV.",
+  "type": "spread",
+  "composite": false,
+  "entry": {
+    "put_short_delta_min": 0.15,
+    "put_short_delta_max": 0.25,
+    "call_short_delta_min": 0.15,
+    "call_short_delta_max": 0.25,
+    "dte_min": 20,
+    "dte_max": 50,
+    "min_total_credit": 1.00,
+    "shorts_outside_implied_move": true,
+    "earnings_buffer_days": 30,
+    "iv_rank_min": 50,
+    "vix_min": 18,
+    "vix_max": 35,
+    "max_loss_pct_of_bp": 5,
+    "max_concurrent_positions": 2
+  },
+  "management": {
+    "profit_target_pct": 50,
+    "stop_loss_pct": 200,
+    "close_dte_threshold": 7,
+    "delta_double_check": true
+  },
+  "guardrails": {
+    "dte_hard_min": 15,
+    "dte_hard_max": 55,
+    "min_total_credit_hard": 0.50,
+    "max_loss_hard_pct_of_bp": 8
+  },
+  "regime": {
+    "allowed": ["NEUTRAL"]
+  },
+  "iv_environment": {
+    "allowed": ["HIGH"]
+  }
+}

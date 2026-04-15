@@ -13,6 +13,7 @@ import json
 import logging
 import logging.handlers
 import sys
+import time
 
 logger = logging.getLogger("trade-pilot")
 
@@ -72,16 +73,84 @@ def execute_decision(broker, decision: dict) -> dict | None:
         decision: Validated recommendation dict.
 
     Returns:
-        The order result dict, or None for hold/skip. Fill data is
-        not captured here — pending orders are reconciled in a
-        separate pass (see jobs/reconcile_orders.py).
+        The order result dict (possibly augmented with fill_price /
+        fill_status after the inline 30-second confirmation window),
+        or None for hold/skip/aborted rolls.
     """
+    from config import settings
+
     action = decision["action"]
 
     if action in ("hold", "skip"):
         return None
 
     result: dict | None = None
+
+    def _confirm_fill(order_result: dict | None, *, limit_price_used=None) -> str | None:
+        """Wait 30 s then check order fill status.
+
+        Skipped entirely when DRY_RUN is True or when *order_result*
+        has no order id.  Updates *order_result* in-place with
+        ``fill_price`` and ``fill_status`` keys so callers can log
+        accurate data.
+
+        Returns the broker status string (lowercase) or None if the
+        check was skipped or failed.
+        """
+        if settings.DRY_RUN:
+            return None
+        order_id = (order_result or {}).get("id")
+        if not order_id:
+            return None
+
+        time.sleep(30)
+        try:
+            order_status = broker.get_order(order_id)
+            fill_price = order_status.get("filled_avg_price")
+            status = str(order_status.get("status", "")).lower()
+
+            if status == "filled":
+                logger.info(
+                    "Order %s FILLED at %s (requested %s)",
+                    order_id, fill_price, limit_price_used,
+                )
+                # Fix 5: log fill-vs-limit slippage
+                if fill_price is not None and limit_price_used is not None:
+                    try:
+                        slippage = float(fill_price) - float(limit_price_used)
+                        logger.info(
+                            "Fill slippage: %+.2f (fill=%.2f, limit=%.2f) on %s",
+                            slippage, float(fill_price), float(limit_price_used),
+                            decision.get("symbol", ""),
+                        )
+                    except (TypeError, ValueError):
+                        pass
+            elif status in ("canceled", "cancelled", "rejected"):
+                logger.warning(
+                    "Order %s was %s — trade did NOT execute. Reason: %s",
+                    order_id, status,
+                    order_status.get("reject_reason", "unknown"),
+                )
+            elif status in ("new", "accepted", "pending_new", "partially_filled"):
+                logger.info(
+                    "Order %s still %s after 30s — "
+                    "will be resolved by market_close reconciler",
+                    order_id, status,
+                )
+
+            # Attach fill data so callers (market_open, position_check) can
+            # record accurate fill prices without waiting for market_close.
+            if order_result is not None:
+                order_result["fill_price"] = fill_price
+                order_result["fill_status"] = status
+            return status
+        except Exception:
+            logger.warning(
+                "Could not confirm fill for order %s — "
+                "will be resolved by market_close reconciler",
+                order_id, exc_info=True,
+            )
+            return None
 
     if action in ("sell_put", "sell_call"):
         result = broker.place_order(
@@ -92,6 +161,7 @@ def execute_decision(broker, decision: dict) -> dict | None:
             time_in_force="day",
             limit_price=decision.get("limit_price"),
         )
+        _confirm_fill(result, limit_price_used=decision.get("limit_price"))
 
     elif action == "close":
         # Buy-to-close the existing short option position.
@@ -103,6 +173,7 @@ def execute_decision(broker, decision: dict) -> dict | None:
             time_in_force="day",
             limit_price=decision.get("limit_price"),
         )
+        _confirm_fill(result, limit_price_used=decision.get("limit_price"))
 
     elif action == "roll":
         # Roll = buy-to-close existing short option, then sell-to-open replacement.
@@ -132,6 +203,14 @@ def execute_decision(broker, decision: dict) -> dict | None:
             return None
         logger.info("Roll: buy-to-close %s submitted (order %s)", existing_symbol, close_id)
 
+        close_status = _confirm_fill(close_result, limit_price_used=close_limit)
+        if close_status in ("canceled", "cancelled", "rejected"):
+            logger.warning(
+                "Roll: close leg %s was %s — NOT placing replacement sell order",
+                close_id, close_status,
+            )
+            return None
+
         open_result = broker.place_order(
             symbol=decision["symbol"],
             qty=decision["qty"],
@@ -142,6 +221,7 @@ def execute_decision(broker, decision: dict) -> dict | None:
         )
         open_id = (open_result or {}).get("id")
         logger.info("Roll: sell-to-open %s submitted (order %s)", decision["symbol"], open_id)
+        _confirm_fill(open_result, limit_price_used=decision.get("limit_price"))
         result = open_result
 
     else:
@@ -206,6 +286,20 @@ def validate_startup() -> None:
         sys.exit(1)
 
     logger.info("Startup validation passed")
+
+    # Resolve any pending trades from prior sessions (crashes, Render restarts,
+    # market_close failures) before any new trading decisions are made.
+    try:
+        from database.db import Database
+        from database.recorder import TradeRecorder
+        from jobs.reconcile_orders import reconcile_all_pending
+
+        _db = Database()
+        _db.init_schema()
+        _recorder = TradeRecorder(_db.get_connection())
+        reconcile_all_pending(broker, _recorder)
+    except Exception as e:
+        logger.warning("Startup reconciler failed (non-fatal): %s", e)
 
     # Write initial portfolio snapshots for all accounts so the
     # dashboard has data before the first scheduled cycle runs.

@@ -174,18 +174,18 @@ function InactiveBadge({ color }: { color: string }) {
       border: `1px solid ${color}`,
       marginBottom: '12px',
     }}>
-      INACTIVE — Not linked to an account yet
+      INACTIVE — Account configured, not yet activated for trading
     </span>
   )
 }
 
 const ROUTING_ROWS = [
-  { regime: 'NEUTRAL', iv: 'HIGH (IVR ≥ 50)', strategy: 'Iron Condor', note: 'IV must be overvalued or fair per ORATS forecast' },
-  { regime: 'NEUTRAL', iv: 'HIGH (IVR ≥ 50)', strategy: 'Short Strangle', note: 'Undefined risk — tightest entry criteria' },
-  { regime: 'NEUTRAL', iv: 'LOW or MODERATE', strategy: 'Calendar Spread', note: 'Requires positive contango' },
-  { regime: 'NEUTRAL or BULL', iv: 'MODERATE or HIGH', strategy: 'Bull Put Spread', note: 'Spread yield ≥ 0.1%' },
-  { regime: 'BEAR or NEUTRAL', iv: 'MODERATE or HIGH', strategy: 'Bear Call Spread', note: 'Spread yield ≥ 0.1%' },
-  { regime: 'BULL', iv: 'LOW (IVR < 30)', strategy: 'Long Call Vertical', note: 'IV must not be overvalued per ORATS' },
+  { regime: 'NEUTRAL', iv: 'HIGH (IVR ≥ 50)', strategy: 'Iron Condor (Paper Account 3)', note: 'IV must be overvalued or fair per ORATS forecast' },
+  { regime: 'NEUTRAL', iv: 'HIGH (IVR ≥ 50)', strategy: 'Iron Butterfly (Paper Account 4)', note: 'Higher premium, narrower profit zone — dedicated account' },
+  { regime: 'NEUTRAL or BULL', iv: 'LOW or MODERATE', strategy: 'Calendar Spread (Paper Account 5)', note: 'Requires positive contango' },
+  { regime: 'NEUTRAL or BULL', iv: 'MODERATE or HIGH', strategy: 'Bull Put Spread (Adaptive)', note: 'Spread yield ≥ 0.1%' },
+  { regime: 'BEAR or NEUTRAL', iv: 'MODERATE or HIGH', strategy: 'Bear Call Spread (Adaptive)', note: 'Spread yield ≥ 0.1%' },
+  { regime: 'BULL', iv: 'LOW (IVR < 30)', strategy: 'Long Call Vertical (Adaptive)', note: 'IV must not be overvalued per ORATS' },
   { regime: 'Any (non-CRASH)', iv: 'MODERATE or HIGH', strategy: 'Wheel (CSP → CC)', note: 'Dedicated account' },
   { regime: 'CRASH', iv: 'Any', strategy: 'No new positions', note: '' },
   { regime: 'EUPHORIA', iv: 'Any', strategy: 'Wheel only (cautious)', note: '' },
@@ -375,70 +375,95 @@ export function Strategies() {
         </ul>
       </AccountSection>
 
-      {/* --- Short Strangle --- */}
+      {/* --- Iron Butterfly --- */}
       <AccountSection
-        accent="var(--accent-strangle, var(--yellow, #EAB308))"
-        header="Short Strangle — Premium Collection Without Wings"
-        tagline="Neutral, undefined-risk premium selling. Not yet active."
+        accent="var(--accent-butterfly, var(--purple, #A855F7))"
+        header="Iron Butterfly — Maximum Premium at the Money"
+        tagline="Higher premium than iron condor, tighter profit zone. Not yet active."
       >
-        <InactiveBadge color="var(--yellow, #EAB308)" />
+        <InactiveBadge color="var(--purple, #A855F7)" />
 
         <Prose>
-          A short strangle sells an OTM put and an OTM call on the same underlying and expiration — no
-          protective wings. It collects premium from both sides and profits when the stock stays within
-          a wide range and IV contracts. Unlike an iron condor, there is no cap on potential losses — a
-          large move in either direction creates theoretically unlimited risk. This strategy has the
-          tightest entry criteria of any strategy in the bot.
+          An iron butterfly sells an ATM put and an ATM call at the <strong>same center
+          strike</strong>, then buys an OTM put wing below and an OTM call wing above for
+          protection. All four legs share the same expiration. It is a defined-risk credit
+          strategy — maximum profit is achieved when the underlying closes exactly at the
+          center strike at expiration.
         </Prose>
 
-        <div style={{
-          marginTop: '12px',
-          padding: '12px',
-          borderRadius: '8px',
-          backgroundColor: 'color-mix(in srgb, var(--red) 8%, transparent)',
-          color: 'var(--text-secondary)',
-          borderLeft: '3px solid var(--red)',
-          fontSize: '13px',
-        }}>
-          <strong style={{ color: 'var(--red)' }}>⚠️ Undefined Risk:</strong>{' '}
-          Unlike iron condors, there are no protective wings. A flash crash or gap event can produce
-          losses exceeding the entire premium collected. Maximum position margin is capped at 25% of
-          buying power.
-        </div>
+        <Prose>
+          Compared to the iron condor, both short strikes are ATM instead of OTM. This
+          produces a higher credit but a much narrower profit zone (tent shape vs. plateau
+          shape). Use the butterfly when there is high conviction the underlying will stay
+          very close to a specific price.
+        </Prose>
 
         <Subheading>Entry criteria</Subheading>
         <ul className="space-y-1.5 text-sm" style={{ color: 'var(--text-secondary)' }}>
           <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Market regime: NEUTRAL only</li>
           <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> IV environment: HIGH (IVR ≥ 50)</li>
-          <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> ORATS IV forecast: must be OVERVALUED or FAIR</li>
+          <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> ORATS IV forecast: OVERVALUED or FAIR (never UNDERVALUED)</li>
           <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Term structure: must NOT be in backwardation</li>
-          <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Earnings &gt; 35 days away</li>
-          <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Short put delta: -0.15 to -0.20 (wider than iron condor)</li>
-          <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Short call delta: 0.15 to 0.20</li>
-          <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Both strikes outside 1.5× implied move</li>
-          <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> DTE: 30–50 days</li>
-          <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Both legs OI ≥ 200, bid-ask &lt; 15%</li>
-          <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Spread yield ≥ 0.3% of stock price</li>
+          <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Earnings &gt; 30 days away</li>
+          <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Both short strikes ATM at the same center strike (closest to current price)</li>
+          <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Wing width: $5 on each side (put wing and call wing)</li>
+          <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Total credit ≥ $2.00 (butterfly collects more than a condor)</li>
+          <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Credit-to-width ratio ≥ 30%</li>
+          <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> DTE: 20–45 days</li>
+          <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Both wings: OI ≥ 200, bid-ask &lt; 15%</li>
         </ul>
 
         <Subheading>Risk profile</Subheading>
         <div className="grid gap-3 md:grid-cols-3">
-          <SubCard title="Max profit">Combined premium from both legs.</SubCard>
+          <SubCard title="Max profit">
+            Premium collected. Achieved when the underlying closes exactly at the center strike.
+          </SubCard>
           <SubCard title="Max loss">
-            Theoretically unlimited. Managed through strict delta and stop-loss rules.
+            Wing width minus premium collected. Defined and capped at the wings.
           </SubCard>
           <SubCard title="Break-evens">
-            Put strike minus total credit / Call strike plus total credit.
+            Center strike ± total credit. Narrower than the iron condor.
           </SubCard>
+        </div>
+
+        <Subheading>Iron Condor vs. Iron Butterfly</Subheading>
+        <div
+          className="rounded-lg border overflow-x-auto"
+          style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border)' }}
+        >
+          <table className="w-full text-sm">
+            <thead>
+              <tr style={{ color: 'var(--text-muted)' }} className="text-left text-xs uppercase tracking-wider">
+                <th className="px-4 py-3 font-medium">Feature</th>
+                <th className="px-4 py-3 font-medium">Iron Condor</th>
+                <th className="px-4 py-3 font-medium">Iron Butterfly</th>
+              </tr>
+            </thead>
+            <tbody>
+              {[
+                { feature: 'Short strikes', condor: 'OTM (different strikes)', butterfly: 'ATM (same strike)' },
+                { feature: 'Profit zone', condor: 'Wider plateau', butterfly: 'Narrow tent' },
+                { feature: 'Premium collected', condor: 'Lower', butterfly: 'Higher' },
+                { feature: 'Conviction required', condor: 'Range-bound', butterfly: 'Near specific price' },
+              ].map((r) => (
+                <tr key={r.feature} style={{ borderTop: '1px solid var(--border)', color: 'var(--text-secondary)' }}>
+                  <td className="px-4 py-3 font-medium" style={{ color: 'var(--text-primary)' }}>{r.feature}</td>
+                  <td className="px-4 py-3">{r.condor}</td>
+                  <td className="px-4 py-3">{r.butterfly}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
 
         <Subheading>How the bot manages this position</Subheading>
         <ul className="space-y-1.5 text-sm" style={{ color: 'var(--text-secondary)' }}>
-          <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> <strong>Profit target:</strong> close at 50% of credit collected</li>
-          <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> <strong>Stop loss:</strong> close if either leg reaches 200% of its entry premium</li>
-          <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> <strong>Delta breach:</strong> close if either delta exceeds 0.40</li>
-          <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> <strong>DTE ≤ 14:</strong> close immediately (gamma risk without wings)</li>
-          <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> <strong>Maximum margin:</strong> 25% of buying power per position</li>
+          <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> <strong>50% profit close:</strong> Close when spread value drops to ≤ 50% of original credit.</li>
+          <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> <strong>200% stop loss:</strong> Close when value reaches ≥ 200% of original credit.</li>
+          <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> <strong>DTE ≤ 7:</strong> Close regardless — gamma risk on all 4 legs.</li>
+          <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> <strong>Wing breach:</strong> If the underlying moves beyond a protective wing, close immediately.</li>
+          <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> <strong>Vol-of-vol tightening:</strong> Tighten profit target to 40% when vol-of-vol is HIGH.</li>
+          <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> <strong>Treated as a single unit</strong> — never close or adjust individual legs.</li>
         </ul>
       </AccountSection>
 
@@ -582,7 +607,7 @@ export function Strategies() {
           <SubCard title="Contango">
             Measures short-term IV vs long-term IV. Normal contango (short-term lower) is healthy. When
             the term structure flips to backwardation (short-term higher), it signals near-term fear — the
-            bot blocks iron condor and strangle entries and factors it into regime assessment.
+            bot blocks iron condor entries and factors it into regime assessment.
           </SubCard>
           <SubCard title="Spread Yield">
             Credit received divided by stock price — normalizes premium across different price levels. A

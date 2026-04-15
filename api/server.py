@@ -558,18 +558,172 @@ def portfolio_by_account(account_name: str):
     return data
 
 
-@app.get("/api/accounts")
-def all_accounts():
-    """Return a summary of all three accounts for the dashboard cards.
+@app.get("/api/account-portfolios")
+def all_account_portfolios():
+    """Return a summary of all accounts for the dashboard cards.
 
     Returns a dict keyed by account name. Missing accounts return
     null for that key — the frontend handles the empty state.
+
+    (Renamed from /api/accounts to avoid conflict with account management API.)
     """
     result = {}
     for name in ("wheel", "iron_condor", "spreads"):
         data = _read_json(SNAPSHOTS / f"portfolio_{name}.json")
         result[name] = data  # None if missing — frontend shows "—"
     return result
+
+
+# ── Account Management API ───────────────────────────────────────────────────
+
+
+def _get_account_manager():
+    from data.account_manager import AccountManager
+    return AccountManager()
+
+
+def _account_config_entry(account_id: str, account: dict) -> dict:
+    """Build the response shape for a single account."""
+    from strategies.strategy_loader import load_strategy
+
+    strategy_name = account.get("strategy") or ""
+    strategy_display = None
+    if strategy_name:
+        try:
+            defn = load_strategy(strategy_name)
+            strategy_display = defn.get("display_name", strategy_name)
+        except Exception:
+            strategy_display = strategy_name
+
+    # Check credentials without exposing values
+    key_var = account.get("credentials_key", "")
+    secret_var = account.get("credentials_secret", "")
+    has_credentials = bool(os.getenv(key_var)) and bool(os.getenv(secret_var))
+
+    return {
+        "account_id": account_id,
+        "label": account.get("label", account_id),
+        "strategy": strategy_name or None,
+        "strategy_display_name": strategy_display,
+        "status": account.get("status", "inactive"),
+        "watchlist": account.get("watchlist", []),
+        "screening_overrides": account.get("screening_overrides", {}),
+        "has_credentials": has_credentials,
+    }
+
+
+@app.get("/api/accounts")
+def get_accounts():
+    """Return all accounts with config + list of available strategies."""
+    from strategies.strategy_loader import load_all_strategies
+
+    manager = _get_account_manager()
+    all_accounts = manager.get_all_accounts()
+
+    account_list = [
+        _account_config_entry(aid, acct)
+        for aid, acct in all_accounts.items()
+    ]
+
+    try:
+        available = [
+            {"name": defn["name"], "display_name": defn["display_name"]}
+            for defn in load_all_strategies().values()
+            if not defn.get("composite")
+        ]
+    except Exception:
+        available = []
+
+    return {"accounts": account_list, "available_strategies": available}
+
+
+@app.post("/api/accounts/{account_id}/activate")
+def activate_account(account_id: str):
+    """Activate an account. Returns 400 if no strategy linked, 404 if not found."""
+    manager = _get_account_manager()
+    if manager.get_account(account_id) is None:
+        return JSONResponse(status_code=404, content={"error": f"Account {account_id!r} not found"})
+    success = manager.activate(account_id)
+    if not success:
+        return JSONResponse(
+            status_code=400,
+            content={"error": f"Cannot activate account {account_id!r}: no strategy linked"},
+        )
+    return {"account_id": account_id, "status": "active"}
+
+
+@app.post("/api/accounts/{account_id}/deactivate")
+def deactivate_account(account_id: str):
+    """Deactivate an account. Returns 404 if not found."""
+    manager = _get_account_manager()
+    if manager.get_account(account_id) is None:
+        return JSONResponse(status_code=404, content={"error": f"Account {account_id!r} not found"})
+    manager.deactivate(account_id)
+    return {"account_id": account_id, "status": "inactive"}
+
+
+@app.post("/api/accounts/{account_id}/link-strategy")
+async def link_strategy(account_id: str, request: Request):
+    """Link a strategy to an account (one-time operation)."""
+    manager = _get_account_manager()
+    if manager.get_account(account_id) is None:
+        return JSONResponse(status_code=404, content={"error": f"Account {account_id!r} not found"})
+
+    try:
+        body = await request.json()
+        strategy_name = body.get("strategy", "")
+    except Exception:
+        return JSONResponse(status_code=400, content={"error": "Invalid JSON body"})
+
+    if not strategy_name:
+        return JSONResponse(status_code=400, content={"error": "Missing 'strategy' field"})
+
+    ok, err = manager.link_strategy(account_id, strategy_name)
+    if not ok:
+        return JSONResponse(status_code=400, content={"error": err})
+
+    return {"account_id": account_id, "strategy": strategy_name}
+
+
+@app.get("/api/accounts/{account_id}/screening-filters")
+def get_screening_filters(account_id: str):
+    """Return screening filters for an account (stub — full implementation in Phase 2)."""
+    manager = _get_account_manager()
+    if manager.get_account(account_id) is None:
+        return JSONResponse(status_code=404, content={"error": f"Account {account_id!r} not found"})
+    # TODO: Full implementation in Prompt 2.4 (ScreeningFilters.get_all_effective)
+    return {"filters": {}}
+
+
+@app.put("/api/accounts/{account_id}/screening-filters")
+async def update_screening_filters(account_id: str, request: Request):
+    """Update screening filter overrides for an account (stub — full implementation in Phase 2)."""
+    manager = _get_account_manager()
+    if manager.get_account(account_id) is None:
+        return JSONResponse(status_code=404, content={"error": f"Account {account_id!r} not found"})
+    # TODO: Full implementation in Prompt 2.4 (ScreeningFilters.validate_overrides)
+    return {"filters": {}}
+
+
+@app.put("/api/accounts/{account_id}/watchlist")
+async def update_watchlist(account_id: str, request: Request):
+    """Update per-account watchlist. Body: {\"watchlist\": [\"AAPL\", \"MSFT\"]}."""
+    manager = _get_account_manager()
+    if manager.get_account(account_id) is None:
+        return JSONResponse(status_code=404, content={"error": f"Account {account_id!r} not found"})
+
+    try:
+        body = await request.json()
+        watchlist = body.get("watchlist", [])
+    except Exception:
+        return JSONResponse(status_code=400, content={"error": "Invalid JSON body"})
+
+    if not isinstance(watchlist, list):
+        return JSONResponse(status_code=400, content={"error": "'watchlist' must be a list"})
+
+    manager.update_watchlist(account_id, watchlist)
+    account = manager.get_account(account_id)
+    return {"account_id": account_id, "watchlist": account.get("watchlist", [])}
 
 
 @app.get("/api/equity-history")
@@ -1380,6 +1534,237 @@ async def update_watchlist(request: Request):
         len(wheel), len(iron_condor), len(spreads),
     )
     return data
+
+
+# ── Fill Quality ─────────────────────────────────────────────────────────────
+
+
+def _compute_fill_quality(
+    conn: sqlite3.Connection,
+    strategy_types: list[str] | None,
+    days: int,
+) -> dict:
+    """Compute per-fill slippage stats from trades that have both prices."""
+    _empty = {
+        "trades_analyzed": 0,
+        "avg_slippage": 0.0,
+        "median_slippage": 0.0,
+        "total_slippage_dollars": 0.0,
+        "positive_slippage_count": 0,
+        "negative_slippage_count": 0,
+        "exact_fill_count": 0,
+        "worst_slippage": 0.0,
+        "best_slippage": 0.0,
+        "recent_fills": [],
+    }
+
+    params: list = []
+    extra = ""
+    if strategy_types:
+        placeholders = ",".join(["?"] * len(strategy_types))
+        extra += f" AND strategy_type IN ({placeholders})"
+        params.extend(strategy_types)
+
+    cutoff = (date.today() - timedelta(days=days)).isoformat()
+    extra += " AND filled_at >= ?"
+    params.append(cutoff)
+
+    rows = conn.execute(
+        f"""
+        SELECT symbol, underlying, strategy_type, limit_price,
+               fill_price, filled_at
+          FROM trades
+         WHERE fill_status = 'filled'
+           AND fill_price IS NOT NULL
+           AND limit_price IS NOT NULL
+           AND limit_price > 0
+           {extra}
+         ORDER BY filled_at DESC
+        """,
+        params,
+    ).fetchall()
+    rows = [dict(r) for r in rows]
+
+    if len(rows) < 2:
+        return _empty
+
+    slippages: list[float] = []
+    pos_count = neg_count = exact_count = 0
+
+    for r in rows:
+        try:
+            fp = float(r["fill_price"])
+            lp = float(r["limit_price"])
+        except (TypeError, ValueError):
+            continue
+        slip = fp - lp
+        slippages.append(slip)
+        if slip > 0:
+            pos_count += 1
+        elif slip < 0:
+            neg_count += 1
+        else:
+            exact_count += 1
+
+    if not slippages:
+        return _empty
+
+    avg_slip = sum(slippages) / len(slippages)
+    s = sorted(slippages)
+    n = len(s)
+    median_slip = s[n // 2] if n % 2 else (s[n // 2 - 1] + s[n // 2]) / 2
+    total_dollars = sum(sl * 100 for sl in slippages)
+
+    recent_fills = []
+    for r in rows[:20]:
+        try:
+            fp = float(r["fill_price"])
+            lp = float(r["limit_price"])
+            recent_fills.append({
+                "symbol": r.get("symbol", ""),
+                "underlying": r.get("underlying", ""),
+                "strategy_type": r.get("strategy_type", ""),
+                "limit_price": round(lp, 4),
+                "fill_price": round(fp, 4),
+                "slippage": round(fp - lp, 4),
+                "filled_at": r.get("filled_at", ""),
+            })
+        except (TypeError, ValueError):
+            continue
+
+    return {
+        "trades_analyzed": len(slippages),
+        "avg_slippage": round(avg_slip, 4),
+        "median_slippage": round(median_slip, 4),
+        "total_slippage_dollars": round(total_dollars, 2),
+        "positive_slippage_count": pos_count,
+        "negative_slippage_count": neg_count,
+        "exact_fill_count": exact_count,
+        "worst_slippage": round(max(slippages), 4),
+        "best_slippage": round(min(slippages), 4),
+        "recent_fills": recent_fills,
+    }
+
+
+@app.get("/api/fill-quality")
+def fill_quality(
+    account: str | None = Query(default=None),
+    days: int = Query(default=30, ge=1, le=365),
+):
+    """Fill quality stats: slippage between limit_price and actual fill_price."""
+    _empty = {
+        "trades_analyzed": 0,
+        "avg_slippage": 0.0,
+        "median_slippage": 0.0,
+        "total_slippage_dollars": 0.0,
+        "positive_slippage_count": 0,
+        "negative_slippage_count": 0,
+        "exact_fill_count": 0,
+        "worst_slippage": 0.0,
+        "best_slippage": 0.0,
+        "recent_fills": [],
+    }
+    conn = _open_db()
+    if conn is None:
+        return _empty
+    try:
+        return _compute_fill_quality(conn, _strategy_filter(account), days)
+    except Exception:
+        logger.exception("fill-quality computation failed")
+        return _empty
+    finally:
+        conn.close()
+
+
+# ── NTA Events ───────────────────────────────────────────────────────────────
+
+
+def _extract_underlying_from_occ(symbol: str) -> str:
+    """Extract root ticker from an OCC option symbol (leading alpha chars)."""
+    root = ""
+    for ch in symbol:
+        if ch.isalpha():
+            root += ch
+        else:
+            break
+    return root.upper()
+
+
+@app.get("/api/nta-events")
+def nta_events(days: int = Query(default=7, ge=1, le=90)):
+    """Recent assignment / expiry / exercise events from the wheel broker."""
+    _TYPE_MAP = {
+        "OPASN": "assignment",
+        "OPEXP": "expiry",
+        "OPEXC": "exercise",
+    }
+    try:
+        from brokers.broker_factory import get_broker
+        broker = get_broker()
+
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+        activities = broker.get_account_activities(
+            ["OPASN", "OPEXP", "OPEXC"],
+            after=cutoff.isoformat(),
+        )
+
+        events = []
+        for act in activities:
+            raw_type = act.get("activity_type", "")
+            event_type = _TYPE_MAP.get(raw_type, raw_type.lower())
+            symbol = act.get("symbol", "")
+            underlying = _extract_underlying_from_occ(symbol)
+
+            price_raw = act.get("price") or act.get("per_share_amount")
+            try:
+                price = float(price_raw) if price_raw is not None else None
+            except (TypeError, ValueError):
+                price = None
+
+            try:
+                qty = int(act.get("qty") or 0)
+            except (TypeError, ValueError):
+                qty = 0
+
+            date_raw = act.get("date") or act.get("transaction_time") or ""
+            event_date = str(date_raw)[:10] if date_raw else ""
+
+            events.append({
+                "type": event_type,
+                "symbol": symbol,
+                "underlying": underlying,
+                "qty": qty,
+                "price": price,
+                "date": event_date,
+                "raw_type": raw_type,
+            })
+
+        return {"events": events, "total": len(events)}
+
+    except Exception:
+        logger.exception("Failed to fetch NTA events")
+        return {"events": [], "total": 0, "error": "Failed to fetch NTA events"}
+
+
+# ── Pending count ─────────────────────────────────────────────────────────────
+
+
+@app.get("/api/pending-count")
+def pending_count():
+    """Count of trades still awaiting fill confirmation."""
+    conn = _open_db()
+    if conn is None:
+        return {"count": 0}
+    try:
+        row = conn.execute(
+            "SELECT COUNT(*) FROM trades WHERE fill_status = 'pending'"
+        ).fetchone()
+        return {"count": int(row[0]) if row else 0}
+    except Exception:
+        logger.exception("pending-count query failed")
+        return {"count": 0}
+    finally:
+        conn.close()
 
 
 # ── Static frontend (SPA catch-all) ────────────────────────

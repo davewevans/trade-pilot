@@ -77,6 +77,7 @@ class AlpacaBroker(BaseBroker):
             api_key=_api_key,
             secret_key=_secret_key,
         )
+        logger.info("AlpacaBroker initialized: paper=%s", _paper)
 
     # ── account ──────────────────────────────────────────────
 
@@ -399,9 +400,9 @@ class AlpacaBroker(BaseBroker):
         if strike_price_lte is not None:
             params["strike_price_lte"] = strike_price_lte
 
-        logger.debug(
-            "Using option data feed: indicative "
-            "(15-min delayed quotes for paper trading)"
+        logger.info(
+            "Option data feed: indicative (15-min delayed). "
+            "Paper trading does not support SIP real-time option data."
         )
 
         # Paginate through the contract list. Alpaca caps each
@@ -444,9 +445,15 @@ class AlpacaBroker(BaseBroker):
 
     # ── option snapshots (greeks + quotes) ──────────────────
 
+    _SNAPSHOT_BATCH_SIZE = 50
+
     @retry_on_transient()
     def get_option_snapshots(self, symbols: list[str]) -> dict[str, dict]:
         """Fetch real-time snapshots (bid/ask, Greeks, IV) for option symbols.
+
+        Symbols are chunked into batches of 50 to avoid HTTP 400 errors caused
+        by URL length limits when the watchlist is large.  A batch failure is
+        logged and skipped so remaining batches still contribute results.
 
         Returns a dict keyed by symbol.  Missing Greeks are returned as None.
         Never raises — returns an empty dict for symbols that fail.
@@ -455,45 +462,55 @@ class AlpacaBroker(BaseBroker):
         if not symbols:
             return result
 
+        batch_size = self._SNAPSHOT_BATCH_SIZE
+        batches = [symbols[i:i + batch_size] for i in range(0, len(symbols), batch_size)]
+        logger.info(
+            "Fetching option snapshots: total_symbols=%d batch_count=%d",
+            len(symbols), len(batches),
+        )
+
         logger.debug(
             "Using option data feed: indicative "
             "(15-min delayed quotes for paper trading)"
         )
 
-        try:
-            request = OptionSnapshotRequest(symbol_or_symbols=symbols)
-            snapshots = self.data_client.get_option_snapshot(request)
-        except Exception:
-            logger.exception("Failed to fetch option snapshots")
-            return result
-
-        for sym, snap in snapshots.items():
+        for batch in batches:
             try:
-                quote = snap.latest_quote
-                greeks = snap.greeks
-                bid = float(quote.bid_price) if quote and quote.bid_price is not None else None
-                ask = float(quote.ask_price) if quote and quote.ask_price is not None else None
-
-                result[sym] = {
-                    "bid": bid,
-                    "ask": ask,
-                    "mid": round((bid + ask) / 2, 4) if bid is not None and ask is not None else None,
-                    "delta": float(greeks.delta) if greeks and greeks.delta is not None else None,
-                    "theta": float(greeks.theta) if greeks and greeks.theta is not None else None,
-                    "vega": float(greeks.vega) if greeks and greeks.vega is not None else None,
-                    "gamma": float(greeks.gamma) if greeks and greeks.gamma is not None else None,
-                    "iv": float(snap.implied_volatility) if snap.implied_volatility is not None else None,
-                    "open_interest": int(snap.open_interest) if snap.open_interest is not None else None,
-                    "volume": int(snap.daily_bar.volume) if snap.daily_bar and snap.daily_bar.volume is not None else None,
-                }
+                request = OptionSnapshotRequest(symbol_or_symbols=batch)
+                snapshots = self.data_client.get_option_snapshot(request)
             except Exception:
-                logger.warning("Failed to parse snapshot for %s", sym, exc_info=True)
-                result[sym] = {
-                    "bid": None, "ask": None, "mid": None,
-                    "delta": None, "theta": None, "vega": None,
-                    "gamma": None, "iv": None,
-                    "open_interest": None, "volume": None,
-                }
+                logger.exception(
+                    "Failed to fetch option snapshots for batch of %d symbols", len(batch)
+                )
+                continue
+
+            for sym, snap in snapshots.items():
+                try:
+                    quote = snap.latest_quote
+                    greeks = snap.greeks
+                    bid = float(quote.bid_price) if quote and quote.bid_price is not None else None
+                    ask = float(quote.ask_price) if quote and quote.ask_price is not None else None
+
+                    result[sym] = {
+                        "bid": bid,
+                        "ask": ask,
+                        "mid": round((bid + ask) / 2, 4) if bid is not None and ask is not None else None,
+                        "delta": float(greeks.delta) if greeks and greeks.delta is not None else None,
+                        "theta": float(greeks.theta) if greeks and greeks.theta is not None else None,
+                        "vega": float(greeks.vega) if greeks and greeks.vega is not None else None,
+                        "gamma": float(greeks.gamma) if greeks and greeks.gamma is not None else None,
+                        "iv": float(snap.implied_volatility) if snap.implied_volatility is not None else None,
+                        "open_interest": int(snap.open_interest) if snap.open_interest is not None else None,
+                        "volume": int(snap.daily_bar.volume) if snap.daily_bar and snap.daily_bar.volume is not None else None,
+                    }
+                except Exception:
+                    logger.warning("Failed to parse snapshot for %s", sym, exc_info=True)
+                    result[sym] = {
+                        "bid": None, "ask": None, "mid": None,
+                        "delta": None, "theta": None, "vega": None,
+                        "gamma": None, "iv": None,
+                        "open_interest": None, "volume": None,
+                    }
 
         return result
 

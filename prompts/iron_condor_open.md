@@ -16,8 +16,8 @@ You are managing an open Iron Condor on {{underlying}}.
 
 ## Management Rules
 CLOSE the entire condor if ANY of the following:
-1. pnl_pct >= 50% (captured half the credit — take the win)
-2. dte_remaining <= 10 (gamma risk too high)
+1. pnl_pct >= {{profit_target_pct}}% (captured half the credit — take the win)
+2. dte_remaining <= {{close_dte_threshold}} (gamma risk too high)
 3. Underlying has breached a short strike AND dte_remaining <= 20
 
 HOLD if:
