@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { ACCOUNTS, api, type ContextResponse, type SourceHealthEntry } from '../api/client'
+import { api, type ContextResponse, type SourceHealthEntry } from '../api/client'
 import { useAccount } from '../hooks/useAccount'
+import { useAccounts } from '../hooks/useAccounts'
 import { useDecisions } from '../hooks/useDecisions'
 import { Badge } from '../components/shared/Badge'
 import { EmptyState } from '../components/shared/EmptyState'
@@ -286,9 +287,10 @@ function DataHealthPanel() {
 
 export function Dashboard() {
   const { data, loading } = useDecisions({ limit: 20 })
+  const { accounts: accountList } = useAccounts()
   const [context, setContext] = useState<ContextResponse | null>(null)
   const [cb, setCb] = useState<CircuitBreaker | null>(null)
-  const [accounts, setAccounts] = useState<Record<string, Portfolio | null>>({})
+  const [portfolios, setPortfolios] = useState<Record<string, Portfolio | null>>({})
   const [watchlistCounts, setWatchlistCounts] = useState<{ wheel: number; iron_condor: number; spreads: number } | null>(null)
 
   useEffect(() => {
@@ -300,8 +302,8 @@ export function Dashboard() {
       api.circuitBreakers().then((c) => { if (!cancelled) setCb(c) }).catch(() => {
         if (!cancelled) setCb(null)
       })
-      api.accounts().then((a) => { if (!cancelled) setAccounts(a) }).catch(() => {
-        if (!cancelled) setAccounts({})
+      api.accountPortfolios().then((a) => { if (!cancelled) setPortfolios(a) }).catch(() => {
+        if (!cancelled) setPortfolios({})
       })
       api.watchlist().then((w) => {
         if (!cancelled) setWatchlistCounts({ wheel: w.wheel.length, iron_condor: w.iron_condor.length, spreads: w.spreads.length })
@@ -323,13 +325,13 @@ export function Dashboard() {
       <div>
         <h2 className="section-heading">Accounts</h2>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          {ACCOUNTS.map((a) => (
+          {accountList.map((a) => (
             <AccountCard
-              key={a.account}
-              account={a.account}
+              key={a.account_id}
+              account={a.account_id}
               label={a.label}
               cbStatus={cbStatus}
-              snapshot={accounts[a.account] ?? null}
+              snapshot={portfolios[a.account_id] ?? null}
             />
           ))}
         </div>

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ACCOUNTS, api } from '../api/client'
+import { api } from '../api/client'
+import { useAccounts } from '../hooks/useAccounts'
 import { Badge } from '../components/shared/Badge'
 import { EmptyState } from '../components/shared/EmptyState'
 import type { Decision, DecisionReasoning } from '../types'
@@ -156,6 +157,7 @@ function SkeletonCard() {
 export function ReasoningExplorer() {
   const [account, setAccount] = useState<string>('')
   const [actionFilter, setActionFilter] = useState<string>('')
+  const { accounts } = useAccounts()
   const [confidenceLabel, setConfidenceLabel] = useState<string>('')
   const [underlyingInput, setUnderlyingInput] = useState<string>('')
   const [debouncedUnderlying, setDebouncedUnderlying] = useState<string>('')
@@ -258,8 +260,8 @@ export function ReasoningExplorer() {
             }}
           >
             <option value="">All</option>
-            {ACCOUNTS.map((a) => (
-              <option key={a.account} value={a.account}>{a.label}</option>
+            {accounts.map((a) => (
+              <option key={a.account_id} value={a.account_id}>{a.label}</option>
             ))}
           </select>
         </label>

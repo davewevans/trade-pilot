@@ -10,8 +10,9 @@ import {
   XAxis,
   YAxis,
 } from 'recharts'
-import { ACCOUNTS, api } from '../api/client'
+import { api } from '../api/client'
 import { useAccount } from '../hooks/useAccount'
+import { useAccounts } from '../hooks/useAccounts'
 import { Badge } from '../components/shared/Badge'
 import { EmptyState } from '../components/shared/EmptyState'
 import { IVHistoryChart } from '../components/shared/IVHistoryChart'
@@ -122,7 +123,8 @@ function PositionRow({ p }: { p: Position }) {
 
 export function AccountDetail() {
   const { account = '' } = useParams()
-  const accountMeta = ACCOUNTS.find((a) => a.account === account)
+  const { accounts, availableStrategies, refetch: refetchAccounts } = useAccounts()
+  const accountMeta = accounts.find((a) => a.account_id === account)
   const { portfolio, stats, loading } = useAccount(account)
 
   const [trades, setTrades] = useState<Trade[] | null>(null)
@@ -130,6 +132,9 @@ export function AccountDetail() {
   const [cb, setCb] = useState<CircuitBreaker | null>(null)
   const [equityHistory, setEquityHistory] = useState<EquityHistory | null>(null)
   const [ivSymbol, setIvSymbol] = useState<string>('')
+  const [actionError, setActionError] = useState<string | null>(null)
+  const [actionLoading, setActionLoading] = useState(false)
+  const [selectedStrategy, setSelectedStrategy] = useState('')
 
   useEffect(() => {
     let cancelled = false
@@ -175,6 +180,42 @@ export function AccountDetail() {
       cancelled = true
     }
   }, [account])
+
+  const handleToggleActive = async () => {
+    if (!accountMeta) return
+    setActionError(null)
+    setActionLoading(true)
+    try {
+      if (accountMeta.status === 'active') {
+        await api.deactivateAccount(account)
+      } else {
+        await api.activateAccount(account)
+      }
+      refetchAccounts()
+    } catch (e: unknown) {
+      setActionError(e instanceof Error ? e.message : 'Action failed')
+    } finally {
+      setActionLoading(false)
+    }
+  }
+
+  const handleLinkStrategy = async () => {
+    if (!selectedStrategy) return
+    setActionError(null)
+    setActionLoading(true)
+    try {
+      await api.linkStrategy(account, selectedStrategy)
+      refetchAccounts()
+      setSelectedStrategy('')
+    } catch (e: unknown) {
+      setActionError(e instanceof Error ? e.message : 'Action failed')
+    } finally {
+      setActionLoading(false)
+    }
+  }
+
+  // Show loading spinner while accounts are still fetching and account not yet found
+  if (accounts.length === 0 && loading) return <LoadingSpinner />
 
   if (!accountMeta) {
     return (
@@ -226,7 +267,7 @@ export function AccountDetail() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-baseline justify-between">
+      <div className="flex items-start justify-between">
         <div>
           <Link to="/" className="text-xs" style={{ color: 'var(--text-muted)' }}>
             ← Dashboard
@@ -234,7 +275,81 @@ export function AccountDetail() {
           <div className="flex items-center gap-2 mt-1">
             <h2 className="text-2xl font-semibold">{accountMeta.label}</h2>
             {cbStatus && <Badge variant="circuit">{cbBadgeText}</Badge>}
+            <span
+              className="text-xs px-2 py-0.5 rounded"
+              style={{
+                backgroundColor: accountMeta.status === 'active'
+                  ? 'color-mix(in srgb, var(--green) 15%, var(--bg-card))'
+                  : 'color-mix(in srgb, var(--text-muted) 15%, var(--bg-card))',
+                color: accountMeta.status === 'active' ? 'var(--green)' : 'var(--text-muted)',
+                border: `1px solid ${accountMeta.status === 'active' ? 'var(--green)' : 'var(--border)'}`,
+              }}
+            >
+              {accountMeta.status}
+            </span>
           </div>
+          {accountMeta.strategy_display_name && (
+            <div className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
+              Strategy: <span style={{ color: 'var(--text-secondary)' }}>{accountMeta.strategy_display_name}</span>
+            </div>
+          )}
+        </div>
+        <div className="flex flex-col items-end gap-2">
+          {/* Activate / Deactivate toggle */}
+          <button
+            onClick={handleToggleActive}
+            disabled={actionLoading || (!accountMeta.strategy && accountMeta.status === 'inactive')}
+            className="text-xs px-3 py-1.5 rounded transition-colors"
+            style={{
+              backgroundColor: accountMeta.status === 'active'
+                ? 'color-mix(in srgb, var(--red) 15%, var(--bg-card))'
+                : 'color-mix(in srgb, var(--green) 15%, var(--bg-card))',
+              color: accountMeta.status === 'active' ? 'var(--red)' : 'var(--green)',
+              border: `1px solid ${accountMeta.status === 'active' ? 'var(--red)' : 'var(--green)'}`,
+              opacity: actionLoading ? 0.6 : 1,
+              cursor: actionLoading || (!accountMeta.strategy && accountMeta.status === 'inactive') ? 'not-allowed' : 'pointer',
+            }}
+            title={!accountMeta.strategy && accountMeta.status === 'inactive' ? 'Link a strategy first' : undefined}
+          >
+            {actionLoading ? '…' : accountMeta.status === 'active' ? 'Deactivate' : 'Activate'}
+          </button>
+          {/* Link strategy — only shown if no strategy linked yet */}
+          {!accountMeta.strategy && (
+            <div className="flex items-center gap-2">
+              <select
+                value={selectedStrategy}
+                onChange={(e) => setSelectedStrategy(e.target.value)}
+                className="text-xs px-2 py-1.5 rounded"
+                style={{
+                  backgroundColor: 'var(--bg-card)',
+                  color: 'var(--text-primary)',
+                  border: '1px solid var(--border)',
+                }}
+              >
+                <option value="">Link a strategy…</option>
+                {availableStrategies.map((s) => (
+                  <option key={s.name} value={s.name}>{s.display_name}</option>
+                ))}
+              </select>
+              <button
+                onClick={handleLinkStrategy}
+                disabled={!selectedStrategy || actionLoading}
+                className="text-xs px-3 py-1.5 rounded transition-colors"
+                style={{
+                  backgroundColor: 'color-mix(in srgb, var(--accent) 15%, var(--bg-card))',
+                  color: 'var(--accent)',
+                  border: '1px solid var(--accent)',
+                  opacity: !selectedStrategy || actionLoading ? 0.4 : 1,
+                  cursor: !selectedStrategy || actionLoading ? 'not-allowed' : 'pointer',
+                }}
+              >
+                Link
+              </button>
+            </div>
+          )}
+          {actionError && (
+            <div className="text-xs" style={{ color: 'var(--red)' }}>{actionError}</div>
+          )}
         </div>
       </div>
 

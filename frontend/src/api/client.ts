@@ -1,5 +1,4 @@
 import type {
-  AccountSummary,
   CircuitBreaker,
   DecisionStats,
   DecisionsResponse,
@@ -9,6 +8,22 @@ import type {
   Portfolio,
   Trade,
 } from '../types'
+
+export interface AccountConfig {
+  account_id: string
+  label: string
+  strategy: string | null
+  strategy_display_name: string | null
+  status: 'active' | 'inactive'
+  watchlist: string[]
+  screening_overrides: Record<string, unknown>
+  has_credentials: boolean
+}
+
+export interface AccountConfigResponse {
+  accounts: AccountConfig[]
+  available_strategies: Array<{ name: string; display_name: string }>
+}
 
 export interface MacroContext {
   vix?: number | null
@@ -172,8 +187,67 @@ export const api = {
 
   equityHistory: () => get<EquityHistory>('/api/equity-history'),
 
-  accounts: () =>
-    get<Record<string, Portfolio | null>>('/api/accounts'),
+  accountPortfolios: () =>
+    get<Record<string, Portfolio | null>>('/api/account-portfolios'),
+
+  accountConfig: () =>
+    get<AccountConfigResponse>('/api/accounts'),
+
+  activateAccount: async (id: string): Promise<{ account_id: string; status: string }> => {
+    const res = await fetch(`${BASE}/api/accounts/${encodeURIComponent(id)}/activate`, {
+      method: 'POST',
+      credentials: 'include',
+    })
+    if (res.status === 401) { _handleUnauthorized(); throw new Error('Unauthorized') }
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }))
+      throw new Error(err.error ?? `API error ${res.status}`)
+    }
+    return res.json()
+  },
+
+  deactivateAccount: async (id: string): Promise<{ account_id: string; status: string }> => {
+    const res = await fetch(`${BASE}/api/accounts/${encodeURIComponent(id)}/deactivate`, {
+      method: 'POST',
+      credentials: 'include',
+    })
+    if (res.status === 401) { _handleUnauthorized(); throw new Error('Unauthorized') }
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }))
+      throw new Error(err.error ?? `API error ${res.status}`)
+    }
+    return res.json()
+  },
+
+  linkStrategy: async (id: string, strategy: string): Promise<{ account_id: string; strategy: string }> => {
+    const res = await fetch(`${BASE}/api/accounts/${encodeURIComponent(id)}/link-strategy`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ strategy }),
+    })
+    if (res.status === 401) { _handleUnauthorized(); throw new Error('Unauthorized') }
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }))
+      throw new Error(err.error ?? `API error ${res.status}`)
+    }
+    return res.json()
+  },
+
+  updateAccountWatchlist: async (id: string, watchlist: string[]): Promise<{ account_id: string; watchlist: string[] }> => {
+    const res = await fetch(`${BASE}/api/accounts/${encodeURIComponent(id)}/watchlist`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ watchlist }),
+    })
+    if (res.status === 401) { _handleUnauthorized(); throw new Error('Unauthorized') }
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }))
+      throw new Error(err.error ?? `API error ${res.status}`)
+    }
+    return res.json()
+  },
 
   regimeHistory: () =>
     get<{ confirmed: string; readings: string[] }>('/api/regime-history'),
@@ -227,12 +301,3 @@ export const api = {
   },
 }
 
-export const ACCOUNTS: AccountSummary[] = [
-  { account: 'wheel', label: 'Wheel', strategyTypes: ['wheel'] },
-  { account: 'iron_condor', label: 'Iron Condor', strategyTypes: ['iron_condor'] },
-  {
-    account: 'spreads',
-    label: 'Spreads',
-    strategyTypes: ['bull_put_spread', 'bear_call_spread', 'long_call_vertical'],
-  },
-]

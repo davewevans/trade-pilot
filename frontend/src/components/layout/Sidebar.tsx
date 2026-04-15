@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { NavLink, useLocation } from 'react-router-dom'
-import { ACCOUNTS } from '../../api/client'
+import { useAccounts } from '../../hooks/useAccounts'
 
 const linkClass = ({ isActive }: { isActive: boolean }) =>
   `block px-3 py-2 rounded text-sm transition-all ${
@@ -94,6 +94,7 @@ function SidebarSection({
 export function Sidebar() {
   const location = useLocation()
   const isLearnRoute = LEARN_ROUTES.some((p) => location.pathname.startsWith(p))
+  const { accounts } = useAccounts()
 
   return (
     <aside
@@ -128,12 +129,15 @@ export function Sidebar() {
       </SidebarSection>
 
       <SidebarSection label="Accounts" storageKey="accounts" defaultOpen={true}>
-        {ACCOUNTS.map((a) => (
+        {accounts.map((a) => (
           <NavLink
-            key={a.account}
-            to={`/account/${a.account}`}
+            key={a.account_id}
+            to={`/account/${a.account_id}`}
             className={linkClass}
-            style={({ isActive }) => linkStyle(isActive)}
+            style={({ isActive }) => ({
+              ...linkStyle(isActive),
+              opacity: a.status === 'inactive' ? 0.5 : 1,
+            })}
           >
             {a.label}
           </NavLink>
