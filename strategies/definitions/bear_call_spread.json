@@ -1,0 +1,41 @@
+{
+  "name": "bear_call_spread",
+  "display_name": "Bear Call Spread",
+  "description": "Credit spread selling an OTM call and buying a further OTM call. Profits in bearish/neutral markets with moderate-to-high IV.",
+  "type": "spread",
+  "composite": false,
+  "entry": {
+    "short_delta_min": 0.20,
+    "short_delta_max": 0.30,
+    "dte_min": 21,
+    "dte_max": 35,
+    "min_net_credit": 0.40,
+    "credit_to_width_min": 0.15,
+    "max_loss_pct_of_bp": 2,
+    "earnings_buffer_days": 21,
+    "min_open_interest": 100,
+    "max_bid_ask_spread_pct": 20,
+    "below_sma_50_preferred": true,
+    "check_ex_dividend": true,
+    "max_concurrent_positions": 3
+  },
+  "management": {
+    "profit_target_pct": 50,
+    "stop_loss_pct": 200,
+    "close_dte_threshold": 7,
+    "delta_double_check": true
+  },
+  "guardrails": {
+    "dte_hard_min": 14,
+    "dte_hard_max": 50,
+    "min_net_credit_hard": 0.25,
+    "max_loss_hard_pct_of_bp": 5,
+    "ex_dividend_block": true
+  },
+  "regime": {
+    "allowed": ["BEAR", "NEUTRAL"]
+  },
+  "iv_environment": {
+    "allowed": ["MODERATE", "HIGH"]
+  }
+}

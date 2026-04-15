@@ -1,0 +1,8 @@
+{
+  "name": "adaptive_spreads",
+  "display_name": "Adaptive Spreads",
+  "description": "Routes between Bull Put, Bear Call, and Long Call Vertical based on market regime and IV environment. Only one new position per cycle.",
+  "type": "composite",
+  "composite": true,
+  "sub_strategies": ["bull_put_spread", "bear_call_spread", "long_call_vertical"]
+}

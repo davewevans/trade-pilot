@@ -1,0 +1,52 @@
+{
+  "name": "wheel",
+  "display_name": "Wheel",
+  "description": "Cash-secured puts for income, covered calls after assignment. Cycles through IDLE \u2192 SHORT_PUT \u2192 LONG_STOCK \u2192 SHORT_CALL.",
+  "type": "wheel",
+  "composite": false,
+  "entry": {
+    "csp": {
+      "delta_min": 0.20,
+      "delta_max": 0.30,
+      "dte_min": 21,
+      "dte_max": 35,
+      "iv_rank_min": 30,
+      "min_open_interest": 200,
+      "earnings_buffer_days": 21,
+      "max_position_pct_of_bp": 10,
+      "max_concurrent_positions": 5,
+      "above_sma_50": true
+    },
+    "cc": {
+      "delta_min": 0.20,
+      "delta_max": 0.35,
+      "dte_min": 21,
+      "dte_max": 35,
+      "earnings_buffer_days": 21,
+      "strike_above_upper_bb": true,
+      "strike_above_cost_basis": true
+    }
+  },
+  "management": {
+    "profit_target_pct": 50,
+    "delta_double_roll": true,
+    "close_dte_threshold": 7,
+    "premium_floor_to_hold": 0.15
+  },
+  "guardrails": {
+    "earnings_hard_block_csp_days": 14,
+    "earnings_hard_block_cc_days": 21,
+    "max_position_pct_of_bp_hard": 10,
+    "require_shares_for_cc": true,
+    "no_duplicate_csp_same_underlying": true,
+    "no_duplicate_cc_same_underlying": true
+  },
+  "regime": {
+    "allowed": ["BULL", "NEUTRAL", "BEAR"],
+    "blocked": ["CRASH"]
+  },
+  "iv_environment": {
+    "allowed": ["MODERATE", "HIGH"],
+    "blocked": ["LOW"]
+  }
+}
