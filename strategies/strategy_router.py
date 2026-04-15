@@ -10,6 +10,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 # Priority order: income strategies before speculative
+# Eligibility is now read from strategy definition JSON files.
 _IDLE_PRIORITY = [
     "iron_condor",
     "bull_put_spread",
@@ -94,27 +95,53 @@ class StrategyRouter:
         cahold: bool,
         strategy_states: dict[str, str],
     ) -> list[str]:
-        """Return IDLE strategies eligible for entry, in priority order."""
+        """Return IDLE strategies eligible for entry, in priority order.
+
+        Reads regime and IV environment eligibility from strategy definition
+        JSON files.  Missing or malformed definition files are logged and
+        skipped — the router never crashes due to a bad definition file.
+        """
+        from strategies.strategy_loader import load_all_strategies
+
+        try:
+            all_strategies = load_all_strategies()
+        except Exception:
+            logger.warning("Router: failed to load strategy definitions", exc_info=True)
+            all_strategies = {}
+
         candidates: list[str] = []
 
         for name in _IDLE_PRIORITY:
             if strategy_states.get(name) != "IDLE":
                 continue
 
+            defn = all_strategies.get(name)
+            if not defn:
+                logger.warning("Router: no definition found for %s — skipping", name)
+                continue
+            if defn.get("composite"):
+                continue
+
+            # Regime eligibility
+            allowed_regimes = defn.get("regime", {}).get("allowed", [])
+            if allowed_regimes and regime not in allowed_regimes:
+                continue
+
+            # IV environment eligibility
+            allowed_iv = defn.get("iv_environment", {}).get("allowed", [])
+            if allowed_iv and iv_env not in allowed_iv:
+                continue
+
+            # Strategy-specific extra checks from entry params
+            entry = defn.get("entry", {})
             if name == "iron_condor":
-                if regime == "NEUTRAL" and iv_env == "HIGH":
-                    candidates.append(name)
-
-            elif name == "bull_put_spread":
-                if regime in ("NEUTRAL", "BULL") and iv_env in ("MODERATE", "HIGH"):
-                    candidates.append(name)
-
-            elif name == "bear_call_spread":
-                if regime in ("BEAR", "NEUTRAL") and iv_env in ("MODERATE", "HIGH"):
-                    candidates.append(name)
-
+                min_ivr = entry.get("iv_rank_min", 50)
+                if ivr is not None and ivr < min_ivr:
+                    continue
             elif name == "long_call_vertical":
-                if regime == "BULL" and iv_env == "LOW" and cahold:
-                    candidates.append(name)
+                if entry.get("require_cahold_signal") and not cahold:
+                    continue
+
+            candidates.append(name)
 
         return candidates

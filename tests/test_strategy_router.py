@@ -23,7 +23,7 @@ def _context(**overrides):
     ctx = {
         "confirmed_market_regime": "NEUTRAL",
         "iv_environment": "MODERATE",
-        "iv_rank": 45,
+        "iv_rank": 55,  # >= 50 so iron_condor's iv_rank_min check passes in HIGH iv_env
         "support_bounce_signal": {"cahold_detected": False},
     }
     ctx.update(overrides)
