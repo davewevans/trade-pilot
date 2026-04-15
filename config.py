@@ -97,8 +97,21 @@ class Settings:
         else:
             log.info("Running in LOCAL mode")
 
+    def get_account_manager(self):
+        """Return the AccountManager singleton (lazy init).
+
+        Prefer this over direct AccountManager imports to share a single instance.
+        """
+        if not hasattr(self, "_account_manager"):
+            from data.account_manager import AccountManager
+            self._account_manager = AccountManager()
+        return self._account_manager
+
     def _load_watchlist(self) -> None:
-        """Load WATCHLIST and SPREAD_WATCHLIST from data/watchlist.json."""
+        """Load WATCHLIST and SPREAD_WATCHLIST from data/watchlist.json.
+
+        # DEPRECATED: Watchlists now live in account_config.json per account.
+        """
         watchlist_path = self.DATA_DIR / "watchlist.json"
         if watchlist_path.exists():
             try:
@@ -143,6 +156,7 @@ class Settings:
 
     # Maps each strategy to its account's env var names.
     # Three strategies share Paper Account 1 (ALPACA_PAPER1_API_KEY).
+    # DEPRECATED: Use AccountManager instead. Will be removed in v1.1.
     STRATEGY_ACCOUNT_MAP: dict[str, tuple[str, str]] = {
         "wheel":              ("ALPACA_PAPER2_API_KEY", "ALPACA_PAPER2_SECRET_KEY"),
         "iron_condor":        ("ALPACA_PAPER3_API_KEY", "ALPACA_PAPER3_SECRET_KEY"),
