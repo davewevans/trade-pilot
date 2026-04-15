@@ -548,7 +548,7 @@ export function AccountDetail() {
         </section>
       )}
 
-      {SCREENING_FILTERS[account] && (
+      {accountMeta.strategy && SCREENING_FILTERS[accountMeta.strategy] && (
         <section>
           <button
             onClick={() => setFiltersOpen((o) => !o)}
@@ -571,7 +571,7 @@ export function AccountDetail() {
           </button>
           {filtersOpen && (
             <div className="space-y-3 mt-3">
-              {SCREENING_FILTERS[account].map((group) => (
+              {SCREENING_FILTERS[accountMeta.strategy].map((group) => (
                 <div
                   key={group.strategy}
                   className="rounded p-4"
