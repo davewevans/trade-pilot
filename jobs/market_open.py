@@ -36,6 +36,7 @@ def run() -> None:
     from strategies.bull_put_spread_strategy import BullPutSpreadStrategy
     from strategies.calendar_spread_strategy import CalendarSpreadStrategy
     from strategies.circuit_breaker import CircuitBreaker
+    from strategies.iron_butterfly_strategy import IronButterflyStrategy
     from strategies.guardrails import Guardrails
     from strategies.iron_condor_strategy import IronCondorStrategy
     from strategies.long_call_vertical_strategy import LongCallVerticalStrategy
@@ -143,8 +144,20 @@ def run() -> None:
         "long_call_vertical": LongCallVerticalStrategy(broker=default_broker, state_writer=sw, spread_tracker=tracker, recorder=recorder),
     }
 
-    # Paper Account 5 — Calendar Spread (inactive until tested; only wired when active)
+    # Paper Account 4 — Iron Butterfly (inactive until tested; only wired when active)
     _am = settings.get_account_manager()
+    _paper4 = _am.get_account("paper_4") if _am else None
+    if _paper4 and _paper4.get("status") == "active":
+        try:
+            paper4_broker = make_broker("iron_butterfly")
+        except ValueError:
+            logger.warning("Iron butterfly account credentials not set — using default")
+            paper4_broker = broker
+        spread_strategies["iron_butterfly"] = IronButterflyStrategy(
+            broker=paper4_broker, state_writer=sw, spread_tracker=tracker, recorder=recorder,
+        )
+
+    # Paper Account 5 — Calendar Spread (inactive until tested; only wired when active)
     _paper5 = _am.get_account("paper_5") if _am else None
     if _paper5 and _paper5.get("status") == "active":
         try:

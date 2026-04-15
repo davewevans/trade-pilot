@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Iron Butterfly strategy** (`strategies/iron_butterfly_strategy.py`) — sells ATM put + ATM
+  call at the same center strike with OTM wings for protection. Defined-risk credit strategy
+  with higher premium than iron condor but narrower profit zone. NEUTRAL + HIGH IV only.
+  Assigned to Paper Account 4 (inactive until tested). Valid as single mleg order because
+  wings cover both short legs.
 - **Calendar Spread strategy** (`strategies/calendar_spread_strategy.py`) — buys a longer-dated
   ATM option and sells a shorter-dated ATM option at the same strike. First vega-positive strategy
   in trade-pilot. NEUTRAL/BULL + LOW/MODERATE IV. Assigned to Paper Account 5 (inactive until
