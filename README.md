@@ -192,8 +192,7 @@ python api/run.py
 | 3 | Bull Put Spread | `strategies/bull_put_spread_strategy.py` | Moderate+ | Neutral/Bull | Credit |
 | 4 | Bear Call Spread | `strategies/bear_call_spread_strategy.py` | Moderate+ | Bear | Credit |
 | 5 | Long Call Vertical | `strategies/long_call_vertical_strategy.py` | Low | Bull | Debit |
-| 6 | Short Strangle | `strategies/short_strangle_strategy.py` | High | Neutral | Credit (undefined risk) |
-| 7 | Calendar Spread | `strategies/calendar_spread_strategy.py` | Low/Mod | Neutral/Bull | Debit (vega positive) |
+| 6 | Calendar Spread | `strategies/calendar_spread_strategy.py` | Low/Mod | Neutral/Bull | Debit (vega positive) |
 
 ### Strategy Activation
 

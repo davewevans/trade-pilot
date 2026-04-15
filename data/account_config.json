@@ -31,7 +31,7 @@
       "label": "Paper Account 4",
       "credentials_key": "ALPACA_PAPER4_API_KEY",
       "credentials_secret": "ALPACA_PAPER4_SECRET_KEY",
-      "strategy": "short_strangle",
+      "strategy": null,
       "status": "inactive",
       "watchlist": ["SPY", "QQQ", "IWM", "AAPL", "MSFT", "GOOGL"],
       "screening_overrides": {}

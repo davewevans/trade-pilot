@@ -181,7 +181,6 @@ function InactiveBadge({ color }: { color: string }) {
 
 const ROUTING_ROWS = [
   { regime: 'NEUTRAL', iv: 'HIGH (IVR ≥ 50)', strategy: 'Iron Condor', note: 'IV must be overvalued or fair per ORATS forecast' },
-  { regime: 'NEUTRAL', iv: 'HIGH (IVR ≥ 50)', strategy: 'Short Strangle', note: 'Undefined risk — tightest entry criteria' },
   { regime: 'NEUTRAL', iv: 'LOW or MODERATE', strategy: 'Calendar Spread', note: 'Requires positive contango' },
   { regime: 'NEUTRAL or BULL', iv: 'MODERATE or HIGH', strategy: 'Bull Put Spread', note: 'Spread yield ≥ 0.1%' },
   { regime: 'BEAR or NEUTRAL', iv: 'MODERATE or HIGH', strategy: 'Bear Call Spread', note: 'Spread yield ≥ 0.1%' },
@@ -372,73 +371,6 @@ export function Strategies() {
           <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> <strong>200% stop loss:</strong> Close when combined value reaches ≥ 200% of original credit.</li>
           <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> <strong>Delta doubling:</strong> If either short leg's delta doubles from entry, close the condor (one side is being tested).</li>
           <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> <strong>DTE ≤ 7:</strong> Close regardless — gamma risk on both wings is too high.</li>
-        </ul>
-      </AccountSection>
-
-      {/* --- Short Strangle --- */}
-      <AccountSection
-        accent="var(--accent-strangle, var(--yellow, #EAB308))"
-        header="Short Strangle — Premium Collection Without Wings"
-        tagline="Neutral, undefined-risk premium selling. Not yet active."
-      >
-        <InactiveBadge color="var(--yellow, #EAB308)" />
-
-        <Prose>
-          A short strangle sells an OTM put and an OTM call on the same underlying and expiration — no
-          protective wings. It collects premium from both sides and profits when the stock stays within
-          a wide range and IV contracts. Unlike an iron condor, there is no cap on potential losses — a
-          large move in either direction creates theoretically unlimited risk. This strategy has the
-          tightest entry criteria of any strategy in the bot.
-        </Prose>
-
-        <div style={{
-          marginTop: '12px',
-          padding: '12px',
-          borderRadius: '8px',
-          backgroundColor: 'color-mix(in srgb, var(--red) 8%, transparent)',
-          color: 'var(--text-secondary)',
-          borderLeft: '3px solid var(--red)',
-          fontSize: '13px',
-        }}>
-          <strong style={{ color: 'var(--red)' }}>⚠️ Undefined Risk:</strong>{' '}
-          Unlike iron condors, there are no protective wings. A flash crash or gap event can produce
-          losses exceeding the entire premium collected. Maximum position margin is capped at 25% of
-          buying power.
-        </div>
-
-        <Subheading>Entry criteria</Subheading>
-        <ul className="space-y-1.5 text-sm" style={{ color: 'var(--text-secondary)' }}>
-          <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Market regime: NEUTRAL only</li>
-          <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> IV environment: HIGH (IVR ≥ 50)</li>
-          <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> ORATS IV forecast: must be OVERVALUED or FAIR</li>
-          <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Term structure: must NOT be in backwardation</li>
-          <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Earnings &gt; 35 days away</li>
-          <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Short put delta: -0.15 to -0.20 (wider than iron condor)</li>
-          <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Short call delta: 0.15 to 0.20</li>
-          <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Both strikes outside 1.5× implied move</li>
-          <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> DTE: 30–50 days</li>
-          <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Both legs OI ≥ 200, bid-ask &lt; 15%</li>
-          <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Spread yield ≥ 0.3% of stock price</li>
-        </ul>
-
-        <Subheading>Risk profile</Subheading>
-        <div className="grid gap-3 md:grid-cols-3">
-          <SubCard title="Max profit">Combined premium from both legs.</SubCard>
-          <SubCard title="Max loss">
-            Theoretically unlimited. Managed through strict delta and stop-loss rules.
-          </SubCard>
-          <SubCard title="Break-evens">
-            Put strike minus total credit / Call strike plus total credit.
-          </SubCard>
-        </div>
-
-        <Subheading>How the bot manages this position</Subheading>
-        <ul className="space-y-1.5 text-sm" style={{ color: 'var(--text-secondary)' }}>
-          <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> <strong>Profit target:</strong> close at 50% of credit collected</li>
-          <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> <strong>Stop loss:</strong> close when combined value reaches 150% of original credit (tighter than iron condor — undefined risk)</li>
-          <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> <strong>Delta breach:</strong> close if either delta exceeds 0.40</li>
-          <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> <strong>DTE ≤ 10:</strong> close immediately — gamma without wing protection is dangerous</li>
-          <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> <strong>Maximum margin:</strong> 25% of buying power per position</li>
         </ul>
       </AccountSection>
 

@@ -175,7 +175,6 @@ class Settings:
         "bull_put_spread":    ("ALPACA_PAPER1_API_KEY", "ALPACA_PAPER1_SECRET_KEY"),
         "bear_call_spread":   ("ALPACA_PAPER1_API_KEY", "ALPACA_PAPER1_SECRET_KEY"),
         "long_call_vertical": ("ALPACA_PAPER1_API_KEY", "ALPACA_PAPER1_SECRET_KEY"),
-        "short_strangle":     ("ALPACA_PAPER4_API_KEY", "ALPACA_PAPER4_SECRET_KEY"),
         "calendar_spread":    ("ALPACA_PAPER5_API_KEY", "ALPACA_PAPER5_SECRET_KEY"),
     }
 

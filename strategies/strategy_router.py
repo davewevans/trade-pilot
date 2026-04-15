@@ -13,7 +13,6 @@ logger = logging.getLogger(__name__)
 # Eligibility is now read from strategy definition JSON files.
 _IDLE_PRIORITY = [
     "iron_condor",
-    "short_strangle",
     "bull_put_spread",
     "bear_call_spread",
     "long_call_vertical",
