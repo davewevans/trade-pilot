@@ -558,18 +558,172 @@ def portfolio_by_account(account_name: str):
     return data
 
 
-@app.get("/api/accounts")
-def all_accounts():
-    """Return a summary of all three accounts for the dashboard cards.
+@app.get("/api/account-portfolios")
+def all_account_portfolios():
+    """Return a summary of all accounts for the dashboard cards.
 
     Returns a dict keyed by account name. Missing accounts return
     null for that key — the frontend handles the empty state.
+
+    (Renamed from /api/accounts to avoid conflict with account management API.)
     """
     result = {}
     for name in ("wheel", "iron_condor", "spreads"):
         data = _read_json(SNAPSHOTS / f"portfolio_{name}.json")
         result[name] = data  # None if missing — frontend shows "—"
     return result
+
+
+# ── Account Management API ───────────────────────────────────────────────────
+
+
+def _get_account_manager():
+    from data.account_manager import AccountManager
+    return AccountManager()
+
+
+def _account_config_entry(account_id: str, account: dict) -> dict:
+    """Build the response shape for a single account."""
+    from strategies.strategy_loader import load_strategy
+
+    strategy_name = account.get("strategy") or ""
+    strategy_display = None
+    if strategy_name:
+        try:
+            defn = load_strategy(strategy_name)
+            strategy_display = defn.get("display_name", strategy_name)
+        except Exception:
+            strategy_display = strategy_name
+
+    # Check credentials without exposing values
+    key_var = account.get("credentials_key", "")
+    secret_var = account.get("credentials_secret", "")
+    has_credentials = bool(os.getenv(key_var)) and bool(os.getenv(secret_var))
+
+    return {
+        "account_id": account_id,
+        "label": account.get("label", account_id),
+        "strategy": strategy_name or None,
+        "strategy_display_name": strategy_display,
+        "status": account.get("status", "inactive"),
+        "watchlist": account.get("watchlist", []),
+        "screening_overrides": account.get("screening_overrides", {}),
+        "has_credentials": has_credentials,
+    }
+
+
+@app.get("/api/accounts")
+def get_accounts():
+    """Return all accounts with config + list of available strategies."""
+    from strategies.strategy_loader import load_all_strategies
+
+    manager = _get_account_manager()
+    all_accounts = manager.get_all_accounts()
+
+    account_list = [
+        _account_config_entry(aid, acct)
+        for aid, acct in all_accounts.items()
+    ]
+
+    try:
+        available = [
+            {"name": defn["name"], "display_name": defn["display_name"]}
+            for defn in load_all_strategies().values()
+            if not defn.get("composite")
+        ]
+    except Exception:
+        available = []
+
+    return {"accounts": account_list, "available_strategies": available}
+
+
+@app.post("/api/accounts/{account_id}/activate")
+def activate_account(account_id: str):
+    """Activate an account. Returns 400 if no strategy linked, 404 if not found."""
+    manager = _get_account_manager()
+    if manager.get_account(account_id) is None:
+        return JSONResponse(status_code=404, content={"error": f"Account {account_id!r} not found"})
+    success = manager.activate(account_id)
+    if not success:
+        return JSONResponse(
+            status_code=400,
+            content={"error": f"Cannot activate account {account_id!r}: no strategy linked"},
+        )
+    return {"account_id": account_id, "status": "active"}
+
+
+@app.post("/api/accounts/{account_id}/deactivate")
+def deactivate_account(account_id: str):
+    """Deactivate an account. Returns 404 if not found."""
+    manager = _get_account_manager()
+    if manager.get_account(account_id) is None:
+        return JSONResponse(status_code=404, content={"error": f"Account {account_id!r} not found"})
+    manager.deactivate(account_id)
+    return {"account_id": account_id, "status": "inactive"}
+
+
+@app.post("/api/accounts/{account_id}/link-strategy")
+async def link_strategy(account_id: str, request: Request):
+    """Link a strategy to an account (one-time operation)."""
+    manager = _get_account_manager()
+    if manager.get_account(account_id) is None:
+        return JSONResponse(status_code=404, content={"error": f"Account {account_id!r} not found"})
+
+    try:
+        body = await request.json()
+        strategy_name = body.get("strategy", "")
+    except Exception:
+        return JSONResponse(status_code=400, content={"error": "Invalid JSON body"})
+
+    if not strategy_name:
+        return JSONResponse(status_code=400, content={"error": "Missing 'strategy' field"})
+
+    ok, err = manager.link_strategy(account_id, strategy_name)
+    if not ok:
+        return JSONResponse(status_code=400, content={"error": err})
+
+    return {"account_id": account_id, "strategy": strategy_name}
+
+
+@app.get("/api/accounts/{account_id}/screening-filters")
+def get_screening_filters(account_id: str):
+    """Return screening filters for an account (stub — full implementation in Phase 2)."""
+    manager = _get_account_manager()
+    if manager.get_account(account_id) is None:
+        return JSONResponse(status_code=404, content={"error": f"Account {account_id!r} not found"})
+    # TODO: Full implementation in Prompt 2.4 (ScreeningFilters.get_all_effective)
+    return {"filters": {}}
+
+
+@app.put("/api/accounts/{account_id}/screening-filters")
+async def update_screening_filters(account_id: str, request: Request):
+    """Update screening filter overrides for an account (stub — full implementation in Phase 2)."""
+    manager = _get_account_manager()
+    if manager.get_account(account_id) is None:
+        return JSONResponse(status_code=404, content={"error": f"Account {account_id!r} not found"})
+    # TODO: Full implementation in Prompt 2.4 (ScreeningFilters.validate_overrides)
+    return {"filters": {}}
+
+
+@app.put("/api/accounts/{account_id}/watchlist")
+async def update_watchlist(account_id: str, request: Request):
+    """Update per-account watchlist. Body: {\"watchlist\": [\"AAPL\", \"MSFT\"]}."""
+    manager = _get_account_manager()
+    if manager.get_account(account_id) is None:
+        return JSONResponse(status_code=404, content={"error": f"Account {account_id!r} not found"})
+
+    try:
+        body = await request.json()
+        watchlist = body.get("watchlist", [])
+    except Exception:
+        return JSONResponse(status_code=400, content={"error": "Invalid JSON body"})
+
+    if not isinstance(watchlist, list):
+        return JSONResponse(status_code=400, content={"error": "'watchlist' must be a list"})
+
+    manager.update_watchlist(account_id, watchlist)
+    account = manager.get_account(account_id)
+    return {"account_id": account_id, "watchlist": account.get("watchlist", [])}
 
 
 @app.get("/api/equity-history")
