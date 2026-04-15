@@ -288,6 +288,7 @@ _SPREAD_OPEN_TRADE_TYPE = {
     "iron_condor":         "SELL_IRON_CONDOR",
     "long_call_vertical":  "BUY_LONG_CALL_VERTICAL",
     "short_strangle":      "SELL_SHORT_STRANGLE",
+    "calendar_spread":     "BUY_CALENDAR_SPREAD",
 }
 # Closing trade_type — opposite direction. Stored on the same row's
 # `outcome` only? No: we keep the original trade_type on the row (it

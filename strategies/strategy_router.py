@@ -17,6 +17,7 @@ _IDLE_PRIORITY = [
     "bull_put_spread",
     "bear_call_spread",
     "long_call_vertical",
+    "calendar_spread",
 ]
 
 
