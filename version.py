@@ -5,11 +5,11 @@ section to CHANGELOG.md. Other modules read this via ``settings.VERSION``
 rather than importing this file directly.
 """
 
-VERSION = "1.2.0"
-VERSION_DATE = "2026-04-14"
+VERSION = "1.3.0"
+VERSION_DATE = "2026-04-15"
 VERSION_NOTES = (
-    "Backtest Intelligence page, ORATS slippage model, context builder ORATS "
-    "enrichment, SkipReasons/Strategies ORATS insights, synthesized learn docs "
-    "(IV, non-directional strategies, theta decay), and Alpaca account key "
-    "refactor to paper account numbering."
+    "Iron Butterfly and Calendar Spread strategies, account configuration system, "
+    "strategy definition JSON files, startup reconciler, fill quality and NTA events "
+    "endpoints, option snapshot batching, strategy param injection into prompts, and "
+    "ORATS cache migration to SQLite for restart resilience."
 )
