@@ -26,6 +26,33 @@
       "status": "active",
       "watchlist": ["SPY", "QQQ", "IWM", "AAPL", "MSFT", "GOOGL", "AMZN", "JPM", "XOM", "META", "NVDA"],
       "screening_overrides": {}
+    },
+    "paper_4": {
+      "label": "Paper Account 4",
+      "credentials_key": "ALPACA_PAPER4_API_KEY",
+      "credentials_secret": "ALPACA_PAPER4_SECRET_KEY",
+      "strategy": "short_strangle",
+      "status": "inactive",
+      "watchlist": ["SPY", "QQQ", "IWM", "AAPL", "MSFT", "GOOGL"],
+      "screening_overrides": {}
+    },
+    "paper_5": {
+      "label": "Paper Account 5",
+      "credentials_key": "ALPACA_PAPER5_API_KEY",
+      "credentials_secret": "ALPACA_PAPER5_SECRET_KEY",
+      "strategy": "calendar_spread",
+      "status": "inactive",
+      "watchlist": ["SPY", "QQQ", "AAPL", "MSFT", "GOOGL", "AMZN"],
+      "screening_overrides": {}
+    },
+    "paper_6": {
+      "label": "Paper Account 6",
+      "credentials_key": "ALPACA_PAPER6_API_KEY",
+      "credentials_secret": "ALPACA_PAPER6_SECRET_KEY",
+      "strategy": null,
+      "status": "inactive",
+      "watchlist": [],
+      "screening_overrides": {}
     }
   },
   "updated_at": null

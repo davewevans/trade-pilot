@@ -35,6 +35,18 @@ class Settings:
         self.ALPACA_PAPER3_API_KEY: str = os.getenv("ALPACA_PAPER3_API_KEY", "")
         self.ALPACA_PAPER3_SECRET_KEY: str = os.getenv("ALPACA_PAPER3_SECRET_KEY", "")
 
+        # Paper Account 4 credentials
+        self.ALPACA_PAPER4_API_KEY: str = os.getenv("ALPACA_PAPER4_API_KEY", "")
+        self.ALPACA_PAPER4_SECRET_KEY: str = os.getenv("ALPACA_PAPER4_SECRET_KEY", "")
+
+        # Paper Account 5 credentials
+        self.ALPACA_PAPER5_API_KEY: str = os.getenv("ALPACA_PAPER5_API_KEY", "")
+        self.ALPACA_PAPER5_SECRET_KEY: str = os.getenv("ALPACA_PAPER5_SECRET_KEY", "")
+
+        # Paper Account 6 credentials
+        self.ALPACA_PAPER6_API_KEY: str = os.getenv("ALPACA_PAPER6_API_KEY", "")
+        self.ALPACA_PAPER6_SECRET_KEY: str = os.getenv("ALPACA_PAPER6_SECRET_KEY", "")
+
         if self.ALPACA_PAPER:
             self.ALPACA_TRADE_URL = "https://paper-api.alpaca.markets"
             self.ALPACA_STREAM_URL = "wss://paper-api.alpaca.markets/stream"
