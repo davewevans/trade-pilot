@@ -1536,6 +1536,237 @@ async def update_watchlist(request: Request):
     return data
 
 
+# ── Fill Quality ─────────────────────────────────────────────────────────────
+
+
+def _compute_fill_quality(
+    conn: sqlite3.Connection,
+    strategy_types: list[str] | None,
+    days: int,
+) -> dict:
+    """Compute per-fill slippage stats from trades that have both prices."""
+    _empty = {
+        "trades_analyzed": 0,
+        "avg_slippage": 0.0,
+        "median_slippage": 0.0,
+        "total_slippage_dollars": 0.0,
+        "positive_slippage_count": 0,
+        "negative_slippage_count": 0,
+        "exact_fill_count": 0,
+        "worst_slippage": 0.0,
+        "best_slippage": 0.0,
+        "recent_fills": [],
+    }
+
+    params: list = []
+    extra = ""
+    if strategy_types:
+        placeholders = ",".join(["?"] * len(strategy_types))
+        extra += f" AND strategy_type IN ({placeholders})"
+        params.extend(strategy_types)
+
+    cutoff = (date.today() - timedelta(days=days)).isoformat()
+    extra += " AND filled_at >= ?"
+    params.append(cutoff)
+
+    rows = conn.execute(
+        f"""
+        SELECT symbol, underlying, strategy_type, limit_price,
+               fill_price, filled_at
+          FROM trades
+         WHERE fill_status = 'filled'
+           AND fill_price IS NOT NULL
+           AND limit_price IS NOT NULL
+           AND limit_price > 0
+           {extra}
+         ORDER BY filled_at DESC
+        """,
+        params,
+    ).fetchall()
+    rows = [dict(r) for r in rows]
+
+    if len(rows) < 2:
+        return _empty
+
+    slippages: list[float] = []
+    pos_count = neg_count = exact_count = 0
+
+    for r in rows:
+        try:
+            fp = float(r["fill_price"])
+            lp = float(r["limit_price"])
+        except (TypeError, ValueError):
+            continue
+        slip = fp - lp
+        slippages.append(slip)
+        if slip > 0:
+            pos_count += 1
+        elif slip < 0:
+            neg_count += 1
+        else:
+            exact_count += 1
+
+    if not slippages:
+        return _empty
+
+    avg_slip = sum(slippages) / len(slippages)
+    s = sorted(slippages)
+    n = len(s)
+    median_slip = s[n // 2] if n % 2 else (s[n // 2 - 1] + s[n // 2]) / 2
+    total_dollars = sum(sl * 100 for sl in slippages)
+
+    recent_fills = []
+    for r in rows[:20]:
+        try:
+            fp = float(r["fill_price"])
+            lp = float(r["limit_price"])
+            recent_fills.append({
+                "symbol": r.get("symbol", ""),
+                "underlying": r.get("underlying", ""),
+                "strategy_type": r.get("strategy_type", ""),
+                "limit_price": round(lp, 4),
+                "fill_price": round(fp, 4),
+                "slippage": round(fp - lp, 4),
+                "filled_at": r.get("filled_at", ""),
+            })
+        except (TypeError, ValueError):
+            continue
+
+    return {
+        "trades_analyzed": len(slippages),
+        "avg_slippage": round(avg_slip, 4),
+        "median_slippage": round(median_slip, 4),
+        "total_slippage_dollars": round(total_dollars, 2),
+        "positive_slippage_count": pos_count,
+        "negative_slippage_count": neg_count,
+        "exact_fill_count": exact_count,
+        "worst_slippage": round(max(slippages), 4),
+        "best_slippage": round(min(slippages), 4),
+        "recent_fills": recent_fills,
+    }
+
+
+@app.get("/api/fill-quality")
+def fill_quality(
+    account: str | None = Query(default=None),
+    days: int = Query(default=30, ge=1, le=365),
+):
+    """Fill quality stats: slippage between limit_price and actual fill_price."""
+    _empty = {
+        "trades_analyzed": 0,
+        "avg_slippage": 0.0,
+        "median_slippage": 0.0,
+        "total_slippage_dollars": 0.0,
+        "positive_slippage_count": 0,
+        "negative_slippage_count": 0,
+        "exact_fill_count": 0,
+        "worst_slippage": 0.0,
+        "best_slippage": 0.0,
+        "recent_fills": [],
+    }
+    conn = _open_db()
+    if conn is None:
+        return _empty
+    try:
+        return _compute_fill_quality(conn, _strategy_filter(account), days)
+    except Exception:
+        logger.exception("fill-quality computation failed")
+        return _empty
+    finally:
+        conn.close()
+
+
+# ── NTA Events ───────────────────────────────────────────────────────────────
+
+
+def _extract_underlying_from_occ(symbol: str) -> str:
+    """Extract root ticker from an OCC option symbol (leading alpha chars)."""
+    root = ""
+    for ch in symbol:
+        if ch.isalpha():
+            root += ch
+        else:
+            break
+    return root.upper()
+
+
+@app.get("/api/nta-events")
+def nta_events(days: int = Query(default=7, ge=1, le=90)):
+    """Recent assignment / expiry / exercise events from the wheel broker."""
+    _TYPE_MAP = {
+        "OPASN": "assignment",
+        "OPEXP": "expiry",
+        "OPEXC": "exercise",
+    }
+    try:
+        from brokers.broker_factory import get_broker
+        broker = get_broker()
+
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+        activities = broker.get_account_activities(
+            ["OPASN", "OPEXP", "OPEXC"],
+            after=cutoff.isoformat(),
+        )
+
+        events = []
+        for act in activities:
+            raw_type = act.get("activity_type", "")
+            event_type = _TYPE_MAP.get(raw_type, raw_type.lower())
+            symbol = act.get("symbol", "")
+            underlying = _extract_underlying_from_occ(symbol)
+
+            price_raw = act.get("price") or act.get("per_share_amount")
+            try:
+                price = float(price_raw) if price_raw is not None else None
+            except (TypeError, ValueError):
+                price = None
+
+            try:
+                qty = int(act.get("qty") or 0)
+            except (TypeError, ValueError):
+                qty = 0
+
+            date_raw = act.get("date") or act.get("transaction_time") or ""
+            event_date = str(date_raw)[:10] if date_raw else ""
+
+            events.append({
+                "type": event_type,
+                "symbol": symbol,
+                "underlying": underlying,
+                "qty": qty,
+                "price": price,
+                "date": event_date,
+                "raw_type": raw_type,
+            })
+
+        return {"events": events, "total": len(events)}
+
+    except Exception:
+        logger.exception("Failed to fetch NTA events")
+        return {"events": [], "total": 0, "error": "Failed to fetch NTA events"}
+
+
+# ── Pending count ─────────────────────────────────────────────────────────────
+
+
+@app.get("/api/pending-count")
+def pending_count():
+    """Count of trades still awaiting fill confirmation."""
+    conn = _open_db()
+    if conn is None:
+        return {"count": 0}
+    try:
+        row = conn.execute(
+            "SELECT COUNT(*) FROM trades WHERE fill_status = 'pending'"
+        ).fetchone()
+        return {"count": int(row[0]) if row else 0}
+    except Exception:
+        logger.exception("pending-count query failed")
+        return {"count": 0}
+    finally:
+        conn.close()
+
+
 # ── Static frontend (SPA catch-all) ────────────────────────
 # Defined as a route (not a mount) so that unknown paths like
 # /reasoning fall back to index.html instead of 404-ing.

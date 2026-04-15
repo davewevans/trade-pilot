@@ -18,7 +18,7 @@ import { EmptyState } from '../components/shared/EmptyState'
 import { IVHistoryChart } from '../components/shared/IVHistoryChart'
 import { LoadingSpinner } from '../components/shared/LoadingSpinner'
 import { StatCard } from '../components/shared/StatCard'
-import type { CircuitBreaker, EquityHistory, Position, Trade } from '../types'
+import type { CircuitBreaker, EquityHistory, NtaEvent, NtaEventsResponse, Position, Trade } from '../types'
 
 // Maps the URL account slug to the strategy_type tag that
 // StateWriter.write_portfolio_snapshot stamps on each position. Keep in
@@ -135,6 +135,7 @@ export function AccountDetail() {
   const [actionError, setActionError] = useState<string | null>(null)
   const [actionLoading, setActionLoading] = useState(false)
   const [selectedStrategy, setSelectedStrategy] = useState('')
+  const [ntaEvents, setNtaEvents] = useState<NtaEventsResponse | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -179,6 +180,16 @@ export function AccountDetail() {
     return () => {
       cancelled = true
     }
+  }, [account])
+
+  // Fetch NTA events once for the wheel account (assignments/expirations)
+  useEffect(() => {
+    if (account !== 'wheel') return
+    let cancelled = false
+    api.ntaEvents(30)
+      .then((r) => { if (!cancelled) setNtaEvents(r) })
+      .catch(() => { if (!cancelled) setNtaEvents({ events: [], total: 0, error: 'Unable to load NTA events' }) })
+    return () => { cancelled = true }
   }, [account])
 
   const handleToggleActive = async () => {
@@ -566,6 +577,66 @@ export function AccountDetail() {
           )}
         </div>
       </section>
+
+      {isWheel && (
+        <section>
+          <h3 className="section-heading">Assignment &amp; Expiry Events</h3>
+          <div
+            className="rounded overflow-hidden"
+            style={{ backgroundColor: 'var(--bg-card)', border: '1px solid var(--border)' }}
+          >
+            {ntaEvents === null ? (
+              <LoadingSpinner />
+            ) : ntaEvents.error ? (
+              <EmptyState icon="list" message="Unable to load NTA events" hint={ntaEvents.error} />
+            ) : ntaEvents.events.length === 0 ? (
+              <EmptyState icon="list" message="No assignment or expiry events" hint="Assignments, expirations, and exercises from the last 30 days will appear here." />
+            ) : (
+              <div style={{ padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                {ntaEvents.events.map((e: NtaEvent, i: number) => {
+                  const typeColors: Record<string, string> = {
+                    assignment: 'var(--yellow)',
+                    expiry: 'var(--green)',
+                    exercise: 'var(--accent)',
+                  }
+                  const typeLabels: Record<string, string> = {
+                    assignment: 'Assignment',
+                    expiry: 'Expiry',
+                    exercise: 'Exercise',
+                  }
+                  const color = typeColors[e.type] ?? 'var(--text-muted)'
+                  return (
+                    <div
+                      key={i}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '12px',
+                        padding: '8px 12px',
+                        borderRadius: '6px',
+                        backgroundColor: 'var(--bg-surface)',
+                        border: `1px solid ${color}44`,
+                      }}
+                    >
+                      <span style={{ color, fontWeight: 600, fontSize: '0.8rem', minWidth: '80px' }}>
+                        {typeLabels[e.type] ?? e.raw_type}
+                      </span>
+                      <span className="font-mono" style={{ flex: 1, fontSize: '0.85rem' }}>{e.symbol}</span>
+                      <span style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>
+                        {e.qty} contract{e.qty !== 1 ? 's' : ''}
+                        {e.price != null ? ` @ $${e.price.toFixed(2)}` : ''}
+                      </span>
+                      <span className="font-mono text-xs" style={{ color: 'var(--text-muted)' }}>
+                        {new Date(e.date).toLocaleDateString()}
+                      </span>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+        </section>
+      )}
     </div>
   )
 }
@@ -580,7 +651,14 @@ function ClosedTradeRow({ t }: { t: Trade }) {
       <td className="font-mono">{t.underlying}</td>
       <td><Badge variant="action">{t.trade_type}</Badge></td>
       <td className="font-mono text-xs">{t.symbol}</td>
-      <td className="font-mono tabular">{fmtMoney(t.fill_price)}</td>
+      <td className="font-mono tabular">
+        {t.fill_price != null ? `$${t.fill_price.toFixed(2)}` : '—'}
+        {t.limit_price != null && t.fill_price != null && (
+          <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem', marginLeft: '4px' }}>
+            (asked ${t.limit_price.toFixed(2)})
+          </span>
+        )}
+      </td>
       <td
         className="font-mono tabular"
         style={{ color: pl >= 0 ? 'var(--green)' : 'var(--red)' }}

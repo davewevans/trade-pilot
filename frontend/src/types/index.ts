@@ -100,6 +100,7 @@ export interface Trade {
   strategy_type: string
   trade_type: string
   symbol: string
+  limit_price?: number | null
   fill_price: number | null
   contracts: number
   pnl: number
@@ -126,6 +127,43 @@ export interface HealthStatus {
   halted: boolean
   version?: string
   version_date?: string
+}
+
+export interface FillQualityResponse {
+  trades_analyzed: number
+  avg_slippage: number
+  median_slippage: number
+  total_slippage_dollars: number
+  positive_slippage_count: number
+  negative_slippage_count: number
+  exact_fill_count: number
+  worst_slippage: number
+  best_slippage: number
+  recent_fills: Array<{
+    symbol: string
+    underlying: string
+    strategy_type: string
+    limit_price: number
+    fill_price: number
+    slippage: number
+    filled_at: string
+  }>
+}
+
+export interface NtaEvent {
+  type: 'assignment' | 'expiry' | 'exercise'
+  symbol: string
+  underlying: string
+  qty: number
+  price: number | null
+  date: string
+  raw_type: string
+}
+
+export interface NtaEventsResponse {
+  events: NtaEvent[]
+  total: number
+  error?: string
 }
 
 export interface CircuitBreaker {

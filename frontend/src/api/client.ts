@@ -3,7 +3,9 @@ import type {
   DecisionStats,
   DecisionsResponse,
   EquityHistory,
+  FillQualityResponse,
   HealthStatus,
+  NtaEventsResponse,
   Performance,
   Portfolio,
   Trade,
@@ -281,6 +283,21 @@ export const api = {
 
   ivHistory: (symbol: string, days: number = 365) =>
     get<IVHistoryResponse>(`/api/iv-history?symbol=${encodeURIComponent(symbol)}&days=${days}`),
+
+  fillQuality: (params?: { account?: string; days?: number }) => {
+    const search = new URLSearchParams()
+    if (params?.account) search.set('account', params.account)
+    if (params?.days) search.set('days', String(params.days))
+    const qs = search.toString()
+    return get<FillQualityResponse>(`/api/fill-quality${qs ? '?' + qs : ''}`)
+  },
+
+  ntaEvents: (days?: number) => {
+    const qs = days ? `?days=${days}` : ''
+    return get<NtaEventsResponse>(`/api/nta-events${qs}`)
+  },
+
+  pendingCount: () => get<{ count: number }>('/api/pending-count'),
 
   watchlist: () =>
     get<{ wheel: string[]; iron_condor: string[]; spreads: string[]; updated_at: string | null }>('/api/watchlist'),

@@ -8,7 +8,7 @@ import { Badge } from '../components/shared/Badge'
 import { EmptyState } from '../components/shared/EmptyState'
 import { LoadingSpinner } from '../components/shared/LoadingSpinner'
 import { StatCard } from '../components/shared/StatCard'
-import type { CircuitBreaker, Decision, Portfolio } from '../types'
+import type { CircuitBreaker, Decision, FillQualityResponse, Portfolio } from '../types'
 
 const fmtMoney = (n: number | null | undefined) =>
   n == null ? '—' : `$${n.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
@@ -292,6 +292,110 @@ function DataHealthPanel() {
   )
 }
 
+function FillQualityCard() {
+  const [data, setData] = useState<FillQualityResponse | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    const load = () => {
+      api.fillQuality().then((d) => { if (!cancelled) setData(d) }).catch(() => {})
+    }
+    load()
+    const id = setInterval(load, 60_000)
+    return () => { cancelled = true; clearInterval(id) }
+  }, [])
+
+  const hitRate =
+    data && data.trades_analyzed > 0
+      ? Math.round(
+          ((data.negative_slippage_count + data.exact_fill_count) / data.trades_analyzed) * 100,
+        )
+      : null
+
+  const avgSlip = data?.avg_slippage ?? 0
+  const totalImpact = data?.total_slippage_dollars ?? 0
+
+  return (
+    <div>
+      <h2 className="section-heading">Fill quality</h2>
+      <div
+        className="rounded-md p-4"
+        style={{ backgroundColor: 'var(--bg-card)', border: '1px solid var(--border)' }}
+      >
+        {!data || data.trades_analyzed === 0 ? (
+          <div className="text-sm text-center py-2" style={{ color: 'var(--text-muted)' }}>
+            No fills yet
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <div className="text-xs mb-1" style={{ color: 'var(--text-muted)' }}>
+                Trades filled
+              </div>
+              <div
+                className="text-2xl font-mono tabular"
+                style={{ color: 'var(--text-primary)' }}
+              >
+                {data.trades_analyzed}
+              </div>
+            </div>
+            <div>
+              <div className="text-xs mb-1" style={{ color: 'var(--text-muted)' }}>
+                Avg slippage
+              </div>
+              <div
+                className="text-2xl font-mono tabular"
+                style={{
+                  color:
+                    avgSlip < 0
+                      ? 'var(--green)'
+                      : avgSlip > 0
+                        ? 'var(--red)'
+                        : 'var(--text-muted)',
+                }}
+              >
+                {avgSlip >= 0 ? '+' : ''}${avgSlip.toFixed(2)}
+              </div>
+            </div>
+            <div>
+              <div className="text-xs mb-1" style={{ color: 'var(--text-muted)' }}>
+                Total impact
+              </div>
+              <div
+                className="text-2xl font-mono tabular"
+                style={{
+                  color:
+                    totalImpact < 0
+                      ? 'var(--green)'
+                      : totalImpact > 0
+                        ? 'var(--red)'
+                        : 'var(--text-muted)',
+                }}
+              >
+                {totalImpact >= 0 ? '+' : ''}${totalImpact.toFixed(2)}
+              </div>
+            </div>
+            <div>
+              <div className="text-xs mb-1" style={{ color: 'var(--text-muted)' }}>
+                Hit rate
+              </div>
+              <div
+                className="text-2xl font-mono tabular"
+                style={{ color: 'var(--text-primary)' }}
+              >
+                {hitRate != null ? `${hitRate}%` : '—'}
+              </div>
+              <div className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
+                filled at or better than limit
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 export function Dashboard() {
   const { data, loading } = useDecisions({ limit: 20 })
   const { accounts: accountList } = useAccounts()
@@ -299,6 +403,7 @@ export function Dashboard() {
   const [cb, setCb] = useState<CircuitBreaker | null>(null)
   const [portfolios, setPortfolios] = useState<Record<string, Portfolio | null>>({})
   const [watchlistCounts, setWatchlistCounts] = useState<{ wheel: number; iron_condor: number; spreads: number } | null>(null)
+  const [pendingCount, setPendingCount] = useState<number>(0)
 
   useEffect(() => {
     let cancelled = false
@@ -315,6 +420,7 @@ export function Dashboard() {
       api.watchlist().then((w) => {
         if (!cancelled) setWatchlistCounts({ wheel: w.wheel.length, iron_condor: w.iron_condor.length, spreads: w.spreads.length })
       }).catch(() => {})
+      api.pendingCount().then((r) => { if (!cancelled) setPendingCount(r.count) }).catch(() => {})
     }
     load()
     const id = setInterval(load, 60_000)
@@ -330,7 +436,21 @@ export function Dashboard() {
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="section-heading">Accounts</h2>
+        <div className="flex items-center gap-3">
+          <h2 className="section-heading">Accounts</h2>
+          {pendingCount > 0 && (
+            <span
+              className="text-xs px-2 py-0.5 rounded font-medium"
+              style={{
+                backgroundColor: 'color-mix(in srgb, var(--yellow, #eab308) 20%, transparent)',
+                color: 'var(--yellow, #eab308)',
+                border: '1px solid var(--yellow, #eab308)',
+              }}
+            >
+              {pendingCount} order{pendingCount !== 1 ? 's' : ''} pending fill
+            </span>
+          )}
+        </div>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           {accountList.map((a) => (
             <AccountCard
@@ -371,6 +491,8 @@ export function Dashboard() {
           <StatCard label="Market Regime" value={regime || '—'} />
         </div>
       </div>
+
+      <FillQualityCard />
 
       <DataHealthPanel />
 
