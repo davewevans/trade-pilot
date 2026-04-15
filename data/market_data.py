@@ -91,11 +91,17 @@ def _snapshot_to_dict(snapshot) -> dict:
     return data
 
 
+_SNAPSHOT_BATCH_SIZE = 50
+
+
 def get_option_snapshot(symbols: list[str]) -> dict:
     """Return the latest snapshot for given option symbols.
 
     Each snapshot includes: latest quote (bid/ask), latest trade,
     greeks (delta, gamma, theta, vega, rho), and implied volatility.
+
+    Symbols are chunked into batches of 50 to avoid HTTP 400 errors from
+    URL length limits.  A batch failure is logged and skipped.
 
     Args:
         symbols: OCC option symbols (e.g. ["AAPL240119C00190000"]).
@@ -103,9 +109,31 @@ def get_option_snapshot(symbols: list[str]) -> dict:
     Returns:
         Dict keyed by symbol, each value containing snapshot data.
     """
-    request = OptionSnapshotRequest(symbol_or_symbols=symbols)
-    snapshots = _option_client.get_option_snapshot(request)
-    return {sym: _snapshot_to_dict(snap) for sym, snap in snapshots.items()}
+    result: dict = {}
+    if not symbols:
+        return result
+
+    batches = [
+        symbols[i:i + _SNAPSHOT_BATCH_SIZE]
+        for i in range(0, len(symbols), _SNAPSHOT_BATCH_SIZE)
+    ]
+    logger.info(
+        "Fetching option snapshots: total_symbols=%d batch_count=%d",
+        len(symbols), len(batches),
+    )
+
+    for batch in batches:
+        try:
+            request = OptionSnapshotRequest(symbol_or_symbols=batch)
+            snapshots = _option_client.get_option_snapshot(request)
+            result.update({sym: _snapshot_to_dict(snap) for sym, snap in snapshots.items()})
+        except Exception:
+            logger.exception(
+                "Failed to fetch option snapshots for batch of %d symbols", len(batch)
+            )
+            continue
+
+    return result
 
 
 def get_option_chain(

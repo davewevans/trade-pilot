@@ -298,6 +298,48 @@ class TestGetOptionSnapshots:
         assert result["SYM_A"]["bid"] == 1.0
         assert result["SYM_B"]["bid"] == 3.0
 
+    def test_large_watchlist_is_batched(self, broker):
+        """Passing >50 symbols triggers multiple get_option_snapshot calls."""
+        symbols = [f"SYM_{i:03d}" for i in range(110)]
+
+        # Return a snapshot for every symbol regardless of which batch is asked for.
+        def _batch_response(request):
+            return {sym: _make_snapshot(bid=float(i), ask=float(i) + 0.1)
+                    for i, sym in enumerate(request.symbol_or_symbols)}
+
+        broker.data_client.get_option_snapshot.side_effect = _batch_response
+
+        result = broker.get_option_snapshots(symbols)
+
+        # All 110 symbols should be present in the merged result.
+        assert set(result.keys()) == set(symbols)
+        # 110 symbols / batch-size 50 = 3 batches → 3 API calls.
+        assert broker.data_client.get_option_snapshot.call_count == 3
+
+    def test_partial_batch_failure_still_returns_successful_batches(self, broker):
+        """If one batch raises, the other batch's results are still returned."""
+        symbols = [f"SYM_{i:03d}" for i in range(60)]
+
+        call_count = [0]
+
+        def _flaky_response(request):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                raise RuntimeError("simulated 400 Bad Request")
+            return {sym: _make_snapshot() for sym in request.symbol_or_symbols}
+
+        broker.data_client.get_option_snapshot.side_effect = _flaky_response
+
+        result = broker.get_option_snapshots(symbols)
+
+        # First batch failed, second batch (symbols 50–59) should be present.
+        second_batch_symbols = symbols[50:]
+        for sym in second_batch_symbols:
+            assert sym in result
+        # First batch symbols should be absent (not partially filled with None sentinel).
+        for sym in symbols[:50]:
+            assert sym not in result
+
 
 # ── get_option_chain_with_greeks ────────────────────────────
 
