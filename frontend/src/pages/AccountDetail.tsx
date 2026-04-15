@@ -11,6 +11,7 @@ import {
   YAxis,
 } from 'recharts'
 import { api } from '../api/client'
+import { SCREENING_FILTERS } from '../data/screeningFilters'
 import { useAccount } from '../hooks/useAccount'
 import { useAccounts } from '../hooks/useAccounts'
 import { Badge } from '../components/shared/Badge'
@@ -136,6 +137,7 @@ export function AccountDetail() {
   const [actionLoading, setActionLoading] = useState(false)
   const [selectedStrategy, setSelectedStrategy] = useState('')
   const [ntaEvents, setNtaEvents] = useState<NtaEventsResponse | null>(null)
+  const [filtersOpen, setFiltersOpen] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -541,6 +543,72 @@ export function AccountDetail() {
               }}
             >
               Select a symbol above to view its IV rank history.
+            </div>
+          )}
+        </section>
+      )}
+
+      {SCREENING_FILTERS[account] && (
+        <section>
+          <button
+            onClick={() => setFiltersOpen((o) => !o)}
+            className="flex items-center gap-2 w-full text-left"
+            style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}
+          >
+            <h3 className="section-heading mb-0">Screening Filters</h3>
+            <span
+              style={{
+                color: 'var(--text-muted)',
+                fontSize: '0.75rem',
+                transform: filtersOpen ? 'rotate(180deg)' : 'rotate(0deg)',
+                transition: 'transform 0.15s ease',
+                display: 'inline-block',
+                lineHeight: 1,
+              }}
+            >
+              ▾
+            </span>
+          </button>
+          {filtersOpen && (
+            <div className="space-y-3 mt-3">
+              {SCREENING_FILTERS[account].map((group) => (
+                <div
+                  key={group.strategy}
+                  className="rounded p-4"
+                  style={{ backgroundColor: 'var(--bg-card)', border: '1px solid var(--border)' }}
+                >
+                  <div
+                    className="text-xs font-semibold uppercase tracking-wider mb-3"
+                    style={{ color: 'var(--text-secondary)' }}
+                  >
+                    {group.strategy}
+                  </div>
+                  <div
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: 'repeat(2, 1fr)',
+                      gap: '6px 24px',
+                    }}
+                  >
+                    {group.filters.map((f, i) => (
+                      <div key={i} className="flex items-baseline justify-between gap-2">
+                        <span className="text-xs" style={{ color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+                          {f.label}
+                        </span>
+                        <span
+                          className="font-mono text-xs"
+                          style={{ color: 'var(--text-primary)', textAlign: 'right' }}
+                        >
+                          {f.value}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+              <p className="text-xs" style={{ color: 'var(--text-muted)', marginTop: '4px' }}>
+                These filters are defined in the bot's prompt configuration and guardrails.
+              </p>
             </div>
           )}
         </section>

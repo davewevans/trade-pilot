@@ -5,11 +5,9 @@ section to CHANGELOG.md. Other modules read this via ``settings.VERSION``
 rather than importing this file directly.
 """
 
-VERSION = "1.3.0"
+VERSION = "1.3.1"
 VERSION_DATE = "2026-04-15"
 VERSION_NOTES = (
-    "Iron Butterfly and Calendar Spread strategies, account configuration system, "
-    "strategy definition JSON files, startup reconciler, fill quality and NTA events "
-    "endpoints, option snapshot batching, strategy param injection into prompts, and "
-    "ORATS cache migration to SQLite for restart resilience."
+    "Screening Filters section on Account Detail pages — collapsible read-only display "
+    "of entry criteria for each account's strategy."
 )

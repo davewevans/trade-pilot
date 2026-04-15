@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.1] - 2026-04-15
+
+### Added
+- **Screening Filters section** on each Account Detail page — collapsible read-only display
+  of the entry criteria for each account's strategy, sourced from a static frontend data
+  file (`frontend/src/data/screeningFilters.ts`). Covers Wheel (CSP + covered call),
+  Iron Condor, and Spreads (bull put, bear call, long call vertical).
+
 ## [1.3.0] - 2026-04-15
 
 ### Added
