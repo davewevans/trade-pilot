@@ -174,7 +174,7 @@ function InactiveBadge({ color }: { color: string }) {
       border: `1px solid ${color}`,
       marginBottom: '12px',
     }}>
-      INACTIVE — Not linked to an account yet
+      INACTIVE — Account configured, not yet activated for trading
     </span>
   )
 }
@@ -435,9 +435,9 @@ export function Strategies() {
         <Subheading>How the bot manages this position</Subheading>
         <ul className="space-y-1.5 text-sm" style={{ color: 'var(--text-secondary)' }}>
           <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> <strong>Profit target:</strong> close at 50% of credit collected</li>
-          <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> <strong>Stop loss:</strong> close if either leg reaches 200% of its entry premium</li>
+          <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> <strong>Stop loss:</strong> close when combined value reaches 150% of original credit (tighter than iron condor — undefined risk)</li>
           <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> <strong>Delta breach:</strong> close if either delta exceeds 0.40</li>
-          <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> <strong>DTE ≤ 14:</strong> close immediately (gamma risk without wings)</li>
+          <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> <strong>DTE ≤ 10:</strong> close immediately — gamma without wing protection is dangerous</li>
           <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> <strong>Maximum margin:</strong> 25% of buying power per position</li>
         </ul>
       </AccountSection>

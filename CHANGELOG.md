@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Short Strangle strategy** (`strategies/short_strangle_strategy.py`) — sells an OTM put
+  and OTM call without protective wings. Undefined risk with aggressive management (150% stop,
+  delta breach at 0.40, DTE 10 exit). NEUTRAL + HIGH IV only. Assigned to Paper Account 4
+  (inactive until tested).
+- **Calendar Spread strategy** (`strategies/calendar_spread_strategy.py`) — buys a longer-dated
+  ATM option and sells a shorter-dated ATM option at the same strike. First vega-positive strategy
+  in trade-pilot. NEUTRAL/BULL + LOW/MODERATE IV. Assigned to Paper Account 5 (inactive until
+  tested).
+- Paper Accounts 4, 5, 6 added to account configuration.
+
 ## [1.2.0] - 2026-04-14
 
 ### Added

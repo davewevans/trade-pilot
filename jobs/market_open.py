@@ -34,10 +34,12 @@ def run() -> None:
     from main import execute_decision
     from strategies.bear_call_spread_strategy import BearCallSpreadStrategy
     from strategies.bull_put_spread_strategy import BullPutSpreadStrategy
+    from strategies.calendar_spread_strategy import CalendarSpreadStrategy
     from strategies.circuit_breaker import CircuitBreaker
     from strategies.guardrails import Guardrails
     from strategies.iron_condor_strategy import IronCondorStrategy
     from strategies.long_call_vertical_strategy import LongCallVerticalStrategy
+    from strategies.short_strangle_strategy import ShortStrangleStrategy
     from strategies.strategy_router import StrategyRouter
     from strategies.wheel_strategy import WheelStrategy
 
@@ -141,6 +143,31 @@ def run() -> None:
         "bear_call_spread": BearCallSpreadStrategy(broker=default_broker, state_writer=sw, spread_tracker=tracker, recorder=recorder),
         "long_call_vertical": LongCallVerticalStrategy(broker=default_broker, state_writer=sw, spread_tracker=tracker, recorder=recorder),
     }
+
+    # Paper Account 4 — Short Strangle (inactive until tested; only wired when active)
+    _am = settings.get_account_manager()
+    _paper4 = _am.get_account("paper_4") if _am else None
+    if _paper4 and _paper4.get("status") == "active":
+        try:
+            paper4_broker = make_broker("short_strangle")
+        except ValueError:
+            logger.warning("Short strangle account credentials not set — using default")
+            paper4_broker = broker
+        spread_strategies["short_strangle"] = ShortStrangleStrategy(
+            broker=paper4_broker, state_writer=sw, spread_tracker=tracker, recorder=recorder,
+        )
+
+    # Paper Account 5 — Calendar Spread (inactive until tested; only wired when active)
+    _paper5 = _am.get_account("paper_5") if _am else None
+    if _paper5 and _paper5.get("status") == "active":
+        try:
+            paper5_broker = make_broker("calendar_spread")
+        except ValueError:
+            logger.warning("Calendar spread account credentials not set — using default")
+            paper5_broker = broker
+        spread_strategies["calendar_spread"] = CalendarSpreadStrategy(
+            broker=paper5_broker, state_writer=sw, spread_tracker=tracker, recorder=recorder,
+        )
     # Stamp current circuit-breaker color on each strategy so any spread
     # opened this cycle records the CB status it was entered under.
     for _s in spread_strategies.values():
@@ -640,6 +667,8 @@ _GUARDRAIL_MAP = {
     "bull_put_spread": "validate_bull_put_spread_entry",
     "bear_call_spread": "validate_bear_call_spread_entry",
     "long_call_vertical": "validate_long_call_vertical_entry",
+    "short_strangle": "validate_short_strangle_entry",
+    "calendar_spread": "validate_calendar_spread_entry",
 }
 
 
