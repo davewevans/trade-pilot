@@ -459,6 +459,116 @@ class Guardrails:
 
         return True, ""
 
+    # ── iron butterfly entry ───────────────────────────────
+
+    def validate_iron_butterfly_entry(
+        self,
+        decision: dict,
+        context: dict,
+        account: dict,
+        open_butterflies: list | None = None,
+        params: dict | None = None,
+    ) -> tuple[bool, str]:
+        """Hard rules for iron butterfly entry.
+
+        Nearly identical to iron condor guardrails with one critical addition:
+        the two short strikes must match (both ATM at the same center strike).
+        """
+        if params is None:
+            from strategies.strategy_loader import get_strategy_guardrail_params
+            params = get_strategy_guardrail_params("iron_butterfly")
+
+        # limit_price must be negative (credit)
+        limit_price = decision.get("limit_price")
+        if limit_price is not None and limit_price >= 0:
+            return False, f"limit_price must be negative for credit spread, got {limit_price}"
+
+        # Total credit minimum
+        total_credit = decision.get("total_credit", 0)
+        min_credit = params.get("min_total_credit_hard", 1.00)
+        if total_credit < min_credit:
+            return False, f"Total credit ${total_credit} < ${min_credit} minimum"
+
+        # Max loss check
+        max_loss = decision.get("max_loss", 0)
+        buying_power = float(account.get("buying_power", 0))
+        max_loss_pct = params.get("max_loss_hard_pct_of_bp", 8)
+        if buying_power > 0 and max_loss > buying_power * max_loss_pct / 100:
+            return False, (
+                f"Max loss ${max_loss:,.0f} exceeds {max_loss_pct}% of "
+                f"buying power ${buying_power * max_loss_pct / 100:,.0f}"
+            )
+
+        # DTE range
+        dte = decision.get("dte")
+        dte_min = params.get("dte_hard_min", 15)
+        dte_max = params.get("dte_hard_max", 50)
+        if dte is not None and (dte < dte_min or dte > dte_max):
+            return False, f"DTE {dte} outside allowed range {dte_min}-{dte_max}"
+
+        # Validate all 4 OCC symbols
+        for key in ("put_short_symbol", "put_long_symbol",
+                     "call_short_symbol", "call_long_symbol"):
+            sym = decision.get(key, "")
+            if not (_OCC_PUT_RE.match(sym) or _OCC_CALL_RE.match(sym)):
+                return False, f"Invalid OCC symbol for {key}: {sym!r}"
+
+        # Expiration consistency across all 4 legs (same expiration, unlike calendar)
+        from utils.occ import extract_expiration
+        exps = set()
+        for key in ("put_short_symbol", "put_long_symbol",
+                     "call_short_symbol", "call_long_symbol"):
+            exp = extract_expiration(decision.get(key, ""))
+            if exp:
+                exps.add(exp)
+        if len(exps) > 1:
+            return False, f"Iron butterfly legs have mismatched expirations: {exps}"
+
+        # BUTTERFLY-SPECIFIC CHECK: short strikes must match (both ATM)
+        from utils.occ import extract_strike
+        put_short_strike = extract_strike(decision.get("put_short_symbol", ""))
+        call_short_strike = extract_strike(decision.get("call_short_symbol", ""))
+        if put_short_strike and call_short_strike and put_short_strike != call_short_strike:
+            return False, (
+                f"Iron butterfly requires matching short strikes: "
+                f"put={put_short_strike} vs call={call_short_strike}"
+            )
+
+        # Credit-to-width ratio check
+        center_strike = put_short_strike or call_short_strike
+        put_long_strike = extract_strike(decision.get("put_long_symbol", ""))
+        if center_strike and put_long_strike:
+            wing_width = center_strike - put_long_strike
+            if wing_width > 0:
+                ratio = total_credit / wing_width
+                min_ratio = params.get("min_credit_to_width_hard", 0.20)
+                if ratio < min_ratio:
+                    return False, (
+                        f"Credit-to-width ratio {ratio:.2f} < {min_ratio} minimum "
+                        f"(credit=${total_credit}, width=${wing_width})"
+                    )
+
+        # No duplicate butterflies on same underlying
+        underlying = self._extract_root(decision.get("put_short_symbol", ""))
+        if open_butterflies:
+            for ob in open_butterflies:
+                if (ob.get("underlying", "").upper() == underlying.upper()
+                        and ob.get("status") not in ("closed", "canceled")):
+                    return False, f"Already have an open iron butterfly on {underlying}"
+
+        # Earnings check (30 days)
+        fund = context.get("fundamentals") or {}
+        dte_earnings = fund.get("days_to_earnings")
+        if dte_earnings is not None and dte_earnings <= 30:
+            return False, f"Earnings in {dte_earnings} days (need > 30)"
+
+        # IV Rank minimum
+        ivr = context.get("iv_rank") or (context.get("volatility") or {}).get("iv_rank_1y")
+        if ivr is not None and ivr < 50:
+            return False, f"IV rank {ivr} < 50 minimum for iron butterfly"
+
+        return True, ""
+
     # ── long call vertical entry ───────────────────────────
 
     def validate_long_call_vertical_entry(

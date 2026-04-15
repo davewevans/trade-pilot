@@ -651,6 +651,7 @@ def run() -> None:
 
 _GUARDRAIL_MAP = {
     "iron_condor": "validate_iron_condor_entry",
+    "iron_butterfly": "validate_iron_butterfly_entry",
     "bull_put_spread": "validate_bull_put_spread_entry",
     "bear_call_spread": "validate_bear_call_spread_entry",
     "long_call_vertical": "validate_long_call_vertical_entry",
@@ -677,6 +678,8 @@ def _handle_spread_open(
     open_spreads = tracker.get_active_spreads(strategy_type=name)
     if name == "iron_condor":
         is_valid, rejection = validator(decision, context, account, open_condors=open_spreads)
+    elif name == "iron_butterfly":
+        is_valid, rejection = validator(decision, context, account, open_butterflies=open_spreads)
     else:
         is_valid, rejection = validator(decision, context, account, open_spreads=open_spreads)
 
