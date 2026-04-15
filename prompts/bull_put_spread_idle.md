@@ -25,12 +25,12 @@ Max loss = wing width - credit if underlying falls below long put.
 OPEN if ALL of the following:
 1. confirmed_market_regime is NEUTRAL or BULL
 2. iv_rank >= 35
-3. days_to_earnings > 25
-4. best_candidate.spread_yield >= 0.001 AND net_credit >= $0.30
-5. best_candidate.credit_to_width_ratio >= 0.15
+3. days_to_earnings > {{earnings_buffer_days}}
+4. best_candidate.spread_yield >= 0.001 AND net_credit >= ${{min_net_credit}}
+5. best_candidate.credit_to_width_ratio >= {{credit_to_width_min}}
 6. best_candidate.liquidity_ok is true
-7. DTE between 21 and 40
-8. Short put delta between -0.20 and -0.30
+7. DTE between {{dte_min}} and {{dte_max}}
+8. Short put delta between -{{short_delta_min}} and -{{short_delta_max}}
 9. Prefer entry when iv_overvalued_label is "OVERVALUED" or "FAIR"
    (ORATS forecast confirms options are overpriced). If
    iv_overvalued_label is "UNDERVALUED", note this as a risk factor

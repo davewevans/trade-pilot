@@ -56,6 +56,48 @@ class ClaudeAdvisor:
                     logger.warning("Spread prompt not found: %s", path)
         logger.info("Loaded prompt files from %s", _PROMPTS_DIR)
 
+    def _inject_strategy_params(self, prompt_text: str, strategy_name: str) -> str:
+        """Replace {{param_name}} placeholders with values from strategy definition.
+
+        Flattens entry + management + guardrails into a single lookup dict.
+        Nested dicts (e.g. wheel entry.csp) are prefixed: csp_delta_min.
+        Unknown {{keys}} are left as-is with a debug log.
+        """
+        from strategies.strategy_loader import load_strategy
+        import re
+
+        try:
+            defn = load_strategy(strategy_name)
+        except FileNotFoundError:
+            logger.warning(
+                "No strategy definition for %s — using raw prompt", strategy_name,
+            )
+            return prompt_text
+
+        replacements: dict[str, str] = {}
+        for section in ("entry", "management", "guardrails"):
+            section_data = defn.get(section, {})
+            if not isinstance(section_data, dict):
+                continue
+            for k, v in section_data.items():
+                if isinstance(v, dict):
+                    for k2, v2 in v.items():
+                        replacements[f"{k}_{k2}"] = str(v2)
+                else:
+                    replacements[k] = str(v)
+
+        def replace_match(match: re.Match) -> str:
+            key = match.group(1)
+            if key in replacements:
+                return replacements[key]
+            logger.debug(
+                "Prompt template key {{%s}} not found in strategy %s — leaving as-is",
+                key, strategy_name,
+            )
+            return match.group(0)
+
+        return re.sub(r'\{\{(\w+)\}\}', replace_match, prompt_text)
+
     def ask(self, context: dict, phase: WheelState) -> dict:
         """Send the current market context to Claude and get a trade recommendation.
 
@@ -71,9 +113,10 @@ class ClaudeAdvisor:
             ValueError: If Claude's response is not valid JSON or is missing
                 required fields.
         """
+        prompt_text = self._inject_strategy_params(self.phase_prompts[phase], "wheel")
         context_json = json.dumps(context, indent=2, default=str)
         user_content = (
-            f"<instructions>\n{self.phase_prompts[phase]}\n</instructions>\n\n"
+            f"<instructions>\n{prompt_text}\n</instructions>\n\n"
             f"<market_context>\n{context_json}\n</market_context>\n\n"
             f"Make your decision now. Respond with raw JSON only."
         )
@@ -173,6 +216,7 @@ class ClaudeAdvisor:
                 "skip_reason": "missing_prompt",
             }
 
+        prompt = self._inject_strategy_params(prompt, strategy_type)
         context_json = json.dumps(context, indent=2, default=str)
         user_content = (
             f"<instructions>\n{prompt}\n</instructions>\n\n"

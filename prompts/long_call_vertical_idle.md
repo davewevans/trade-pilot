@@ -26,10 +26,10 @@ OPEN if ALL of the following:
 2. iv_environment is LOW (IVR < 30)
 3. support_bounce_signal.cahold_detected is true
 4. above_50sma is true
-5. days_to_earnings > DTE + 5 days buffer
-6. best_candidate.net_debit < 2.00
-7. best_candidate.long_leg.delta between 0.45 and 0.60
-8. DTE between 30 and 45
+5. days_to_earnings > DTE + {{earnings_buffer_days_beyond_dte}} days buffer
+6. best_candidate.net_debit < {{max_net_debit}}
+7. best_candidate.long_leg.delta between {{long_delta_min}} and {{long_delta_max}}
+8. DTE between {{dte_min}} and {{dte_max}}
 9. iv_overvalued_label should be UNDERVALUED or FAIR. If OVERVALUED,
    skip — you are overpaying for the long call.
 

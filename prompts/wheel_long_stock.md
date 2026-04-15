@@ -28,12 +28,12 @@ Only proceed to CC evaluation if none of the above trigger.
 Work through this decision:
 1. Is the stock in an acceptable condition to sell a CC?
    - Has it deteriorated significantly since assignment?
-   - Are earnings within 21 days? If so → wait, do not sell CC yet
+   - Are earnings within {{earnings_hard_block_cc_days}} days? If so → wait, do not sell CC yet
 2. Check the call chain — does any contract meet ALL CC criteria?
    - Strike must be ABOVE your cost basis
    - Strike should be above the upper Bollinger Band
-   - Delta: 0.20 to 0.35
-   - DTE: 21-35 days
+   - Delta: {{cc_delta_min}} to {{cc_delta_max}}
+   - DTE: {{cc_dte_min}}-{{cc_dte_max}} days
 3. If yes → recommend sell_call with the best qualifying contract
 4. If no → recommend hold with explanation
 

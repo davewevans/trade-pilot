@@ -19,8 +19,8 @@ CLOSE IMMEDIATELY if:
     (early assignment risk from dividend)
 
 CLOSE if ANY of:
-  - pnl_pct >= 50%
-  - dte_remaining <= 10
+  - pnl_pct >= {{profit_target_pct}}%
+  - dte_remaining <= {{close_dte_threshold}}
   - underlying > short_call_strike AND dte_remaining < 15
 
 HOLD otherwise.

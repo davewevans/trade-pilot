@@ -14,8 +14,8 @@ You are managing an open Bull Put Spread on {{underlying}}.
 
 ## Rules
 CLOSE if ANY of:
-1. pnl_pct >= 50% (captured half the credit — take the win)
-2. dte_remaining <= 10 (gamma risk)
+1. pnl_pct >= {{profit_target_pct}}% (captured half the credit — take the win)
+2. dte_remaining <= {{close_dte_threshold}} (gamma risk)
 3. Underlying < short_put_strike AND dte_remaining < 15 (cut loss early)
 
 HOLD otherwise. Let theta decay work.

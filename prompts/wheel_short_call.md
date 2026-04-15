@@ -11,11 +11,11 @@ Work through this decision:
    - If current delta >= 2x initial delta → stock has rallied, consider 
      rolling up and out for more premium
 2. Calculate current premium vs initial credit
-   - If current price <= 50% of initial credit → close early for profit
+   - If current price <= {{profit_target_pct}}% of initial credit → close early for profit
 3. Check DTE remaining
-   - If DTE <= 7 and OTM → let expire worthless (no action needed, 
+   - If DTE <= {{close_dte_threshold}} and OTM → let expire worthless (no action needed, 
      but recommend "hold" to confirm)
-   - If DTE <= 7 and ITM → decide: roll up/out, or let shares be called 
+   - If DTE <= {{close_dte_threshold}} and ITM → decide: roll up/out, or let shares be called 
      away (which is a good outcome — you sell at your target price)
 4. If stock is being called away at a profit → recommend "hold" and 
    note that assignment at expiry is the ideal outcome
@@ -34,7 +34,7 @@ wheel completed a full cycle profitably. Celebrate it.
 **Roll decision checklist:**
 Before recommending a roll, verify ALL of these:
 - [ ] The roll results in a net credit >= $0.10
-- [ ] The new contract meets DTE 21-35 and delta 0.20 to 0.35
+- [ ] The new contract meets DTE {{cc_dte_min}}-{{cc_dte_max}} and delta {{cc_delta_min}} to {{cc_delta_max}}
 - [ ] This would be roll #1 or #2 (not #3+)
 - [ ] Ex-dividend is NOT within the new expiry window (early-assign risk)
 - [ ] The stock's fundamentals have not deteriorated since entry
