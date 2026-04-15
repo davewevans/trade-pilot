@@ -22,11 +22,13 @@ const ACCOUNT_ACCENT: Record<string, string> = {
 function AccountCard({
   account,
   label,
+  strategyName,
   cbStatus,
   snapshot,
 }: {
   account: string
   label: string
+  strategyName: string | null
   cbStatus: string | null
   snapshot: Portfolio | null
 }) {
@@ -62,6 +64,11 @@ function AccountCard({
           {cbStatus && <Badge variant="circuit">{cbStatus}</Badge>}
         </div>
       </div>
+      {strategyName && (
+        <div className="text-sm mb-2" style={{ color: 'var(--text-muted)' }}>
+          {strategyName}
+        </div>
+      )}
       <div
         className="text-3xl font-mono tabular mb-1"
         style={{ color: 'var(--text-primary)' }}
@@ -330,6 +337,7 @@ export function Dashboard() {
               key={a.account_id}
               account={a.account_id}
               label={a.label}
+              strategyName={a.strategy_display_name}
               cbStatus={cbStatus}
               snapshot={portfolios[a.account_id] ?? null}
             />
