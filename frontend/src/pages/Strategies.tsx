@@ -607,7 +607,7 @@ export function Strategies() {
           <SubCard title="Contango">
             Measures short-term IV vs long-term IV. Normal contango (short-term lower) is healthy. When
             the term structure flips to backwardation (short-term higher), it signals near-term fear — the
-            bot blocks iron condor and strangle entries and factors it into regime assessment.
+            bot blocks iron condor entries and factors it into regime assessment.
           </SubCard>
           <SubCard title="Spread Yield">
             Credit received divided by stock price — normalizes premium across different price levels. A
