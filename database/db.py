@@ -101,6 +101,18 @@ _SCHEMA_STATEMENTS: tuple[str, ...] = (
     "CREATE INDEX IF NOT EXISTS idx_trades_cycle ON trades(cycle_id)",
     "CREATE INDEX IF NOT EXISTS idx_trades_pending ON trades(fill_status) WHERE fill_status = 'pending'",
     "CREATE INDEX IF NOT EXISTS idx_cycles_underlying ON cycles(underlying, strategy_type)",
+    # ── orats_cache ──────────────────────────────────────────────
+    """
+    CREATE TABLE IF NOT EXISTS orats_cache (
+        endpoint    TEXT NOT NULL,
+        cache_key   TEXT NOT NULL,
+        data_json   TEXT NOT NULL,
+        fetched_at  REAL NOT NULL,
+        ttl_seconds REAL NOT NULL,
+        PRIMARY KEY (endpoint, cache_key)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_orats_cache_endpoint ON orats_cache(endpoint)",
 )
 
 

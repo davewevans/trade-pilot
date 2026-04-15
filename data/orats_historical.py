@@ -5,18 +5,16 @@ is immutable, so responses are cached indefinitely in a local SQLite DB.
 A simple rate-limiter keeps requests under 1000/minute (ORATS limit).
 """
 
-import json
 import logging
 import math
-import sqlite3
 import threading
 import time
-from pathlib import Path
 from typing import Optional
 
 import requests
 
 from config import settings
+from data.orats_cache import ORATSCache
 
 logger = logging.getLogger(__name__)
 
@@ -56,61 +54,19 @@ def _rate_limit() -> None:
 
 # ── SQLite cache ─────────────────────────────────────────────────────────────
 
-def _cache_db_path() -> Path:
-    from config import settings as s
-    p = s.DATA_DIR / "cache"
-    p.mkdir(parents=True, exist_ok=True)
-    return p / "orats_hist.db"
+# Historical data is immutable: 7-day TTL is effectively permanent for
+# symbol+date combinations that have already settled.
+_HIST_TTL = 7 * 24 * 3600  # 7 days in seconds
 
-
-def _open_cache() -> sqlite3.Connection:
-    conn = sqlite3.connect(str(_cache_db_path()), check_same_thread=False)
-    conn.execute(
-        """CREATE TABLE IF NOT EXISTS hist_cache (
-            endpoint    TEXT NOT NULL,
-            params_key  TEXT NOT NULL,
-            data_json   TEXT NOT NULL,
-            fetched_at  REAL NOT NULL,
-            PRIMARY KEY (endpoint, params_key)
-        )"""
-    )
-    conn.commit()
-    return conn
-
-
-_CACHE_CONN: sqlite3.Connection | None = None
-_CACHE_LOCK = threading.Lock()
-
-
-def _get_cache_conn() -> sqlite3.Connection:
-    global _CACHE_CONN
-    with _CACHE_LOCK:
-        if _CACHE_CONN is None:
-            _CACHE_CONN = _open_cache()
-        return _CACHE_CONN
+_hist_cache = ORATSCache()
 
 
 def _cache_get(endpoint: str, params_key: str) -> Optional[list | dict]:
-    conn = _get_cache_conn()
-    with _CACHE_LOCK:
-        row = conn.execute(
-            "SELECT data_json FROM hist_cache WHERE endpoint=? AND params_key=?",
-            (endpoint, params_key),
-        ).fetchone()
-    if row:
-        return json.loads(row[0])
-    return None
+    return _hist_cache.get(endpoint, params_key, _HIST_TTL)
 
 
 def _cache_set(endpoint: str, params_key: str, data: list | dict) -> None:
-    conn = _get_cache_conn()
-    with _CACHE_LOCK:
-        conn.execute(
-            """INSERT OR REPLACE INTO hist_cache
-               (endpoint, params_key, data_json, fetched_at) VALUES (?,?,?,?)""",
-            (endpoint, params_key, json.dumps(data), time.time()),
-        )
-        conn.commit()
+    _hist_cache.set(endpoint, params_key, data, _HIST_TTL)
 
 
 # ── Client ───────────────────────────────────────────────────────────────────

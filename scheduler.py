@@ -75,6 +75,13 @@ def _weekday_run(job_fn, job_name: str) -> None:
 # ── schedule registration ──────────────────────────────────
 
 
+def _cleanup_orats_cache() -> None:
+    from data.orats_cache import ORATSCache
+    cache = ORATSCache()
+    deleted = cache.clear_expired()
+    logger.info("ORATS cache cleanup: %d expired entries removed", deleted)
+
+
 def register_jobs() -> None:
     """Register every job with the ``schedule`` library."""
 
@@ -112,6 +119,11 @@ def register_jobs() -> None:
     # Weekly report — Sunday 6:00 PM ET
     schedule.every().sunday.at("18:00", tz=ET).do(
         safe_run, job_fn=weekly_report.run, job_name="weekly_report",
+    )
+
+    # ORATS cache cleanup — daily at 5:00 AM ET
+    schedule.every().day.at("05:00", tz=ET).do(
+        safe_run, job_fn=_cleanup_orats_cache, job_name="orats_cache_cleanup",
     )
 
 
