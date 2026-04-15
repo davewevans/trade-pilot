@@ -77,6 +77,7 @@ class AlpacaBroker(BaseBroker):
             api_key=_api_key,
             secret_key=_secret_key,
         )
+        logger.info("AlpacaBroker initialized: paper=%s", _paper)
 
     # ── account ──────────────────────────────────────────────
 
@@ -399,9 +400,9 @@ class AlpacaBroker(BaseBroker):
         if strike_price_lte is not None:
             params["strike_price_lte"] = strike_price_lte
 
-        logger.debug(
-            "Using option data feed: indicative "
-            "(15-min delayed quotes for paper trading)"
+        logger.info(
+            "Option data feed: indicative (15-min delayed). "
+            "Paper trading does not support SIP real-time option data."
         )
 
         # Paginate through the contract list. Alpaca caps each

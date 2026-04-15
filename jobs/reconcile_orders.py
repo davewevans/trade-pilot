@@ -126,6 +126,78 @@ def reconcile_pending_orders(broker, recorder) -> None:
         )
 
 
+def reconcile_all_pending(broker, recorder) -> None:
+    """Resolve ALL pending trades regardless of date.
+
+    Called once at startup (in main.py validate_startup) to sweep up any
+    stale pending rows from prior days that were never resolved due to
+    crashes, Render restarts, or market_close job failures.
+
+    Same logic as reconcile_pending_orders() but without the today-only
+    filter.  Stale open orders (e.g. day orders from a prior session that
+    never got a terminal status) are canceled outright.
+    """
+    try:
+        pending = recorder.trades.get_pending()
+    except Exception:
+        logger.exception("Startup reconciler: failed to query pending trades")
+        return
+
+    if not pending:
+        logger.info("Startup reconciler: no pending trades to resolve")
+        return
+
+    logger.info(
+        "Startup reconciler: found %d pending trade(s) to resolve",
+        len(pending),
+    )
+
+    resolved = 0
+    for row in pending:
+        order_id = row.get("alpaca_order_id")
+        if not order_id:
+            continue
+
+        try:
+            order = broker.get_order(order_id)
+        except Exception:
+            logger.warning(
+                "Startup reconciler: get_order(%s) failed — skipping",
+                order_id, exc_info=True,
+            )
+            continue
+
+        broker_status = str(order.get("status") or "").lower()
+        fill_price = order.get("filled_avg_price")
+
+        if broker_status == "filled":
+            fp = float(fill_price) if fill_price is not None else None
+            recorder.resolve_trade(order_id, "filled", fp)
+            resolved += 1
+        elif broker_status in ("canceled", "cancelled", "rejected", "expired"):
+            recorder.resolve_trade(order_id, broker_status)
+            resolved += 1
+        else:
+            # Still open somehow — cancel it (stale from a prior session)
+            try:
+                broker.cancel_order(order_id)
+                logger.info(
+                    "Startup reconciler: canceled stale open order %s", order_id,
+                )
+                recorder.resolve_trade(order_id, "canceled")
+                resolved += 1
+            except Exception:
+                logger.warning(
+                    "Startup reconciler: failed to cancel stale order %s",
+                    order_id, exc_info=True,
+                )
+
+    logger.info(
+        "Startup reconciler: resolved %d / %d pending trade(s)",
+        resolved, len(pending),
+    )
+
+
 def reconcile_pending_spreads(strategies) -> None:
     """Drive each spread strategy through PENDING_* → terminal transitions.
 
