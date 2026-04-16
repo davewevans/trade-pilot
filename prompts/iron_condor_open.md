@@ -26,14 +26,14 @@ HOLD if:
 
 NEVER roll individual legs. Close the whole position.
 
-## Required Response Format (JSON only):
-```json
-{
-  "action": "CLOSE" | "HOLD",
-  "reasoning": str,
-  "urgency": "immediate" | "normal",
-  "limit_price": float | null
-}
-```
+## Response Guidance
 
-For CLOSE: limit_price should be a small POSITIVE value (buying back the spread cheaply). For HOLD: limit_price is null.
+For CLOSE: set urgency to "immediate" if a short strike has been breached with dte_remaining <= 20, "normal" for profit-target or time exits. limit_price should be a small positive value (buying back the spread). For HOLD: limit_price is null.
+
+For the reasoning object:
+- macro: current market environment and directional pressure
+- fundamental: any catalyst risk since entry
+- technical: price relative to short strikes, trend direction
+- volatility: IV change since entry, gamma risk assessment
+- selection: which rule triggered (or why none triggered)
+- risk: current P&L capture, remaining max loss exposure

@@ -46,23 +46,16 @@ SKIP if any condition fails. Pay particular attention to the earnings
 calendar — earnings between the two expirations creates an unpredictable
 IV asymmetry that can destroy the calendar thesis.
 
-## Required Response Format (JSON only):
-```json
-{
-  "action": "OPEN" | "SKIP",
-  "short_symbol": "str",
-  "long_symbol": "str",
-  "strike": 0.0,
-  "short_expiration": "str",
-  "long_expiration": "str",
-  "short_dte": 0,
-  "long_dte": 0,
-  "net_debit": 0.0,
-  "limit_price": 0.0,
-  "reasoning": "str",
-  "skip_reason": null
-}
-```
+## Response Guidance
 
-IMPORTANT: limit_price must be POSITIVE for debit spreads.
-For example, 1.50 means you pay $1.50 debit per spread.
+When action is OPEN, populate short_symbol, long_symbol, strike, short_expiration, long_expiration, short_dte, long_dte, net_debit, and limit_price. limit_price must be POSITIVE (net debit paid — e.g. 1.50 means you pay $1.50). Set skip_reason to null.
+
+When action is SKIP, set all symbol and date fields to null and explain the failing condition(s) in skip_reason.
+
+For the reasoning object:
+- macro: market regime, range-bound conditions, directional risk
+- fundamental: earnings calendar check (must not fall between expirations)
+- technical: Bollinger Band position, 50-SMA, stock range-bound evidence
+- volatility: IV rank (must be LOW/MODERATE), contango confirmation, ORATS label
+- selection: why this strike and expiration pair was chosen (or why none qualified)
+- risk: debit paid, narrow profit zone, IV expansion risk on long leg

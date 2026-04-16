@@ -39,24 +39,18 @@ OPEN if ALL of the following:
     expensive relative to history, increasing the edge for bull
     put spreads.
 
-SKIP if any condition fails. Explain which condition(s) failed.
+SKIP if any condition fails. Explain which condition(s) failed in skip_reason.
 
-## Required Response Format (JSON only):
-```json
-{
-  "action": "OPEN" | "SKIP",
-  "short_put_symbol": str,
-  "long_put_symbol": str,
-  "expiration": str,
-  "dte": int,
-  "short_put_strike": float,
-  "long_put_strike": float,
-  "net_credit": float,
-  "max_loss": float,
-  "limit_price": float,
-  "reasoning": str,
-  "skip_reason": str | null
-}
-```
+## Response Guidance
 
-IMPORTANT: limit_price must be NEGATIVE (net credit received). For example, -0.85 means you receive $0.85 credit.
+When action is OPEN, populate all leg symbols, strikes, expiration, dte, net_credit, max_loss, and limit_price. limit_price must be NEGATIVE (net credit received — e.g. -0.85 means $0.85 credit). Set skip_reason to null.
+
+When action is SKIP, set all leg fields to null and explain the failing condition(s) in skip_reason.
+
+For the reasoning object, address each dimension:
+- macro: overall market environment and regime
+- fundamental: company-specific factors, earnings proximity
+- technical: price action, SMA position, trend signals
+- volatility: IV rank, ORATS signals, premium environment
+- selection: why this specific strike/expiration was chosen (or why none qualified)
+- risk: max loss relative to account, key downside risks

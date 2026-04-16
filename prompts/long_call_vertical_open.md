@@ -28,13 +28,14 @@ CLOSE for loss (stop) if:
 
 HOLD if none of the above apply.
 
-## Response Format (JSON only):
-```json
-{
-  "action": "CLOSE" | "HOLD",
-  "reasoning": str,
-  "limit_price": float | null
-}
-```
+## Response Guidance
 
-For CLOSE: limit_price is positive (selling the spread). For HOLD: limit_price is null.
+For CLOSE: limit_price is positive (selling the spread to close). For HOLD: limit_price is null.
+
+For the reasoning object:
+- macro: current market environment and bullish thesis status
+- fundamental: any developments since entry
+- technical: price relative to break-even and price target
+- volatility: IV change since entry (IV decrease hurts long options)
+- selection: which exit rule triggered (or why none triggered)
+- risk: current gain/loss vs original debit, remaining time value

@@ -48,29 +48,16 @@ SKIP if any condition fails. Explain all passing and failing conditions in your
 reasoning. Be especially explicit about whether the short strikes are ATM and
 whether they match.
 
-## Response Format (JSON only)
-```json
-{
-  "action": "OPEN" | "SKIP",
-  "put_long_symbol": "str",
-  "put_short_symbol": "str",
-  "call_short_symbol": "str",
-  "call_long_symbol": "str",
-  "expiration": "str",
-  "dte": 0,
-  "total_credit": 0.0,
-  "max_loss": 0.0,
-  "limit_price": 0.0,
-  "center_strike": 0.0,
-  "reasoning": "str",
-  "confidence": 0.0,
-  "skip_reason": null
-}
-```
+## Response Guidance
 
-IMPORTANT: limit_price must be NEGATIVE (credit received). For example,
-limit_price -3.50 means you receive $3.50 credit for the entire butterfly.
+When action is OPEN, populate all four leg symbols, expiration, dte, total_credit, max_loss, limit_price, and center_strike. limit_price must be NEGATIVE (credit received — e.g. -3.50 means $3.50 credit). The put_short_symbol and call_short_symbol MUST have the same strike price (the center/ATM strike). The put_long_symbol strike must be below center and the call_long_symbol strike must be above center. Set skip_reason to null.
 
-The put_short_symbol and call_short_symbol MUST have the same strike price
-(the center/ATM strike). The put_long_symbol strike must be below center and
-the call_long_symbol strike must be above center.
+When action is SKIP, set all leg fields to null and explain the failing condition(s) in skip_reason.
+
+For the reasoning object:
+- macro: market regime and neutrality assessment
+- fundamental: earnings proximity, catalyst risks
+- technical: price proximity to center strike, expected range
+- volatility: IV rank, overvaluation label, contango status, premium richness
+- selection: why this center strike and wing width were chosen (or why none qualified)
+- risk: max loss relative to credit, tight profit zone, key risk scenarios

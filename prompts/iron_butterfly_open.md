@@ -40,18 +40,14 @@ HOLD if none of the above conditions trigger.
 **Always close the entire butterfly as a unit** — never adjust or close individual
 legs. The position is all-or-nothing; partial adjustments create undefined risk.
 
-## Response Format (JSON only)
-```json
-{
-  "action": "CLOSE" | "HOLD",
-  "reasoning": "str",
-  "spread_id": "str",
-  "limit_price": 0.0
-}
-```
+## Response Guidance
 
-IMPORTANT: For CLOSE, limit_price must be POSITIVE (the debit you pay to buy
-back the position). For example, limit_price 1.75 means you pay $1.75 to close.
-Set limit_price to the current mid-price of the spread.
+For CLOSE: set urgency to "immediate" if triggered by wing breach or DTE threshold, "normal" for profit-target exit. limit_price must be POSITIVE (the debit paid to close — e.g. 1.75 means you pay $1.75). Set to the current mid-price of the spread. For HOLD: limit_price is null.
 
-For HOLD, spread_id and limit_price may be omitted or null.
+For the reasoning object:
+- macro: current market environment and directional pressure
+- fundamental: any catalyst risk since entry
+- technical: price relative to center strike and wings
+- volatility: IV change since entry, vol-of-vol status
+- selection: which exit rule triggered (or why none triggered)
+- risk: current P&L vs max profit, remaining exposure

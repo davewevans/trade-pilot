@@ -35,22 +35,16 @@ OPEN an iron condor ONLY IF ALL of the following are true:
 
 SKIP if any condition fails.
 
-## Required Response Format (JSON only):
-```json
-{
-  "action": "OPEN" | "SKIP",
-  "put_short_symbol": str,
-  "put_long_symbol": str,
-  "call_short_symbol": str,
-  "call_long_symbol": str,
-  "expiration": str,
-  "dte": int,
-  "total_credit": float,
-  "max_loss": float,
-  "limit_price": float,
-  "reasoning": str,
-  "skip_reason": str | null
-}
-```
+## Response Guidance
 
-IMPORTANT: limit_price must be NEGATIVE (net credit received). For example, -1.80 means you receive $1.80 credit.
+When action is OPEN, populate all four leg symbols, expiration, dte, total_credit, max_loss, and limit_price. limit_price must be NEGATIVE (net credit received — e.g. -1.80 means $1.80 credit). Set skip_reason to null.
+
+When action is SKIP, set all leg fields to null and explain the failing condition(s) in skip_reason.
+
+For the reasoning object:
+- macro: market regime, VIX level, directional neutrality case
+- fundamental: earnings proximity, catalyst risk
+- technical: price action, key support/resistance
+- volatility: IV rank, ORATS overvaluation label, contango/backwardation, skew percentile
+- selection: why this specific put/call spread pair was chosen (or why none qualified)
+- risk: max loss, wing widths, key scenario where the condor loses

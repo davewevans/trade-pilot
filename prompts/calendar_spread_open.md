@@ -39,12 +39,14 @@ The profit zone is narrow — centered around the strike price.
      If the roll would cost money (net debit), CLOSE the entire position.
    - If roll_count >= 2: CLOSE — maximum rolls reached.
 
-## Response Format (JSON only):
-```json
-{
-  "action": "CLOSE" | "ROLL_SHORT" | "HOLD",
-  "reasoning": "str",
-  "spread_id": "str",
-  "limit_price": 0.0
-}
-```
+## Response Guidance
+
+For CLOSE: limit_price should reflect the value you can recover by selling the position. For ROLL_SHORT: limit_price is the net credit received on the roll (must be positive — if the roll costs money, CLOSE instead). For HOLD: limit_price is null.
+
+For the reasoning object:
+- macro: market environment and directional risk
+- fundamental: any earnings between the expirations
+- technical: price relative to strike, ATR assessment
+- volatility: IV change since entry, contango status
+- selection: which exit/roll rule triggered (or why none triggered)
+- risk: current P&L vs entry debit, roll count remaining

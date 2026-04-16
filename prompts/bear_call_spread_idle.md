@@ -45,23 +45,16 @@ SKIP if underlying is in a strong uptrend (above both SMAs with
 RSI < 60 and no resistance nearby) — this is a bearish strategy
 and needs a bearish or neutral technical setup.
 
-## Required Response Format (JSON only):
-```json
-{
-  "action": "OPEN" | "SKIP",
-  "short_call_symbol": str,
-  "long_call_symbol": str,
-  "expiration": str,
-  "dte": int,
-  "short_call_strike": float,
-  "long_call_strike": float,
-  "net_credit": float,
-  "max_loss": float,
-  "limit_price": float,
-  "bearish_rationale": str,
-  "reasoning": str,
-  "skip_reason": str | null
-}
-```
+## Response Guidance
 
-IMPORTANT: limit_price must be NEGATIVE (net credit received). For example, -0.75 means you receive $0.75 credit.
+When action is OPEN, populate all leg symbols, strikes, expiration, dte, net_credit, max_loss, and limit_price. limit_price must be NEGATIVE (net credit received — e.g. -0.75 means $0.75 credit). Set skip_reason to null.
+
+When action is SKIP, set all leg fields to null and explain the failing condition(s) in skip_reason.
+
+For the reasoning object:
+- macro: overall market environment and regime
+- fundamental: company factors, earnings, ex-dividend date
+- technical: price relative to SMAs, RSI, resistance level — include your bearish rationale here
+- volatility: IV rank, ORATS signals, call skew (skew_percentile < 33 is favorable)
+- selection: why this strike/expiration was chosen (or why none qualified)
+- risk: max loss, key upside risks if underlying rallies
