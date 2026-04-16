@@ -99,6 +99,20 @@ class Settings:
 
         self.DRY_RUN: bool = os.getenv("DRY_RUN", "false").lower() == "true"
 
+        # Research layer — liquidity scoring
+        self.RESEARCH_SCORE_MULTIPLIER_ENABLED: bool = (
+            os.getenv("RESEARCH_SCORE_MULTIPLIER_ENABLED", "true").lower() == "true"
+        )
+        self.RESEARCH_MIN_SNAPSHOTS_FOR_SCORING: int = int(
+            os.getenv("RESEARCH_MIN_SNAPSHOTS_FOR_SCORING", "30")
+        )
+        self.RESEARCH_LOOKBACK_DAYS: int = int(
+            os.getenv("RESEARCH_LOOKBACK_DAYS", "30")
+        )
+        self.RESEARCH_SCAN_BELOW_FLOOR: bool = (
+            os.getenv("RESEARCH_SCAN_BELOW_FLOOR", "false").lower() == "true"
+        )
+
         # Circuit breaker thresholds (percentages)
         self.DAILY_LOSS_HALT_PCT: float = float(os.getenv("DAILY_LOSS_HALT_PCT", "3.0"))
         self.DAILY_LOSS_REDUCE_PCT: float = float(os.getenv("DAILY_LOSS_REDUCE_PCT", "1.5"))

@@ -147,6 +147,42 @@ _SCHEMA_STATEMENTS: tuple[str, ...] = (
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_token_usage_ts ON token_usage(timestamp)",
+    # ── symbol_liquidity_snapshots ────────────────────────────────
+    """
+    CREATE TABLE IF NOT EXISTS symbol_liquidity_snapshots (
+        snapshot_id        INTEGER PRIMARY KEY AUTOINCREMENT,
+        symbol             TEXT NOT NULL,
+        strategy_type      TEXT NOT NULL,
+        snapshot_date      TEXT NOT NULL,
+        source             TEXT NOT NULL,
+        avg_ba_spread_pct  REAL,
+        avg_oi_at_strikes  INTEGER,
+        volume_to_oi_ratio REAL,
+        slippage_estimate  REAL,
+        sample_count       INTEGER,
+        raw_metrics_json   TEXT,
+        created_at         TEXT NOT NULL,
+        UNIQUE(symbol, strategy_type, snapshot_date, source)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_liq_snap_sym_strat ON symbol_liquidity_snapshots(symbol, strategy_type)",
+    "CREATE INDEX IF NOT EXISTS idx_liq_snap_date ON symbol_liquidity_snapshots(snapshot_date)",
+    # ── symbol_liquidity_scores ───────────────────────────────────
+    """
+    CREATE TABLE IF NOT EXISTS symbol_liquidity_scores (
+        symbol            TEXT NOT NULL,
+        strategy_type     TEXT NOT NULL,
+        composite_score   REAL NOT NULL,
+        tier              TEXT NOT NULL,
+        lookback_days     INTEGER NOT NULL,
+        snapshot_count    INTEGER NOT NULL,
+        below_floor       INTEGER NOT NULL DEFAULT 0,
+        confidence        TEXT NOT NULL,
+        last_updated      TEXT NOT NULL,
+        sub_metrics_json  TEXT,
+        PRIMARY KEY (symbol, strategy_type)
+    )
+    """,
 )
 
 
@@ -162,6 +198,7 @@ _MIGRATIONS: tuple[str, ...] = (
     "ALTER TABLE trades ADD COLUMN realized_pnl REAL",
     "ALTER TABLE trades ADD COLUMN outcome TEXT",
     "ALTER TABLE trades ADD COLUMN cb_status_at_entry TEXT",
+    "ALTER TABLE decisions ADD COLUMN research_metadata_json TEXT",
 )
 
 
