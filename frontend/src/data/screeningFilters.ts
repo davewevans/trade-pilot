@@ -50,7 +50,7 @@ export const SCREENING_FILTERS: Record<string, StrategyFilters[]> = {
     },
   ],
 
-  spreads: [
+  adaptive_spreads: [
     {
       strategy: 'Bull Put Spread Entry',
       filters: [
