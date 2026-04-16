@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { CoverageStats } from '../components/research/CoverageStats'
 import { LiquidityHeatmap } from '../components/research/LiquidityHeatmap'
 import { WinRateHeatmap } from '../components/research/WinRateHeatmap'
@@ -43,6 +44,22 @@ export function Research() {
   const [activeTab, setActiveTab] = useState<Tab>('winrate')
   const [selectedSymbol, setSelectedSymbol] = useState<string | null>(null)
   const [liquidityScores, setLiquidityScores] = useState<LiqScore[]>([])
+  const [pendingRecs, setPendingRecs] = useState<number>(0)
+
+  // Fetch pending recommendation count for the nudge card
+  useEffect(() => {
+    fetch('/api/research/recommendations', { credentials: 'same-origin' })
+      .then((r) => r.ok ? r.json() : null)
+      .then((d) => {
+        if (!d) return
+        let pending = 0
+        for (const wl of Object.values(d.watchlists as Record<string, { add: unknown[]; remove: unknown[] }>)) {
+          pending += (wl.add?.length ?? 0) + (wl.remove?.length ?? 0)
+        }
+        setPendingRecs(pending)
+      })
+      .catch(() => {})
+  }, [])
 
   // Pre-fetch liquidity scores so SymbolDeepDive can show them without a
   // separate round-trip (it already has the data from the heatmap render).
@@ -73,6 +90,30 @@ export function Research() {
           Automated research scores driving score multipliers in live strategy decisions.
         </p>
       </div>
+
+      {/* Pending recommendations nudge */}
+      {pendingRecs > 0 && (
+        <Link
+          to="/recommendations"
+          style={{ textDecoration: 'none' }}
+        >
+          <div
+            className="mb-4 rounded-lg px-4 py-3 flex items-center justify-between"
+            style={{
+              backgroundColor: 'color-mix(in srgb, var(--accent) 12%, var(--bg-card))',
+              border: '1px solid color-mix(in srgb, var(--accent) 35%, var(--border))',
+              cursor: 'pointer',
+            }}
+          >
+            <span style={{ fontSize: 14, color: 'var(--text-primary)', fontWeight: 600 }}>
+              {pendingRecs} pending watchlist recommendation{pendingRecs !== 1 ? 's' : ''}
+            </span>
+            <span style={{ fontSize: 13, color: 'var(--accent)', fontWeight: 600 }}>
+              Review →
+            </span>
+          </div>
+        </Link>
+      )}
 
       {/* Coverage stats */}
       <CoverageStats />

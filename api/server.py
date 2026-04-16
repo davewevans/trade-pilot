@@ -26,7 +26,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTex
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from config import settings
-from database.repositories import BacktestStatsRepository, DecisionRepository, LiquidityRepository, TradeRepository, TokenUsageRepository
+from database.repositories import BacktestStatsRepository, DecisionRepository, LiquidityRepository, RecommendationRepository, TradeRepository, TokenUsageRepository
 
 logger = logging.getLogger(__name__)
 
@@ -1942,6 +1942,190 @@ def research_winrate_coverage():
     except Exception:
         logger.exception("research/winrate/coverage query failed")
         return JSONResponse(status_code=500, content={"error": "query failed"})
+    finally:
+        conn.close()
+
+
+# ── Recommendation endpoints ─────────────────────────────────────────────────
+
+_WATCHLIST_KEY = {
+    "wheel": "WATCHLIST",
+    "iron_condor": "IRON_CONDOR_WATCHLIST",
+    "spreads": "SPREAD_WATCHLIST",
+}
+_WATCHLIST_MIN_MEMBERS = 5
+
+
+@app.get("/api/research/recommendations")
+def research_recommendations():
+    """Return the latest watchlist recommendations from the snapshot file."""
+    path = SNAPSHOTS / "watchlist_recommendations.json"
+    data = _read_json(path)
+    if data is None:
+        return JSONResponse(status_code=404, content={"error": "no recommendations generated yet"})
+    # Load current watchlist members so the UI can show them alongside recs
+    wl_path = DATA_DIR / "watchlist.json"
+    wl_data = _read_json(wl_path) or {}
+    result: dict = {"generated_at": data.get("generated_at"), "watchlists": {}}
+    for key in ("wheel", "iron_condor", "spreads"):
+        wl_entry = data.get(key, {})
+        result["watchlists"][key] = {
+            "current_members": wl_data.get(key, []),
+            "add": wl_entry.get("add", []),
+            "remove": wl_entry.get("remove", []),
+            "no_change": wl_entry.get("no_change", []),
+            "considered_but_rejected": wl_entry.get("considered_but_rejected", []),
+        }
+    return result
+
+
+@app.get("/api/research/recommendations/history")
+def research_recommendations_history():
+    """Return last 100 recommendation rows including operator decisions."""
+    conn = _open_db()
+    if conn is None:
+        return {"rows": []}
+    try:
+        repo = RecommendationRepository(conn)
+        rows = repo.get_history(limit=100)
+        return {"rows": rows}
+    except Exception:
+        logger.exception("research/recommendations/history query failed")
+        return JSONResponse(status_code=500, content={"error": "query failed"})
+    finally:
+        conn.close()
+
+
+@app.post("/api/research/recommendations/apply")
+async def research_recommendations_apply(request: Request):
+    """Accept or reject pending recommendations, applying accepted ones to watchlist.json."""
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(status_code=400, content={"error": "invalid JSON body"})
+
+    accepted_items = body.get("accepted", [])
+    rejected_items = body.get("rejected", [])
+
+    if not isinstance(accepted_items, list) or not isinstance(rejected_items, list):
+        return JSONResponse(status_code=400, content={"error": "'accepted' and 'rejected' must be arrays"})
+
+    all_ids = [item.get("recommendation_id") for item in accepted_items + rejected_items]
+    if not all(isinstance(i, int) for i in all_ids):
+        return JSONResponse(status_code=400, content={"error": "each item must have an integer recommendation_id"})
+
+    conn = _open_db()
+    if conn is None:
+        return JSONResponse(status_code=503, content={"error": "database unavailable"})
+
+    try:
+        repo = RecommendationRepository(conn)
+
+        # Validate: all IDs must exist and be undecided
+        all_history = repo.get_history(limit=10000)
+        history_by_id = {r["recommendation_id"]: r for r in all_history}
+
+        errors: list[str] = []
+        for rid in all_ids:
+            if rid not in history_by_id:
+                errors.append(f"recommendation_id {rid} not found")
+            elif history_by_id[rid]["operator_decision"] is not None:
+                errors.append(f"recommendation_id {rid} already decided as {history_by_id[rid]['operator_decision']!r}")
+        if errors:
+            return JSONResponse(status_code=400, content={"errors": errors})
+
+        # Load current watchlist
+        wl_path = DATA_DIR / "watchlist.json"
+        wl_data = _read_json(wl_path) or {"wheel": [], "iron_condor": [], "spreads": []}
+        wheel = list(wl_data.get("wheel", []))
+        iron_condor = list(wl_data.get("iron_condor", []))
+        spreads = list(wl_data.get("spreads", []))
+        wl_map = {"wheel": wheel, "iron_condor": iron_condor, "spreads": spreads}
+
+        # Pre-validate: check remove would not drop below minimum
+        for item in accepted_items:
+            rid = item["recommendation_id"]
+            rec = history_by_id[rid]
+            if rec["action"] == "remove":
+                wl_name = rec["watchlist_name"]
+                current = wl_map.get(wl_name, [])
+                if len(current) - 1 < _WATCHLIST_MIN_MEMBERS:
+                    return JSONResponse(
+                        status_code=400,
+                        content={
+                            "error": (
+                                f"Cannot remove {rec['symbol']} from {wl_name}: "
+                                f"would drop below minimum {_WATCHLIST_MIN_MEMBERS} members "
+                                f"(currently {len(current)})"
+                            )
+                        },
+                    )
+
+        # Apply accepted changes
+        applied = 0
+        now_iso = datetime.now().isoformat()
+        for item in accepted_items:
+            rid = item["recommendation_id"]
+            rec = history_by_id[rid]
+            wl_name = rec["watchlist_name"]
+            symbol = rec["symbol"]
+            action = rec["action"]
+            current = wl_map.get(wl_name, [])
+            try:
+                if action == "add" and symbol not in current:
+                    current.append(symbol)
+                    wl_map[wl_name] = current
+                    logger.info("AUDIT apply accept: add %s to %s (rec_id=%d)", symbol, wl_name, rid)
+                elif action == "remove" and symbol in current:
+                    current.remove(symbol)
+                    wl_map[wl_name] = current
+                    logger.info("AUDIT apply accept: remove %s from %s (rec_id=%d)", symbol, wl_name, rid)
+                else:
+                    logger.info("AUDIT apply accept no-op: action=%s symbol=%s wl=%s (rec_id=%d)", action, symbol, wl_name, rid)
+                repo.record_decision(rid, "accepted", decided_at=now_iso)
+                applied += 1
+            except Exception as exc:
+                errors.append(f"rec_id={rid}: {exc}")
+
+        # Record rejected
+        rejected_count = 0
+        for item in rejected_items:
+            rid = item["recommendation_id"]
+            rec = history_by_id[rid]
+            try:
+                repo.record_decision(rid, "rejected", decided_at=now_iso)
+                logger.info("AUDIT apply reject: %s on %s (rec_id=%d)", rec["action"], rec["symbol"], rid)
+                rejected_count += 1
+            except Exception as exc:
+                errors.append(f"rec_id={rid}: {exc}")
+
+        # Save watchlist.json and hot-reload
+        updated_wl = {
+            "wheel": wl_map["wheel"],
+            "iron_condor": wl_map["iron_condor"],
+            "spreads": wl_map["spreads"],
+            "updated_at": now_iso,
+        }
+        wl_path.write_text(json.dumps(updated_wl, indent=2), encoding="utf-8")
+
+        settings.WATCHLIST = wl_map["wheel"]
+        settings.IRON_CONDOR_WATCHLIST = wl_map["iron_condor"]
+        settings.SPREAD_WATCHLIST = wl_map["spreads"]
+
+        logger.info(
+            "Watchlist updated via recommendations: %d wheel, %d iron_condor, %d spreads",
+            len(wl_map["wheel"]), len(wl_map["iron_condor"]), len(wl_map["spreads"]),
+        )
+
+        return {
+            "applied": applied,
+            "rejected": rejected_count,
+            "updated_watchlists": updated_wl,
+            "errors": errors,
+        }
+    except Exception:
+        logger.exception("research/recommendations/apply failed")
+        return JSONResponse(status_code=500, content={"error": "apply failed"})
     finally:
         conn.close()
 

@@ -23,6 +23,7 @@ import { Backtest } from './pages/Backtest'
 import { BacktestIntel } from './pages/BacktestIntel'
 import { Volatility } from './pages/Volatility'
 import { Research } from './pages/Research'
+import { Recommendations } from './pages/Recommendations'
 
 export function App() {
   return (
@@ -32,6 +33,7 @@ export function App() {
           <Route path="/" element={<Dashboard />} />
           <Route path="/watchlist" element={<Watchlist />} />
           <Route path="/research" element={<Research />} />
+          <Route path="/recommendations" element={<Recommendations />} />
           <Route path="/backtest" element={<Backtest />} />
           <Route path="/backtest-intel" element={<BacktestIntel />} />
           <Route path="/volatility" element={<Volatility />} />
