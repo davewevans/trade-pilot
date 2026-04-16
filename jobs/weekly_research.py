@@ -92,12 +92,54 @@ def run() -> None:
         logger.exception("Backtest sweep failed — continuing")
         sweep_stats = {"error": True}
 
+    # ── Phase 3: watchlist recommendations ───────────────────────────────
+    logger.info("Phase 3: generating watchlist recommendations")
+    rec_summary: dict = {}
+    try:
+        if settings.RESEARCH_RECOMMENDATIONS_ENABLED:
+            from research.recommendations.recommender import WatchlistRecommender
+            from database.repositories import (
+                RecommendationRepository,
+                BacktestStatsRepository,
+                LiquidityRepository,
+            )
+
+            liq_repo = LiquidityRepository(db.get_connection())
+            bt_repo = BacktestStatsRepository(db.get_connection())
+            rec_repo = RecommendationRepository(db.get_connection())
+
+            recommender = WatchlistRecommender(
+                liquidity_repo=liq_repo,
+                backtest_stats_repo=bt_repo,
+                universe=universe,
+                candidate_universe=universe,
+            )
+            rec_results = recommender.generate_all()
+            recommender.persist(rec_results, rec_repo)
+
+            rec_summary = {
+                wl: {
+                    "add_count": len(data.get("add", [])),
+                    "remove_count": len(data.get("remove", [])),
+                }
+                for wl, data in rec_results.items()
+                if wl != "generated_at"
+            }
+            logger.info("Recommendations generated: %s", rec_summary)
+        else:
+            logger.info("Recommendations disabled by config")
+            rec_summary = {"disabled": True}
+    except Exception:
+        logger.exception("Recommendation generation failed — continuing")
+        rec_summary = {"error": True}
+
     # ── Persist run summary ───────────────────────────────────────────────
     summary = {
         "run_at": datetime.now(timezone.utc).isoformat(),
         "scan_stats": scan_stats,
         "rescore_stats": rescore_stats,
         "sweep_stats": sweep_stats,
+        "rec_summary": rec_summary,
     }
 
     summary_path: Path = settings.DATA_DIR / "research_last_run.json"

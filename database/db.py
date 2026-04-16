@@ -244,6 +244,25 @@ _SCHEMA_STATEMENTS: tuple[str, ...] = (
         PRIMARY KEY (entry_regime, strategy_type)
     )
     """,
+    # ── watchlist_recommendations ─────────────────────────────────────
+    """
+    CREATE TABLE IF NOT EXISTS watchlist_recommendations (
+        recommendation_id   INTEGER PRIMARY KEY AUTOINCREMENT,
+        generated_at        TEXT NOT NULL,
+        watchlist_name      TEXT NOT NULL,
+        symbol              TEXT NOT NULL,
+        action              TEXT NOT NULL,
+        score               REAL NOT NULL,
+        reasoning           TEXT NOT NULL,
+        data_confidence     TEXT NOT NULL,
+        operator_decision   TEXT,
+        operator_decided_at TEXT,
+        sub_scores_json     TEXT
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_wl_rec_generated ON watchlist_recommendations(generated_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_wl_rec_action ON watchlist_recommendations(watchlist_name, action)",
+    "CREATE INDEX IF NOT EXISTS idx_wl_rec_pending ON watchlist_recommendations(operator_decision) WHERE operator_decision IS NULL",
 )
 
 

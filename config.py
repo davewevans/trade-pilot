@@ -136,6 +136,17 @@ class Settings:
             os.getenv("RESEARCH_BACKTEST_MAX_SYMBOLS_PER_RUN", "50")
         )
 
+        # Research layer — watchlist recommendations
+        self.RESEARCH_RECOMMENDATIONS_ENABLED: bool = (
+            os.getenv("RESEARCH_RECOMMENDATIONS_ENABLED", "true").lower() == "true"
+        )
+        self.RESEARCH_MAX_RECOMMENDATIONS_PER_LIST: int = int(
+            os.getenv("RESEARCH_MAX_RECOMMENDATIONS_PER_LIST", "5")
+        )
+        self.RESEARCH_REMOVE_MIN_WEEKS_OBSERVED: int = int(
+            os.getenv("RESEARCH_REMOVE_MIN_WEEKS_OBSERVED", "12")
+        )
+
         # Circuit breaker thresholds (percentages)
         self.DAILY_LOSS_HALT_PCT: float = float(os.getenv("DAILY_LOSS_HALT_PCT", "3.0"))
         self.DAILY_LOSS_REDUCE_PCT: float = float(os.getenv("DAILY_LOSS_REDUCE_PCT", "1.5"))
