@@ -47,6 +47,10 @@ class Settings:
         self.ALPACA_PAPER6_API_KEY: str = os.getenv("ALPACA_PAPER6_API_KEY", "")
         self.ALPACA_PAPER6_SECRET_KEY: str = os.getenv("ALPACA_PAPER6_SECRET_KEY", "")
 
+        # Conservative Wheel account credentials (fourth dedicated paper account)
+        self.ALPACA_CONSERVATIVE_WHEEL_API_KEY: str = os.getenv("ALPACA_CONSERVATIVE_WHEEL_API_KEY", "")
+        self.ALPACA_CONSERVATIVE_WHEEL_SECRET_KEY: str = os.getenv("ALPACA_CONSERVATIVE_WHEEL_SECRET_KEY", "")
+
         if self.ALPACA_PAPER:
             self.ALPACA_TRADE_URL = "https://paper-api.alpaca.markets"
             self.ALPACA_STREAM_URL = "wss://paper-api.alpaca.markets/stream"
@@ -187,11 +191,12 @@ class Settings:
             try:
                 data = json.loads(watchlist_path.read_text(encoding="utf-8"))
                 self.WATCHLIST: list[str] = data.get("wheel", ["AAPL", "SPY"])
+                self.CONSERVATIVE_WHEEL_WATCHLIST: list[str] = data.get("conservative_wheel", list(self.WATCHLIST))
                 self.SPREAD_WATCHLIST: list[str] = data.get("spreads", list(self.WATCHLIST))
                 self.IRON_CONDOR_WATCHLIST: list[str] = data.get("iron_condor", list(self.SPREAD_WATCHLIST))
                 log.info(
-                    "Loaded watchlist from %s: %d wheel, %d iron_condor, %d spreads",
-                    watchlist_path, len(self.WATCHLIST),
+                    "Loaded watchlist from %s: %d wheel, %d conservative_wheel, %d iron_condor, %d spreads",
+                    watchlist_path, len(self.WATCHLIST), len(self.CONSERVATIVE_WHEEL_WATCHLIST),
                     len(self.IRON_CONDOR_WATCHLIST), len(self.SPREAD_WATCHLIST),
                 )
                 return
@@ -201,6 +206,7 @@ class Settings:
         # watchlist.json missing or unreadable — seed from built-in defaults
         log.warning("watchlist.json not found at %s; using built-in defaults", watchlist_path)
         self.WATCHLIST = ["AAPL", "SPY", "MSFT", "AMD", "JPM", "XOM"]
+        self.CONSERVATIVE_WHEEL_WATCHLIST = list(self.WATCHLIST)
         self.IRON_CONDOR_WATCHLIST = ["SPY", "QQQ", "IWM", "AAPL", "MSFT", "GOOGL", "AMZN", "JPM", "XOM", "META", "NVDA"]
         self.SPREAD_WATCHLIST = [
             "AAPL", "MSFT", "AMD", "GOOGL", "AMZN", "META", "NVDA", "TSLA",
@@ -228,14 +234,19 @@ class Settings:
     # Three strategies share Paper Account 1 (ALPACA_PAPER1_API_KEY).
     # DEPRECATED: Use AccountManager instead. Will be removed in v1.1.
     STRATEGY_ACCOUNT_MAP: dict[str, tuple[str, str]] = {
-        "wheel":              ("ALPACA_PAPER2_API_KEY", "ALPACA_PAPER2_SECRET_KEY"),
-        "iron_condor":        ("ALPACA_PAPER3_API_KEY", "ALPACA_PAPER3_SECRET_KEY"),
-        "bull_put_spread":    ("ALPACA_PAPER1_API_KEY", "ALPACA_PAPER1_SECRET_KEY"),
-        "bear_call_spread":   ("ALPACA_PAPER1_API_KEY", "ALPACA_PAPER1_SECRET_KEY"),
-        "long_call_vertical": ("ALPACA_PAPER1_API_KEY", "ALPACA_PAPER1_SECRET_KEY"),
-        "iron_butterfly":     ("ALPACA_PAPER4_API_KEY", "ALPACA_PAPER4_SECRET_KEY"),
-        "calendar_spread":    ("ALPACA_PAPER5_API_KEY", "ALPACA_PAPER5_SECRET_KEY"),
+        "wheel":               ("ALPACA_PAPER2_API_KEY", "ALPACA_PAPER2_SECRET_KEY"),
+        "conservative_wheel":  ("ALPACA_CONSERVATIVE_WHEEL_API_KEY", "ALPACA_CONSERVATIVE_WHEEL_SECRET_KEY"),
+        "iron_condor":         ("ALPACA_PAPER3_API_KEY", "ALPACA_PAPER3_SECRET_KEY"),
+        "bull_put_spread":     ("ALPACA_PAPER1_API_KEY", "ALPACA_PAPER1_SECRET_KEY"),
+        "bear_call_spread":    ("ALPACA_PAPER1_API_KEY", "ALPACA_PAPER1_SECRET_KEY"),
+        "long_call_vertical":  ("ALPACA_PAPER1_API_KEY", "ALPACA_PAPER1_SECRET_KEY"),
+        "iron_butterfly":      ("ALPACA_PAPER4_API_KEY", "ALPACA_PAPER4_SECRET_KEY"),
+        "calendar_spread":     ("ALPACA_PAPER5_API_KEY", "ALPACA_PAPER5_SECRET_KEY"),
     }
+
+    # Conservative Wheel position sizing (differs from standard wheel)
+    CONSERVATIVE_WHEEL_MAX_POSITION_PCT: float = 0.05   # 5% of BP per position
+    CONSERVATIVE_WHEEL_MAX_CONCURRENT: int = 10
 
     def get_broker_credentials(self, strategy_name: str) -> tuple[str, str]:
         """Return (api_key, secret_key) for the account assigned to *strategy_name*."""

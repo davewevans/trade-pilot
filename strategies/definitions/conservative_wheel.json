@@ -1,0 +1,53 @@
+{
+  "name": "conservative_wheel",
+  "display_name": "Conservative Wheel",
+  "description": "Conservative variant: shorter CC cycles (7–14 DTE), wider position count (10 concurrent), smaller size per position (5% of BP), and 3 rolls before closing. CSP → assignment → CC → called away → repeat.",
+  "type": "conservative_wheel",
+  "composite": false,
+  "entry": {
+    "csp": {
+      "delta_min": 0.20,
+      "delta_max": 0.30,
+      "dte_min": 21,
+      "dte_max": 35,
+      "iv_rank_min": 30,
+      "min_open_interest": 200,
+      "earnings_buffer_days": 21,
+      "max_position_pct_of_bp": 5,
+      "max_concurrent_positions": 10,
+      "above_sma_50": true
+    },
+    "cc": {
+      "delta_min": 0.20,
+      "delta_max": 0.35,
+      "dte_min": 7,
+      "dte_max": 14,
+      "earnings_buffer_days": 21,
+      "strike_above_upper_bb": false,
+      "strike_above_cost_basis": true
+    }
+  },
+  "management": {
+    "profit_target_pct": 50,
+    "delta_double_roll": true,
+    "close_dte_threshold": 3,
+    "premium_floor_to_hold": 0.15,
+    "max_rolls": 3
+  },
+  "guardrails": {
+    "earnings_hard_block_csp_days": 14,
+    "earnings_hard_block_cc_days": 21,
+    "max_position_pct_of_bp_hard": 5,
+    "require_shares_for_cc": true,
+    "no_duplicate_csp_same_underlying": true,
+    "no_duplicate_cc_same_underlying": true
+  },
+  "regime": {
+    "allowed": ["BULL", "NEUTRAL", "BEAR"],
+    "blocked": ["CRASH"]
+  },
+  "iv_environment": {
+    "allowed": ["MODERATE", "HIGH"],
+    "blocked": ["LOW"]
+  }
+}
