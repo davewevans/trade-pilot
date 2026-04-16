@@ -603,7 +603,7 @@ def get_stock_technicals(symbol: str) -> dict:
         sma_50, sma_200, above_sma_50, above_sma_200, golden_cross,
         macd_value, macd_signal, macd_bullish, avg_volume_10d,
         avg_volume_30d, volume_trend, price_change_pct_5d,
-        price_change_pct_20d.
+        price_change_pct_20d, high_20d, low_20d.
     """
     end = datetime.now()
     start = end - timedelta(days=300)  # enough for SMA-200 warm-up
@@ -694,6 +694,10 @@ def get_stock_technicals(symbol: str) -> dict:
     else:
         price_change_pct_20d = None
 
+    # 20-day high/low (support/resistance proxies for strike selection)
+    high_20d = float(high.tail(20).max())
+    low_20d = float(low.tail(20).min())
+
     return {
         "current_price": current_price,
         "atr_14": round(atr_14, 4),
@@ -715,6 +719,8 @@ def get_stock_technicals(symbol: str) -> dict:
         "volume_trend": volume_trend,
         "price_change_pct_5d": price_change_pct_5d,
         "price_change_pct_20d": price_change_pct_20d,
+        "high_20d": round(high_20d, 2),
+        "low_20d": round(low_20d, 2),
     }
 
 
