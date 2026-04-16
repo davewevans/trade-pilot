@@ -26,7 +26,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTex
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from config import settings
-from database.repositories import DecisionRepository, TradeRepository, TokenUsageRepository
+from database.repositories import BacktestStatsRepository, DecisionRepository, LiquidityRepository, TradeRepository, TokenUsageRepository
 
 logger = logging.getLogger(__name__)
 
@@ -1763,6 +1763,185 @@ def pending_count():
     except Exception:
         logger.exception("pending-count query failed")
         return {"count": 0}
+    finally:
+        conn.close()
+
+
+# ── Research endpoints ────────────────────────────────────────────────────────
+
+
+@app.get("/api/research/liquidity/scores")
+def research_liquidity_scores():
+    """All symbol_liquidity_scores rows, grouped by strategy_type."""
+    conn = _open_db()
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    if conn is None:
+        return {"generated_at": now, "strategies": {}}
+    try:
+        repo = LiquidityRepository(conn)
+        rows = repo.get_all_scores()
+        grouped: dict[str, list] = {}
+        for r in rows:
+            strat = r.get("strategy_type", "unknown")
+            grouped.setdefault(strat, []).append(r)
+        return {"generated_at": now, "strategies": grouped}
+    except Exception:
+        logger.exception("research/liquidity/scores query failed")
+        return JSONResponse(status_code=500, content={"error": "query failed"})
+    finally:
+        conn.close()
+
+
+@app.get("/api/research/winrate/symbol-stats")
+def research_winrate_symbol_stats():
+    """All symbol_strategy_stats rows, grouped by strategy_type."""
+    conn = _open_db()
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    if conn is None:
+        return {"generated_at": now, "strategies": {}}
+    try:
+        repo = BacktestStatsRepository(conn)
+        rows = repo.get_all_symbol_stats()
+        grouped: dict[str, list] = {}
+        for r in rows:
+            strat = r.get("strategy_type", "unknown")
+            grouped.setdefault(strat, []).append(r)
+        return {"generated_at": now, "strategies": grouped}
+    except Exception:
+        logger.exception("research/winrate/symbol-stats query failed")
+        return JSONResponse(status_code=500, content={"error": "query failed"})
+    finally:
+        conn.close()
+
+
+@app.get("/api/research/winrate/regime-stats")
+def research_winrate_regime_stats():
+    """All regime_strategy_stats rows, grouped by entry_regime."""
+    conn = _open_db()
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    if conn is None:
+        return {"generated_at": now, "regimes": {}}
+    try:
+        repo = BacktestStatsRepository(conn)
+        rows = repo.get_all_regime_stats()
+        grouped: dict[str, list] = {}
+        for r in rows:
+            regime = r.get("entry_regime", "unknown")
+            grouped.setdefault(regime, []).append(r)
+        return {"generated_at": now, "regimes": grouped}
+    except Exception:
+        logger.exception("research/winrate/regime-stats query failed")
+        return JSONResponse(status_code=500, content={"error": "query failed"})
+    finally:
+        conn.close()
+
+
+@app.get("/api/research/winrate/symbol/{ticker}")
+def research_winrate_symbol(ticker: str):
+    """Per-symbol deep dive: all strategy stats + last 20 trades per strategy.
+
+    Returns 404 if the ticker has no backtest data at all.
+    """
+    ticker = ticker.upper()
+    conn = _open_db()
+    if conn is None:
+        return JSONResponse(status_code=503, content={"error": "database unavailable"})
+    try:
+        repo = BacktestStatsRepository(conn)
+        all_stats = repo.get_all_symbol_stats()
+        symbol_stats = {
+            r["strategy_type"]: r
+            for r in all_stats
+            if r.get("symbol", "").upper() == ticker
+        }
+        if not symbol_stats:
+            return JSONResponse(
+                status_code=404,
+                content={"error": f"No backtest data for symbol: {ticker}"},
+            )
+
+        strategies = [
+            "wheel_csp", "bull_put_spread", "bear_call_spread",
+            "iron_condor", "long_call_vertical",
+        ]
+        recent_trades: dict[str, list] = {}
+        for strat in strategies:
+            trades = repo.get_trades(symbol=ticker, strategy_type=strat)
+            # Return most recent 20, sorted by entry_date desc
+            trades_sorted = sorted(trades, key=lambda t: t.get("entry_date", ""), reverse=True)
+            recent_trades[strat] = trades_sorted[:20]
+
+        return {
+            "symbol": ticker,
+            "stats": symbol_stats,
+            "recent_trades": recent_trades,
+        }
+    except Exception:
+        logger.exception("research/winrate/symbol/%s query failed", ticker)
+        return JSONResponse(status_code=500, content={"error": "query failed"})
+    finally:
+        conn.close()
+
+
+@app.get("/api/research/winrate/coverage")
+def research_winrate_coverage():
+    """Summary coverage metrics for the win-rate research layer."""
+    conn = _open_db()
+    if conn is None:
+        return {
+            "total_backtest_trades": 0,
+            "symbols_with_stats": 0,
+            "high_confidence_pairs": 0,
+            "low_confidence_pairs": 0,
+            "no_data_pairs": 0,
+            "oldest_trade": None,
+            "newest_trade": None,
+            "last_sweep_run": None,
+        }
+    try:
+        repo = BacktestStatsRepository(conn)
+
+        # Count trades
+        trade_row = conn.execute("SELECT COUNT(*) FROM backtest_trades").fetchone()
+        total_trades = int(trade_row[0]) if trade_row else 0
+
+        # Date range
+        date_row = conn.execute(
+            "SELECT MIN(entry_date), MAX(entry_date) FROM backtest_trades"
+        ).fetchone()
+        oldest_trade = date_row[0] if date_row else None
+        newest_trade = date_row[1] if date_row else None
+
+        # Stats summary
+        all_stats = repo.get_all_symbol_stats()
+        symbols_with_stats = len({r["symbol"] for r in all_stats})
+        high_conf = sum(1 for r in all_stats if r.get("confidence") == "high")
+        low_conf = sum(1 for r in all_stats if r.get("confidence") == "low")
+        no_data = sum(1 for r in all_stats if r.get("confidence") == "none")
+
+        # Last sweep run from state file
+        sweep_state_path = DATA_DIR / "backtest_sweep_state.json"
+        last_sweep_run = None
+        if sweep_state_path.exists():
+            try:
+                state = json.loads(sweep_state_path.read_text(encoding="utf-8"))
+                last_sweep_run = state.get("last_completed_at")
+            except Exception:
+                pass
+
+        return {
+            "total_backtest_trades": total_trades,
+            "symbols_with_stats": symbols_with_stats,
+            "high_confidence_pairs": high_conf,
+            "low_confidence_pairs": low_conf,
+            "no_data_pairs": no_data,
+            "oldest_trade": oldest_trade,
+            "newest_trade": newest_trade,
+            "last_sweep_run": last_sweep_run,
+        }
+    except Exception:
+        logger.exception("research/winrate/coverage query failed")
+        return JSONResponse(status_code=500, content={"error": "query failed"})
     finally:
         conn.close()
 

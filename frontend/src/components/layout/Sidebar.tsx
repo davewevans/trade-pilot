@@ -118,6 +118,9 @@ export function Sidebar() {
       </SidebarSection>
 
       <SidebarSection label="Research" storageKey="research" defaultOpen={true}>
+        <NavLink to="/research" className={linkClass} style={({ isActive }) => linkStyle(isActive)}>
+          Research Dashboard
+        </NavLink>
         <NavLink to="/backtest" className={linkClass} style={({ isActive }) => linkStyle(isActive)}>
           Backtester
         </NavLink>

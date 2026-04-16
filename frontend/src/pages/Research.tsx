@@ -1,0 +1,133 @@
+import { useEffect, useState } from 'react'
+import { CoverageStats } from '../components/research/CoverageStats'
+import { LiquidityHeatmap } from '../components/research/LiquidityHeatmap'
+import { WinRateHeatmap } from '../components/research/WinRateHeatmap'
+import { CombinedHeatmap } from '../components/research/CombinedHeatmap'
+import { SymbolDeepDive } from '../components/research/SymbolDeepDive'
+
+// ── Types ─────────────────────────────────────────────────────────────────────
+
+interface LiqScore {
+  symbol: string
+  strategy_type: string
+  tier: string
+  confidence: string
+  composite_score: number | null
+}
+
+// ── Tab config ────────────────────────────────────────────────────────────────
+
+type Tab = 'liquidity' | 'winrate' | 'combined'
+
+const TABS: { key: Tab; label: string; description: string }[] = [
+  {
+    key: 'liquidity',
+    label: 'Liquidity',
+    description: 'Option market quality tiers — bid-ask spread, open interest, and volume',
+  },
+  {
+    key: 'winrate',
+    label: 'Win Rate',
+    description: 'Historical backtest win rates per (symbol, strategy) pair',
+  },
+  {
+    key: 'combined',
+    label: 'Combined',
+    description: 'Effective total score multiplier = liquidity × win-rate',
+  },
+]
+
+// ── Component ─────────────────────────────────────────────────────────────────
+
+export function Research() {
+  const [activeTab, setActiveTab] = useState<Tab>('winrate')
+  const [selectedSymbol, setSelectedSymbol] = useState<string | null>(null)
+  const [liquidityScores, setLiquidityScores] = useState<LiqScore[]>([])
+
+  // Pre-fetch liquidity scores so SymbolDeepDive can show them without a
+  // separate round-trip (it already has the data from the heatmap render).
+  useEffect(() => {
+    fetch('/api/research/liquidity/scores', { credentials: 'same-origin' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (!d) return
+        const all: LiqScore[] = []
+        for (const rows of Object.values(d.strategies as Record<string, LiqScore[]>)) {
+          all.push(...rows)
+        }
+        setLiquidityScores(all)
+      })
+      .catch(() => {})
+  }, [])
+
+  const activeTabMeta = TABS.find((t) => t.key === activeTab)!
+
+  return (
+    <div className="p-5 max-w-screen-xl mx-auto">
+      {/* Page header */}
+      <div className="mb-5">
+        <h1 className="text-2xl font-bold mb-1" style={{ color: 'var(--text-primary)' }}>
+          Research
+        </h1>
+        <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
+          Automated research scores driving score multipliers in live strategy decisions.
+        </p>
+      </div>
+
+      {/* Coverage stats */}
+      <CoverageStats />
+
+      {/* Tab selector */}
+      <div
+        className="flex gap-1 mb-4 p-1 rounded-lg"
+        style={{ backgroundColor: 'var(--bg-card)', border: '1px solid var(--border)', display: 'inline-flex' }}
+      >
+        {TABS.map((tab) => (
+          <button
+            key={tab.key}
+            onClick={() => setActiveTab(tab.key)}
+            className="px-4 py-2 rounded-md text-sm font-medium transition-all"
+            style={{
+              backgroundColor: activeTab === tab.key ? 'var(--accent)' : 'transparent',
+              color: activeTab === tab.key ? '#fff' : 'var(--text-secondary)',
+              border: 'none',
+              cursor: 'pointer',
+            }}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Tab description */}
+      <p className="mb-4 text-xs" style={{ color: 'var(--text-muted)' }}>
+        {activeTabMeta.description}
+      </p>
+
+      {/* Main content card */}
+      <div
+        className="rounded-lg p-4"
+        style={{ backgroundColor: 'var(--bg-card)', border: '1px solid var(--border)' }}
+      >
+        {activeTab === 'liquidity' && (
+          <LiquidityHeatmap onSymbolClick={setSelectedSymbol} />
+        )}
+        {activeTab === 'winrate' && (
+          <WinRateHeatmap onSymbolClick={setSelectedSymbol} />
+        )}
+        {activeTab === 'combined' && (
+          <CombinedHeatmap onSymbolClick={setSelectedSymbol} />
+        )}
+      </div>
+
+      {/* Symbol deep dive drawer */}
+      {selectedSymbol && (
+        <SymbolDeepDive
+          symbol={selectedSymbol}
+          onClose={() => setSelectedSymbol(null)}
+          liquidityScores={liquidityScores}
+        />
+      )}
+    </div>
+  )
+}
