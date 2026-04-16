@@ -7,6 +7,7 @@ import { ReasoningExplorer } from './pages/ReasoningExplorer'
 import { Guardrails } from './pages/Guardrails'
 import { Strategies } from './pages/Strategies'
 import { HowItWorks } from './pages/HowItWorks'
+import { ClaudesPlaybook } from './pages/ClaudesPlaybook'
 import { HowBacktestingWorks } from './pages/HowBacktestingWorks'
 import { OptionsBasics } from './pages/OptionsBasics'
 import { TradeLifecycle } from './pages/TradeLifecycle'
@@ -38,6 +39,7 @@ export function App() {
           <Route path="/guardrails" element={<Guardrails />} />
           <Route path="/strategies" element={<Strategies />} />
           <Route path="/how-it-works" element={<HowItWorks />} />
+          <Route path="/playbook" element={<ClaudesPlaybook />} />
           <Route path="/how-backtesting-works" element={<HowBacktestingWorks />} />
           <Route path="/options-basics" element={<OptionsBasics />} />
           <Route path="/trade-lifecycle" element={<TradeLifecycle />} />

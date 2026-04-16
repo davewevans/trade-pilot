@@ -22,6 +22,7 @@ const LEARN_ROUTES = [
   '/options-basics',
   '/trade-lifecycle',
   '/how-it-works',
+  '/playbook',
   '/how-backtesting-works',
   '/strategies',
   '/guardrails',
@@ -158,6 +159,9 @@ export function Sidebar() {
         </NavLink>
         <NavLink to="/how-it-works" className={linkClass} style={({ isActive }) => linkStyle(isActive)}>
           How Claude Decides
+        </NavLink>
+        <NavLink to="/playbook" className={linkClass} style={({ isActive }) => linkStyle(isActive)}>
+          Claude's Playbook
         </NavLink>
         <NavLink to="/strategies" className={linkClass} style={({ isActive }) => linkStyle(isActive)}>
           Strategies
