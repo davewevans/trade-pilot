@@ -61,6 +61,12 @@ class Settings:
         # Default "5m"; set PROMPT_CACHE_TTL=1h to extend after Story 1 data
         # shows the cache is warming correctly.
         self.PROMPT_CACHE_TTL: str = os.getenv("PROMPT_CACHE_TTL", "5m")
+        # Adaptive thinking mode for ClaudeAdvisor.
+        # "off" = no thinking (default, current behavior).
+        # "adaptive_medium" / "adaptive_high" = enable via output_config.effort.
+        # Do NOT enable in production until the A/B harness (Story 3) shows
+        # clear decision improvement — thinking tokens are billed at output rates.
+        self.THINKING_MODE: str = os.getenv("THINKING_MODE", "off")
 
         self.FRED_API_KEY: str = self._require("FRED_API_KEY")
 

@@ -29,6 +29,7 @@ def _make_advisor():
         advisor.model = "claude-sonnet-4-6"
         advisor._last_usage = None
         advisor._api_usage_repo = None
+        advisor.thinking_mode = "off"
         # Load real prompts if available; fall back to empty strings
         advisor.phase_prompts = {s: "" for s in WheelState}
         advisor.spread_prompts = {k: "" for k in _REGISTRY if "_" in k and k not in

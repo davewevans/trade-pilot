@@ -75,19 +75,54 @@ def _safe_skip_spread(strategy: str, phase: str, reason: str) -> dict:
     }
 
 
+_VALID_THINKING_MODES = {"off", "adaptive_medium", "adaptive_high"}
+
+
 class ClaudeAdvisor:
     """Uses the Anthropic API to get options trading recommendations.
 
     Structured outputs are always active — schemas are selected per
     (strategy, phase) from ai.schemas and passed as output_config.format.
+
+    Adaptive thinking is controlled by ``thinking_mode`` (default "off").
+    Set THINKING_MODE env var or pass the constructor arg directly.
+    Do NOT enable in production until the A/B harness (Story 3) validates
+    decision improvement — thinking tokens are billed at output rates.
     """
 
-    def __init__(self, api_usage_repo=None):
+    def __init__(self, api_usage_repo=None, thinking_mode: str | None = None):
         self.client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
         self.model = "claude-sonnet-4-6"
         self._last_usage: dict | None = None
         self._api_usage_repo = api_usage_repo
+
+        mode = thinking_mode if thinking_mode is not None else settings.THINKING_MODE
+        if mode not in _VALID_THINKING_MODES:
+            logger.warning(
+                "Unknown THINKING_MODE=%r — defaulting to 'off'. Valid: %s",
+                mode, _VALID_THINKING_MODES,
+            )
+            mode = "off"
+        self.thinking_mode = mode
+        if mode != "off":
+            logger.info("Adaptive thinking enabled: mode=%s", mode)
+
         self.load_prompts()
+
+    def _build_output_config(self, schema: dict) -> dict:
+        """Build the output_config dict, merging format + effort as needed."""
+        cfg: dict = {"format": {"type": "json_schema", "schema": schema}}
+        if self.thinking_mode == "adaptive_medium":
+            cfg["effort"] = "medium"
+        elif self.thinking_mode == "adaptive_high":
+            cfg["effort"] = "high"
+        return cfg
+
+    def _build_thinking_param(self) -> dict | None:
+        """Return the ``thinking`` parameter dict, or None when mode is off."""
+        if self.thinking_mode == "off":
+            return None
+        return {"type": "adaptive", "display": "omitted"}
 
     def _record_usage(
         self,
@@ -112,8 +147,9 @@ class ClaudeAdvisor:
         hit_pct = _cache_hit_pct(cache_read, cache_write, input_tokens)
         logger.info(
             "claude_api_usage strategy=%s phase=%s input=%d cache_read=%d "
-            "cache_write=%d output=%d cache_hit_pct=%.1f structured_outputs=true",
+            "cache_write=%d output=%d cache_hit_pct=%.1f structured_outputs=true thinking_mode=%s",
             strategy, phase, input_tokens, cache_read, cache_write, output_tokens, hit_pct,
+            self.thinking_mode,
         )
 
         if self._api_usage_repo is not None:
@@ -227,12 +263,14 @@ class ClaudeAdvisor:
         logger.info("Asking Claude for advice (state=%s)", phase_str)
 
         schema = get_schema("wheel", phase_str.lower())
+        output_config = self._build_output_config(schema)
+        thinking = self._build_thinking_param()
 
         try:
             _t0 = time.monotonic()
-            response = self.client.messages.create(
+            create_kwargs: dict = dict(
                 model=self.model,
-                max_tokens=2048,
+                max_tokens=16000 if thinking else 2048,
                 system=[
                     {
                         "type": "text",
@@ -241,8 +279,11 @@ class ClaudeAdvisor:
                     }
                 ],
                 messages=[{"role": "user", "content": user_content}],
-                output_config={"format": {"type": "json_schema", "schema": schema}},
+                output_config=output_config,
             )
+            if thinking is not None:
+                create_kwargs["thinking"] = thinking
+            response = self.client.messages.create(**create_kwargs)
             _latency_ms = int((time.monotonic() - _t0) * 1000)
         except Exception:
             logger.exception("Anthropic API call failed")
@@ -298,6 +339,9 @@ class ClaudeAdvisor:
             logger.error("No structured output schema for %s/%s", strategy_type, phase)
             return _safe_skip_spread(strategy_type, phase, f"No schema for {key}")
 
+        output_config = self._build_output_config(schema)
+        thinking = self._build_thinking_param()
+
         prompt = self._inject_strategy_params(prompt, strategy_type)
         context_json = json.dumps(context, indent=2, default=str)
         user_content = (
@@ -313,9 +357,9 @@ class ClaudeAdvisor:
 
         try:
             _t0 = time.monotonic()
-            response = self.client.messages.create(
+            create_kwargs: dict = dict(
                 model=self.model,
-                max_tokens=2048,
+                max_tokens=16000 if thinking else 2048,
                 system=[
                     {
                         "type": "text",
@@ -324,8 +368,11 @@ class ClaudeAdvisor:
                     }
                 ],
                 messages=[{"role": "user", "content": user_content}],
-                output_config={"format": {"type": "json_schema", "schema": schema}},
+                output_config=output_config,
             )
+            if thinking is not None:
+                create_kwargs["thinking"] = thinking
+            response = self.client.messages.create(**create_kwargs)
             _latency_ms = int((time.monotonic() - _t0) * 1000)
         except Exception:
             logger.exception("Anthropic API call failed for spread %s", key)

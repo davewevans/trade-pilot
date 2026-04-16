@@ -121,6 +121,7 @@ def _make_advisor(repo=None):
         advisor.model = "claude-sonnet-4-6"
         advisor._last_usage = None
         advisor._api_usage_repo = repo
+        advisor.thinking_mode = "off"
     return advisor
 
 
