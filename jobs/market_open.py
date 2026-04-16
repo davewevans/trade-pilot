@@ -133,7 +133,16 @@ def run() -> None:
     except ValueError:
         logger.warning("Wheel account credentials not set — using default")
         wheel_broker = broker
-    wheel_strategy = WheelStrategy(wheel_broker)
+
+    _wheel_liq_repo = None
+    if _conn is not None:
+        try:
+            from database.repositories import LiquidityRepository
+            _wheel_liq_repo = LiquidityRepository(_conn)
+        except Exception:
+            logger.warning("Failed to init LiquidityRepository for wheel — proceeding without liquidity gating")
+
+    wheel_strategy = WheelStrategy(wheel_broker, liquidity_repo=_wheel_liq_repo)
 
     try:
         ic_broker = make_broker("iron_condor")
@@ -252,6 +261,42 @@ def run() -> None:
             except Exception as e:
                 logger.warning("Failed to write context snapshot for %s: %s", symbol, e)
 
+            # ── Liquidity gate (entry states only) ─────────────
+            # Tier D = hard floor; returns a pre-built SKIP dict.
+            # Management states (SHORT_PUT, SHORT_CALL) return None here.
+            _liq_skip = wheel_strategy.evaluate_entry_liquidity(symbol, context, state)
+            if _liq_skip is not None:
+                logger.info(
+                    "%s liquidity Tier D skip (%s): %s",
+                    symbol, state.value, _liq_skip.get("reasoning"),
+                )
+                journal.append({
+                    "symbol": None,
+                    "underlying": symbol,
+                    "wheel_state": state.value,
+                    "action": "skip",
+                    "skip_reason": _liq_skip.get("skip_reason", "below_liquidity_floor"),
+                    "reasoning": _liq_skip.get("reasoning", ""),
+                    "confidence": None,
+                    "status": "skipped",
+                    "strategy_type": "wheel_csp" if state.value == "IDLE" else "wheel_cc",
+                    "iv_rank": context.get("iv_rank"),
+                })
+                if recorder is not None:
+                    recorder.record_decision(
+                        strategy_type="wheel",
+                        underlying=symbol,
+                        action="SKIP",
+                        wheel_state=state.value,
+                        reasoning=_liq_skip.get("reasoning"),
+                        context=context,
+                        research_metadata=_liq_skip.get("_research"),
+                    )
+                report_lines.append(
+                    f"**{symbol}** -- SKIPPED (liquidity floor: {_liq_skip.get('skip_reason')})"
+                )
+                continue
+
             import time as _time
             _t0_ask = _time.monotonic()
             decision = advisor.ask(context, state)
@@ -315,6 +360,7 @@ def run() -> None:
                         reasoning=f"Guardrail rejected: {rejection}",
                         confidence=decision.get("confidence"),
                         context=context,
+                        research_metadata=context.get("_research"),
                     )
                 journal.append({
                     "symbol": decision.get("symbol"), "underlying": symbol,
@@ -350,6 +396,7 @@ def run() -> None:
                     reasoning=decision.get("reasoning"),
                     confidence=decision.get("confidence"),
                     context=context,
+                    research_metadata=context.get("_research"),
                 )
 
             if settings.DRY_RUN:

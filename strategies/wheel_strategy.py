@@ -37,13 +37,26 @@ class WheelStrategy:
     Actual broker positions always take precedence over the saved state.
     """
 
-    def __init__(self, broker: BaseBroker):
+    # Maps entry states to research layer strategy types.
+    # Only IDLE (CSP entry) and LONG_STOCK (CC entry) are gated.
+    # Management states (SHORT_PUT, SHORT_CALL) have no mapping — they
+    # are never liquidity-gated once a position is open.
+    STRATEGY_TYPE_MAP: dict = {
+        WheelState.IDLE: "wheel_csp",
+        WheelState.LONG_STOCK: "wheel_cc",
+    }
+
+    def __init__(self, broker: BaseBroker, liquidity_repo=None):
         """Initialise the strategy with a broker and optional data client.
 
         Args:
             broker: A concrete BaseBroker implementation (e.g. AlpacaBroker).
+            liquidity_repo: Optional LiquidityRepository. When provided,
+                CSP and CC entries are gated by the liquidity tier. Defaults
+                to None (no gating — existing behaviour preserved).
         """
         self.broker = broker
+        self._liquidity_repo = liquidity_repo
         self.symbol: str | None = None
         self.state: WheelState = WheelState.IDLE
         self.open_position: dict | None = None
@@ -186,6 +199,76 @@ class WheelStrategy:
         self.save_state()
         logger.info("Reconciled state → IDLE (no positions for %s)", symbol)
         return self.state
+
+    # ── liquidity gating ─────────────────────────────────────
+
+    def evaluate_entry_liquidity(
+        self,
+        symbol: str,
+        context: dict,
+        state: WheelState,
+    ) -> dict | None:
+        """Check the liquidity tier before a new CSP or CC entry.
+
+        Entry states (IDLE → CSP, LONG_STOCK → CC) are gated; management
+        states (SHORT_PUT, SHORT_CALL) are never touched.
+
+        Returns:
+            None — proceed with the normal decision flow. Liquidity metadata
+            is attached to ``context["_research"]["liquidity"]`` so Claude
+            and the recorder can see it.
+
+            dict — a ready-made SKIP decision. The caller should short-circuit
+            ``advisor.ask()`` and use this dict as the decision directly.
+            Only returned when the symbol is Tier D (hard floor) and the kill
+            switch is on.
+        """
+        strategy_type = self.STRATEGY_TYPE_MAP.get(state)
+        if strategy_type is None:
+            # Management state — no liquidity gating
+            return None
+
+        if self._liquidity_repo is not None:
+            try:
+                multiplier, tier, confidence = self._liquidity_repo.get_multiplier(
+                    symbol, strategy_type,
+                )
+            except Exception:
+                logger.warning(
+                    "Liquidity multiplier lookup failed for %s/%s",
+                    symbol, strategy_type, exc_info=True,
+                )
+                multiplier, tier, confidence = (1.0, "B", "none")
+        else:
+            multiplier, tier, confidence = (1.0, "B", "disabled")
+
+        # Tier D = hard floor — reject before calling Claude
+        if multiplier == 0.0:
+            return {
+                "action": "SKIP",
+                "reasoning": f"Liquidity tier D for {strategy_type} — below floor",
+                "skip_reason": "below_liquidity_floor",
+                "_research": {
+                    "liquidity": {
+                        "multiplier": 0.0,
+                        "tier": "D",
+                        "confidence": confidence,
+                        "final_score": 0.0,
+                    }
+                },
+            }
+
+        # Attach metadata to context for downstream logging.
+        # Wheel doesn't rank symbols by a raw_score × multiplier the way
+        # spreads do — it evaluates each symbol independently. So the
+        # multiplier here is informational (and the Tier D hard floor above
+        # is the only scoring-driven behaviour change).
+        context.setdefault("_research", {})["liquidity"] = {
+            "multiplier": multiplier,
+            "tier": tier,
+            "confidence": confidence,
+        }
+        return None
 
     # ── context building ─────────────────────────────────────
 

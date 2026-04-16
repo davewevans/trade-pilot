@@ -17,6 +17,38 @@ exists and revisit decisions later.
 
 ---
 
+## [Unreleased]
+
+### Added
+- Wheel strategy now participates in liquidity scoring for new CSP and CC
+  entries. `WheelStrategy` gains `STRATEGY_TYPE_MAP` and `liquidity_repo`
+  constructor parameter. A new `evaluate_entry_liquidity()` method gates
+  `IDLE → SHORT_PUT` entries via `wheel_csp` scores and `LONG_STOCK →
+  SHORT_CALL` entries via `wheel_cc` scores. Management states
+  (SHORT_PUT, SHORT_CALL) are never gated. Tier D triggers a hard SKIP
+  before the Claude API call; Tiers A–C attach metadata only.
+- `TradeRecorder.record_decision()` and `DecisionRepository.insert()`
+  now accept a `research_metadata` kwarg that persists to the
+  `decisions.research_metadata_json` column (column added in Phase 1 A1).
+  Wheel decisions in `market_open.py` now pass `context["_research"]`
+  through the recorder so the decisions table captures multiplier, tier,
+  and confidence for every CSP/CC entry evaluation.
+- Kill switch (`RESEARCH_SCORE_MULTIPLIER_ENABLED=false`) fully disables
+  liquidity gating for the wheel the same way it does for spreads — Tier D
+  is not skipped, metadata shows `confidence="disabled"`.
+
+### Files changed
+- `strategies/wheel_strategy.py` — `STRATEGY_TYPE_MAP`, `liquidity_repo` param,
+  `evaluate_entry_liquidity()` method
+- `jobs/market_open.py` — construct `LiquidityRepository` for wheel;
+  call `evaluate_entry_liquidity` before `advisor.ask()`; pass
+  `research_metadata` to all three `recorder.record_decision` call sites
+- `database/recorder.py` — `research_metadata` kwarg on `record_decision`
+- `database/repositories/decisions.py` — `research_metadata_json` in INSERT
+- `tests/strategies/test_wheel_liquidity.py` — 10 new tests
+
+---
+
 ## 2026-04-14 — ORATS University: Backtesting + Volatility Research
 
 **Sources:** 17 ORATS University lessons covering backtesting

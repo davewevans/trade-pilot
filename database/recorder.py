@@ -109,6 +109,7 @@ class TradeRecorder:
         prompt_version: str | None = None,
         context: dict | None = None,
         timestamp: str | None = None,
+        research_metadata: dict | None = None,
     ) -> tuple[int | None, str | None]:
         """Insert a decision row, auto-creating a cycle if appropriate.
 
@@ -154,6 +155,7 @@ class TradeRecorder:
                 "alpaca_order_id": alpaca_order_id,
                 "prompt_version": prompt_version,
                 "context": context,
+                "research_metadata": research_metadata,
             })
             return decision_id, cycle_id
         except Exception:
