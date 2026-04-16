@@ -7,6 +7,7 @@ import { ReasoningExplorer } from './pages/ReasoningExplorer'
 import { Guardrails } from './pages/Guardrails'
 import { Strategies } from './pages/Strategies'
 import { HowItWorks } from './pages/HowItWorks'
+import { ClaudesPlaybook } from './pages/ClaudesPlaybook'
 import { HowBacktestingWorks } from './pages/HowBacktestingWorks'
 import { OptionsBasics } from './pages/OptionsBasics'
 import { TradeLifecycle } from './pages/TradeLifecycle'
@@ -21,6 +22,9 @@ import { Watchlist } from './pages/Watchlist'
 import { Backtest } from './pages/Backtest'
 import { BacktestIntel } from './pages/BacktestIntel'
 import { Volatility } from './pages/Volatility'
+import { Research } from './pages/Research'
+import { Recommendations } from './pages/Recommendations'
+import { ResearchGuide } from './pages/ResearchGuide'
 
 export function App() {
   return (
@@ -29,6 +33,9 @@ export function App() {
         <Routes>
           <Route path="/" element={<Dashboard />} />
           <Route path="/watchlist" element={<Watchlist />} />
+          <Route path="/research" element={<Research />} />
+          <Route path="/recommendations" element={<Recommendations />} />
+          <Route path="/research-guide" element={<ResearchGuide />} />
           <Route path="/backtest" element={<Backtest />} />
           <Route path="/backtest-intel" element={<BacktestIntel />} />
           <Route path="/volatility" element={<Volatility />} />
@@ -38,6 +45,7 @@ export function App() {
           <Route path="/guardrails" element={<Guardrails />} />
           <Route path="/strategies" element={<Strategies />} />
           <Route path="/how-it-works" element={<HowItWorks />} />
+          <Route path="/playbook" element={<ClaudesPlaybook />} />
           <Route path="/how-backtesting-works" element={<HowBacktestingWorks />} />
           <Route path="/options-basics" element={<OptionsBasics />} />
           <Route path="/trade-lifecycle" element={<TradeLifecycle />} />

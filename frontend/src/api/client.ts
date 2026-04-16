@@ -8,6 +8,9 @@ import type {
   NtaEventsResponse,
   Performance,
   Portfolio,
+  TokenUsageDaily,
+  TokenUsageSummary,
+  TokenUsageToday,
   Trade,
 } from '../types'
 
@@ -298,6 +301,11 @@ export const api = {
   },
 
   pendingCount: () => get<{ count: number }>('/api/pending-count'),
+
+  tokenUsageToday: () => get<TokenUsageToday>('/api/token-usage/today'),
+  tokenUsageSummary: () => get<TokenUsageSummary>('/api/token-usage/summary'),
+  tokenUsageDaily: (days: number = 30) =>
+    get<{ daily: TokenUsageDaily[] }>(`/api/token-usage?days=${days}`),
 
   watchlist: () =>
     get<{ wheel: string[]; iron_condor: string[]; spreads: string[]; updated_at: string | null }>('/api/watchlist'),

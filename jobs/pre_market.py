@@ -149,6 +149,14 @@ def run() -> None:
             "Wheel NTA state validation failed (non-fatal)", exc_info=True,
         )
 
+    # ── Refresh OI cache for watchlist symbols ──────────────
+    logger.info("Refreshing OI cache for %d symbols", len(settings.WATCHLIST))
+    for symbol in settings.WATCHLIST:
+        try:
+            broker._oi_cache.refresh(symbol)
+        except Exception as exc:
+            logger.warning("OI refresh failed for %s: %s", symbol, exc)
+
     # ── Batch IV rank screen (one ORATS call) ───────────────
     briefing_lines: list[str] = []
     iv_ranks: dict[str, dict] = {}

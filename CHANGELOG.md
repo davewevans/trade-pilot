@@ -7,6 +7,85 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-04-16
+
+### Added
+- **Conservative Wheel strategy** (`strategies/conservative_wheel_strategy.py`) — shorter-DTE variant
+  of the wheel running in its own fourth Alpaca paper account. Key differences from the original Wheel:
+  covered calls at 7–14 DTE (vs 21–35), CC strike above cost basis only (no Bollinger Band filter),
+  5% max position size (vs 10%), 10 concurrent positions (vs 5), 3 rolls before closing (vs 2), and
+  a wider roll delta window (short put within −0.40, short call within 0.45). All CSP entry rules,
+  IV rank minimum, earnings avoidance, and universal guardrails are identical to the original Wheel.
+- **Conservative Wheel prompts** — four state-specific prompt files
+  (`prompts/conservative_wheel_*.md`) mirroring the original wheel prompt structure with the
+  rule differences applied.
+- **Conservative Wheel definition** (`strategies/definitions/conservative_wheel.json`) — encodes
+  all entry, management, and guardrail parameters for the new strategy variant.
+- **Conservative Wheel section on Strategies page** — plain-language explanation of what differs
+  from the original Wheel and why, with SubCards for each rule change and a "What's the same"
+  summary list.
+- **Research layer — liquidity scoring** — `LiquidityRepository` scores each symbol/strategy pair
+  by bid-ask spread, volume, and open interest; produces a multiplier (0.0–1.0) that gates new
+  CSP and CC entries. Tier D (multiplier = 0.0) hard-blocks entry before calling Claude.
+- **Research layer — win-rate gating** — `BacktestStatsRepository` looks up historical win rate
+  per symbol/strategy; entries with win rate below a 30% floor are blocked before calling Claude.
+  Both the liquidity and win-rate multipliers are attached to context for downstream logging.
+- **Watchlist recommendation engine** (`research/recommendation_engine.py`) — weekly job scans
+  the candidate universe, scores each symbol by liquidity tier, win rate, and regime fit, and
+  produces ranked add/remove recommendations per watchlist.
+- **Recommendations page** — dashboard UI displaying watchlist add/remove recommendations with
+  scoring breakdown, sortable by score.
+- **Weekly research job** (`jobs/weekly_research.py`) — runs `BacktestSweep` across the full
+  candidate universe on a weekly schedule, refreshing `portfolio_patterns` and win-rate data.
+- **BacktestSweep** — automated sweep that runs the backtesting engine across all symbols in the
+  candidate universe and writes results to the backtest stats database.
+- **S&P 500 bootstrap script** — one-shot script to seed the candidate universe with all S&P 500
+  constituents; used to initialise the research layer.
+- **Research Guide page** — Learn section page explaining the research layer, how liquidity tiers
+  and win-rate scores are computed, and how they gate live entries.
+- **Win Rate Heatmap** — Research page component showing win rate by symbol and regime as a
+  colour-coded grid.
+- **Claude API — prompt cache hit rate instrumentation** (Story 1) — `ClaudeAdvisor` records
+  `cache_read_input_tokens` and `cache_creation_input_tokens` from each API response; cache hit
+  rate surfaced in token usage reports.
+- **Claude API — structured outputs** (Story 2) — `ClaudeAdvisor` requests JSON structured
+  output; response schema validated against a Pydantic model before use; malformed responses
+  trigger a structured retry rather than a crash.
+- **Claude API — adaptive thinking + A/B harness** (Story 3) — `THINKING_MODE` env var enables
+  `adaptive_medium` or `adaptive_high` extended thinking. A/B measurement harness records
+  decision quality metrics (confidence delta, action distribution) split by thinking mode to
+  quantify whether thinking tokens improve decisions.
+- **Token usage tracking** — per-call and aggregate token usage (input, output, cache read,
+  cache creation) recorded in SQLite; `/api/token-usage` endpoint exposes totals; dashboard
+  renders weekly usage and estimated cost.
+- **Counterfactual check for HOLD recommendations** — all position-management prompts
+  (SHORT_PUT, LONG_STOCK, SHORT_CALL for both wheel variants and the spread strategies) now
+  open with an explicit instruction: before recommending HOLD, ask whether the position would
+  be opened today; if no, recommend CLOSE instead.
+- **Guardrail rejection tracking** — when a guardrail fires and produces a SKIP decision, the
+  `skip_reason` code is persisted to the decisions table; skip-reason distribution surfaced in
+  the dashboard and API.
+- **20-day high/low** added to `get_stock_technicals()` output — used in breakout and
+  resistance checks in spread prompts.
+- **Open interest caching** — option chain open interest values cached in SQLite to reduce
+  redundant Alpaca calls on symbols scanned multiple times per cycle.
+- **Claude's Playbook page** — Learn section page documenting the exact decision framework
+  Claude follows for each strategy state, including prompt structure and guardrail order.
+
+### Changed
+- **Strategy router** now always includes both `"wheel"` and `"conservative_wheel"` in the
+  active list; both wheels run their management cycles every tick and are blocked only in
+  CRASH regime.
+- **`config.py`** — `STRATEGY_ACCOUNT_MAP` extended with `"conservative_wheel"` entry pointing
+  to `ALPACA_CONSERVATIVE_WHEEL_API_KEY/SECRET_KEY`; `CONSERVATIVE_WHEEL_MAX_POSITION_PCT`
+  (0.05) and `CONSERVATIVE_WHEEL_MAX_CONCURRENT` (10) added as class constants;
+  `_load_watchlist` loads a `"conservative_wheel"` key from `watchlist.json` with fallback
+  to the `"wheel"` list.
+- **`data/watchlist.json`** — `"conservative_wheel"` key added, initialised as a copy of the
+  `"wheel"` list.
+- **Strategies page Portfolio Risk section** — Conservative Wheel sizing caps added to the
+  Position Sizing Caps SubCard; circuit breaker now described as monitoring "all four accounts".
+
 ## [1.3.1] - 2026-04-15
 
 ### Added

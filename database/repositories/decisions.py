@@ -38,13 +38,17 @@ class DecisionRepository:
         if ctx_json is None and decision.get("context") is not None:
             ctx_json = json.dumps(decision["context"], default=str)
 
+        research_json = decision.get("research_metadata_json")
+        if research_json is None and decision.get("research_metadata") is not None:
+            research_json = json.dumps(decision["research_metadata"], default=str)
+
         cur = self._conn.execute(
             """
             INSERT INTO decisions (
                 timestamp, strategy_type, underlying, cycle_id, wheel_state,
                 action, reasoning, confidence, alpaca_order_id,
-                prompt_version, context_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                prompt_version, context_json, research_metadata_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 decision["timestamp"],
@@ -58,6 +62,7 @@ class DecisionRepository:
                 decision.get("alpaca_order_id"),
                 decision.get("prompt_version"),
                 ctx_json,
+                research_json,
             ),
         )
         self._conn.commit()

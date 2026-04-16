@@ -1,5 +1,7 @@
 # Bear Call Spread — Position Management
 
+**Counterfactual check:** Before recommending HOLD, ask: if this position were not already open, would you recommend opening it right now? If no, recommend CLOSE regardless of current P&L.
+
 You are managing an open Bear Call Spread on {{underlying}}.
 
 ## Open Position
@@ -25,14 +27,14 @@ CLOSE if ANY of:
 
 HOLD otherwise.
 
-## Response Format (JSON only):
-```json
-{
-  "action": "CLOSE" | "HOLD",
-  "reasoning": str,
-  "urgency": "immediate" | "normal",
-  "limit_price": float | null
-}
-```
+## Response Guidance
 
-For CLOSE: limit_price should be a small positive value (buying back the spread). For HOLD: limit_price is null.
+For CLOSE: set urgency to "immediate" if triggered by ex-dividend risk, "normal" otherwise. limit_price should be a small positive value (buying back the spread). For HOLD: limit_price is null.
+
+For the reasoning object:
+- macro: current market environment
+- fundamental: any developments, ex-dividend status
+- technical: price action relative to short call strike
+- volatility: IV change since entry
+- selection: which rule triggered (or why none triggered)
+- risk: current P&L capture and remaining upside risk

@@ -73,7 +73,6 @@ def run() -> None:
         logger.info("No open positions to check.")
         return
 
-    advisor = ClaudeAdvisor()
     guardrails = Guardrails(broker=broker)
     strategy = WheelStrategy(broker)
     journal = TradeJournal(path=settings.JOURNAL_PATH)
@@ -82,13 +81,19 @@ def run() -> None:
     # Dual-write recorder for SQLite (failures logged, never block job).
     from database.db import Database
     from database.recorder import TradeRecorder
+    from database.repositories import ApiUsageRepository
     try:
         _db = Database()
         _db.init_schema()
-        recorder = TradeRecorder(_db.get_connection())
+        _conn = _db.get_connection()
+        recorder = TradeRecorder(_conn)
+        api_usage_repo = ApiUsageRepository(_conn)
     except Exception:
         logger.exception("Failed to initialize DB recorder — continuing without DB writes")
         recorder = None
+        api_usage_repo = None
+
+    advisor = ClaudeAdvisor(api_usage_repo=api_usage_repo)
 
     now_str = datetime.now().strftime("%I:%M %p ET")
     report_lines: list[str] = []
@@ -115,7 +120,19 @@ def run() -> None:
             except Exception as e:
                 logger.warning("Failed to write context snapshot for %s: %s", underlying, e)
 
+            import time as _time
+            _t0_ask = _time.monotonic()
             decision = advisor.ask(context, state)
+            _elapsed_ask_ms = int((_time.monotonic() - _t0_ask) * 1000)
+            if recorder is not None:
+                recorder.record_token_usage(
+                    strategy_type="wheel",
+                    underlying=underlying,
+                    model=advisor.model,
+                    usage=advisor.prompt_cache_stats or {},
+                    response_time_ms=_elapsed_ask_ms,
+                    decision_action=decision.get("action"),
+                )
             action = decision.get("action", "hold")
             logger.info(
                 "%s position check: %s (confidence: %s)",

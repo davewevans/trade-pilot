@@ -39,24 +39,16 @@ SKIP if:
 - No CAHOLD signal detected (need technical confirmation)
 - iv_overvalued_label is OVERVALUED (ORATS confirms options are expensive)
 
-## Required Response Format (JSON only):
-```json
-{
-  "action": "OPEN" | "SKIP",
-  "long_call_symbol": str,
-  "short_call_symbol": str,
-  "expiration": str,
-  "dte": int,
-  "long_call_strike": float,
-  "short_call_strike": float,
-  "net_debit": float,
-  "max_gain": float,
-  "break_even": float,
-  "limit_price": float,
-  "price_target": float,
-  "reasoning": str,
-  "skip_reason": str | null
-}
-```
+## Response Guidance
 
-IMPORTANT: limit_price must be POSITIVE for debit spreads. For example, 1.25 means you pay $1.25 debit.
+When action is OPEN, populate all leg symbols, strikes, expiration, dte, net_debit, max_gain, break_even, price_target, and limit_price. limit_price must be POSITIVE (net debit paid — e.g. 1.25 means you pay $1.25). Set skip_reason to null.
+
+When action is SKIP, set all leg fields to null and explain the failing condition(s) in skip_reason.
+
+For the reasoning object:
+- macro: overall market regime and bullish case
+- fundamental: company strength, upcoming catalysts, earnings buffer
+- technical: CAHOLD signal, SMA position, support levels, price target justification
+- volatility: IV rank (should be LOW), ORATS label (prefer UNDERVALUED/FAIR)
+- selection: why this specific strike/expiration and the price target rationale
+- risk: debit paid vs max gain ratio, scenarios where the trade loses

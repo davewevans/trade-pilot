@@ -107,6 +107,7 @@ class ContextBuilder:
             "recent_trades": None,
             "performance_stats": None,
             "skip_history": None,
+            "guardrail_rejections": None,
             "portfolio_patterns": None,
             "volatility": None,
             "earnings": None,
@@ -391,6 +392,16 @@ class ContextBuilder:
         except Exception:
             logger.warning("Failed to build skip history for %s", symbol, exc_info=True)
             context["skip_history"] = None
+
+        # Guardrail rejection history — surfaces cases where Claude's proposal
+        # was blocked so Claude can notice when its mental model diverges from
+        # the enforced rules and re-read criteria.
+        try:
+            rejections = self.journal.format_rejections_for_prompt(symbol, days=30)
+            context["guardrail_rejections"] = rejections if rejections else None
+        except Exception:
+            logger.warning("Failed to build rejections for %s", symbol, exc_info=True)
+            context["guardrail_rejections"] = None
 
         # Portfolio-level pattern summary (written weekly)
         try:
@@ -721,7 +732,7 @@ class ContextBuilder:
 
         # Fetch snapshots
         all_syms = [c["symbol"] for c in short_contracts + long_contracts]
-        snapshots = self.broker.get_option_snapshots(all_syms)
+        snapshots = self.broker.get_option_snapshots(all_syms, underlying=underlying_symbol)
 
         # Index by (expiration, strike)
         def _index(contracts):
@@ -1173,7 +1184,7 @@ class ContextBuilder:
                 dte_min, dte_max, delta_min, delta_max,
                 alpaca_fallback[:5],
             )
-            alpaca_snaps = self.broker.get_option_snapshots(alpaca_fallback)
+            alpaca_snaps = self.broker.get_option_snapshots(alpaca_fallback, underlying=symbol)
             result.update(alpaca_snaps)
 
         return result
@@ -1505,7 +1516,23 @@ class ContextBuilder:
         top_skips = data.get("top_skip_reasons", {})
         by_regime = data.get("performance_by_regime", {})
 
-        lines = [f"Portfolio patterns (last {days} days, as of {data.get('generated_at', '?')}):"]
+        # Staleness check — the daily job writes this file; warn if it's stale
+        # (belt-and-suspenders in case the daily job silently fails).
+        generated_at = data.get("generated_at", "")
+        staleness_note = ""
+        if generated_at:
+            try:
+                from datetime import date as _date
+                gen_date = _date.fromisoformat(generated_at)
+                age_days = (_date.today() - gen_date).days
+                if age_days >= 2:
+                    staleness_note = f" — STALE (last refresh {age_days} days ago)"
+            except (ValueError, TypeError):
+                pass
+
+        lines = [
+            f"Portfolio patterns (last {days} days, as of {generated_at}{staleness_note}):"
+        ]
 
         if win_rate is not None:
             sign = "+" if total_pnl >= 0 else ""

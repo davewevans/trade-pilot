@@ -101,7 +101,7 @@ def run() -> None:
     )
 
     # ── Shared dependencies ─────────────────────────────────
-    advisor = ClaudeAdvisor()
+    # advisor is created after DB init below so it can receive api_usage_repo.
     guardrails = Guardrails(broker=broker)
     journal = TradeJournal(path=settings.JOURNAL_PATH)
     ctx_builder = ContextBuilder(broker=broker, journal=journal)
@@ -112,13 +112,20 @@ def run() -> None:
     # the existing JSON snapshots. Failures are logged but never block the job.
     from database.db import Database
     from database.recorder import TradeRecorder
+    from database.repositories import ApiUsageRepository
     try:
         _db = Database()
         _db.init_schema()
-        recorder = TradeRecorder(_db.get_connection())
+        _conn = _db.get_connection()
+        recorder = TradeRecorder(_conn)
+        api_usage_repo = ApiUsageRepository(_conn)
     except Exception:
         logger.exception("Failed to initialize DB recorder — continuing without DB writes")
         recorder = None
+        api_usage_repo = None
+
+    # Re-create advisor with DB-backed usage repo so per-call stats are persisted.
+    advisor = ClaudeAdvisor(api_usage_repo=api_usage_repo)
 
     # Each strategy gets a broker pointed at its designated account
     try:
@@ -126,7 +133,23 @@ def run() -> None:
     except ValueError:
         logger.warning("Wheel account credentials not set — using default")
         wheel_broker = broker
-    wheel_strategy = WheelStrategy(wheel_broker)
+
+    _wheel_liq_repo = None
+    _bt_stats_repo = None
+    if _conn is not None:
+        try:
+            from database.repositories import LiquidityRepository
+            _wheel_liq_repo = LiquidityRepository(_conn)
+        except Exception:
+            logger.warning("Failed to init LiquidityRepository for wheel — proceeding without liquidity gating")
+        try:
+            from database.repositories import BacktestStatsRepository
+            _bt_stats_repo = BacktestStatsRepository(_conn)
+        except Exception:
+            logger.warning("Failed to init BacktestStatsRepository — proceeding without win-rate gating")
+
+    wheel_strategy = WheelStrategy(wheel_broker, liquidity_repo=_wheel_liq_repo,
+                                   backtest_stats_repo=_bt_stats_repo)
 
     try:
         ic_broker = make_broker("iron_condor")
@@ -137,11 +160,23 @@ def run() -> None:
     # Bull put, bear call, long call vertical share the default account
     default_broker = broker
 
+    _spread_liq_repo = None
+    if _conn is not None:
+        try:
+            from database.repositories import LiquidityRepository as _LiqRepo
+            _spread_liq_repo = _LiqRepo(_conn)
+        except Exception:
+            logger.warning("Failed to init LiquidityRepository for spreads — proceeding without liquidity gating")
+
     spread_strategies = {
-        "iron_condor": IronCondorStrategy(broker=ic_broker, state_writer=sw, spread_tracker=tracker, recorder=recorder),
-        "bull_put_spread": BullPutSpreadStrategy(broker=default_broker, state_writer=sw, spread_tracker=tracker, recorder=recorder),
-        "bear_call_spread": BearCallSpreadStrategy(broker=default_broker, state_writer=sw, spread_tracker=tracker, recorder=recorder),
-        "long_call_vertical": LongCallVerticalStrategy(broker=default_broker, state_writer=sw, spread_tracker=tracker, recorder=recorder),
+        "iron_condor": IronCondorStrategy(broker=ic_broker, state_writer=sw, spread_tracker=tracker, recorder=recorder,
+                                          liquidity_repo=_spread_liq_repo, backtest_stats_repo=_bt_stats_repo),
+        "bull_put_spread": BullPutSpreadStrategy(broker=default_broker, state_writer=sw, spread_tracker=tracker, recorder=recorder,
+                                                  liquidity_repo=_spread_liq_repo, backtest_stats_repo=_bt_stats_repo),
+        "bear_call_spread": BearCallSpreadStrategy(broker=default_broker, state_writer=sw, spread_tracker=tracker, recorder=recorder,
+                                                    liquidity_repo=_spread_liq_repo, backtest_stats_repo=_bt_stats_repo),
+        "long_call_vertical": LongCallVerticalStrategy(broker=default_broker, state_writer=sw, spread_tracker=tracker, recorder=recorder,
+                                                        liquidity_repo=_spread_liq_repo, backtest_stats_repo=_bt_stats_repo),
     }
 
     # Paper Account 4 — Iron Butterfly (inactive until tested; only wired when active)
@@ -245,7 +280,55 @@ def run() -> None:
             except Exception as e:
                 logger.warning("Failed to write context snapshot for %s: %s", symbol, e)
 
+            # ── Liquidity gate (entry states only) ─────────────
+            # Tier D = hard floor; returns a pre-built SKIP dict.
+            # Management states (SHORT_PUT, SHORT_CALL) return None here.
+            _liq_skip = wheel_strategy.evaluate_entry_liquidity(symbol, context, state)
+            if _liq_skip is not None:
+                logger.info(
+                    "%s liquidity Tier D skip (%s): %s",
+                    symbol, state.value, _liq_skip.get("reasoning"),
+                )
+                journal.append({
+                    "symbol": None,
+                    "underlying": symbol,
+                    "wheel_state": state.value,
+                    "action": "skip",
+                    "skip_reason": _liq_skip.get("skip_reason", "below_liquidity_floor"),
+                    "reasoning": _liq_skip.get("reasoning", ""),
+                    "confidence": None,
+                    "status": "skipped",
+                    "strategy_type": "wheel_csp" if state.value == "IDLE" else "wheel_cc",
+                    "iv_rank": context.get("iv_rank"),
+                })
+                if recorder is not None:
+                    recorder.record_decision(
+                        strategy_type="wheel",
+                        underlying=symbol,
+                        action="SKIP",
+                        wheel_state=state.value,
+                        reasoning=_liq_skip.get("reasoning"),
+                        context=context,
+                        research_metadata=_liq_skip.get("_research"),
+                    )
+                report_lines.append(
+                    f"**{symbol}** -- SKIPPED (liquidity floor: {_liq_skip.get('skip_reason')})"
+                )
+                continue
+
+            import time as _time
+            _t0_ask = _time.monotonic()
             decision = advisor.ask(context, state)
+            _elapsed_ask_ms = int((_time.monotonic() - _t0_ask) * 1000)
+            if recorder is not None:
+                recorder.record_token_usage(
+                    strategy_type="wheel",
+                    underlying=symbol,
+                    model=advisor.model,
+                    usage=advisor.prompt_cache_stats or {},
+                    response_time_ms=_elapsed_ask_ms,
+                    decision_action=decision.get("action"),
+                )
             logger.info(
                 "%s Claude decision: %s (confidence: %s)",
                 symbol, decision.get("action"), decision.get("confidence"),
@@ -254,12 +337,15 @@ def run() -> None:
             # Claude-initiated skip/hold — log before guardrails so we capture
             # the decision and its reason even though no order will be placed.
             if decision.get("action") in ("skip", "hold"):
+                from strategies.skip_codes import normalize_skip_code
                 journal.append({
                     "symbol": None,
                     "underlying": symbol,
                     "wheel_state": state.value,
                     "action": decision.get("action"),
                     "skip_reason": decision.get("skip_reason") or decision.get("reasoning", ""),
+                    # skip_code from Claude's response; absent on old responses → OTHER
+                    "skip_code": normalize_skip_code(decision.get("skip_code")),
                     "reasoning": decision.get("reasoning", ""),
                     "confidence": decision.get("confidence"),
                     "status": "skipped",
@@ -296,12 +382,19 @@ def run() -> None:
                         reasoning=f"Guardrail rejected: {rejection}",
                         confidence=decision.get("confidence"),
                         context=context,
+                        research_metadata=context.get("_research"),
                     )
+                from strategies.guardrails import Guardrails as _G
                 journal.append({
                     "symbol": decision.get("symbol"), "underlying": symbol,
-                    "wheel_state": state.value, "action": "skip",
-                    "reasoning": f"Guardrail rejected: {rejection}", "status": "skipped",
-                    "skip_reason": rejection,
+                    "wheel_state": state.value,
+                    # "rejected" status distinguishes guardrail blocks from
+                    # Claude-initiated skips ("skipped") for query purposes.
+                    "action": "skip", "status": "rejected",
+                    "action_proposed": decision.get("action"),
+                    "rejection_reason": rejection,
+                    "skip_reason": rejection,  # kept for backward compat
+                    "skip_code": _G.classify_rejection(rejection),
                     "strategy_type": "wheel_csp" if state.value == "IDLE" else "wheel_cc",
                     "iv_rank": context.get("iv_rank"),
                     "iv_environment": context.get("iv_environment"),
@@ -331,6 +424,7 @@ def run() -> None:
                     reasoning=decision.get("reasoning"),
                     confidence=decision.get("confidence"),
                     context=context,
+                    research_metadata=context.get("_research"),
                 )
 
             if settings.DRY_RUN:
@@ -598,6 +692,7 @@ def run() -> None:
                         reasoning=decision.get("reasoning"),
                         confidence=decision.get("confidence"),
                         context=spread_ctx,
+                        research_metadata=(spread_ctx or {}).get("_research"),
                     )
 
                 # Journal SKIPs from spread strategies so Claude sees them
@@ -640,6 +735,7 @@ def run() -> None:
                         _handle_spread_open(
                             strategy_name, strat, decision, guardrails,
                             spread_ctx, account, tracker, settings, report_lines,
+                            journal=journal,
                         )
                         # Re-poll order status immediately so a same-cycle fast
                         # fill flips PENDING_OPEN → OPEN before the next loop.
@@ -674,6 +770,7 @@ _GUARDRAIL_MAP = {
 
 def _handle_spread_open(
     name, strat, decision, guardrails, context, account, tracker, settings, report_lines,
+    journal=None,
 ):
     """Validate and execute a spread OPEN decision."""
     validator_name = _GUARDRAIL_MAP.get(name)
@@ -699,6 +796,22 @@ def _handle_spread_open(
     if not is_valid:
         logger.warning("%s GUARDRAIL REJECTED: %s", name, rejection)
         report_lines.append(f"**{name}** -- REJECTED: {rejection}")
+        if journal is not None:
+            from strategies.guardrails import Guardrails as _G
+            underlying = decision.get("underlying", "")
+            journal.append({
+                "underlying": underlying,
+                "action": "skip", "status": "rejected",
+                "action_proposed": decision.get("action"),
+                "rejection_reason": rejection,
+                "skip_reason": rejection,  # kept for backward compat
+                "skip_code": _G.classify_rejection(rejection),
+                "strategy_type": name,
+                "iv_rank": context.get("iv_rank"),
+                "iv_environment": context.get("iv_environment"),
+                "vix": (context.get("macro") or {}).get("vix"),
+                "market_regime": context.get("confirmed_market_regime"),
+            })
         return
 
     # ── Shared-account capital guard ────────────────────────

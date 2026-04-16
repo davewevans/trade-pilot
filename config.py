@@ -47,6 +47,10 @@ class Settings:
         self.ALPACA_PAPER6_API_KEY: str = os.getenv("ALPACA_PAPER6_API_KEY", "")
         self.ALPACA_PAPER6_SECRET_KEY: str = os.getenv("ALPACA_PAPER6_SECRET_KEY", "")
 
+        # Conservative Wheel account credentials (fourth dedicated paper account)
+        self.ALPACA_CONSERVATIVE_WHEEL_API_KEY: str = os.getenv("ALPACA_CONSERVATIVE_WHEEL_API_KEY", "")
+        self.ALPACA_CONSERVATIVE_WHEEL_SECRET_KEY: str = os.getenv("ALPACA_CONSERVATIVE_WHEEL_SECRET_KEY", "")
+
         if self.ALPACA_PAPER:
             self.ALPACA_TRADE_URL = "https://paper-api.alpaca.markets"
             self.ALPACA_STREAM_URL = "wss://paper-api.alpaca.markets/stream"
@@ -57,6 +61,16 @@ class Settings:
         self.ALPACA_DATA_URL = "https://data.alpaca.markets"
 
         self.ANTHROPIC_API_KEY: str = self._require("ANTHROPIC_API_KEY")
+        # Prompt cache TTL passed as cache_control.ttl on ephemeral blocks.
+        # Default "5m"; set PROMPT_CACHE_TTL=1h to extend after Story 1 data
+        # shows the cache is warming correctly.
+        self.PROMPT_CACHE_TTL: str = os.getenv("PROMPT_CACHE_TTL", "5m")
+        # Adaptive thinking mode for ClaudeAdvisor.
+        # "off" = no thinking (default, current behavior).
+        # "adaptive_medium" / "adaptive_high" = enable via output_config.effort.
+        # Do NOT enable in production until the A/B harness (Story 3) shows
+        # clear decision improvement — thinking tokens are billed at output rates.
+        self.THINKING_MODE: str = os.getenv("THINKING_MODE", "off")
 
         self.FRED_API_KEY: str = self._require("FRED_API_KEY")
 
@@ -88,6 +102,54 @@ class Settings:
         self._load_watchlist()
 
         self.DRY_RUN: bool = os.getenv("DRY_RUN", "false").lower() == "true"
+
+        # Research layer — liquidity scoring
+        self.RESEARCH_SCORE_MULTIPLIER_ENABLED: bool = (
+            os.getenv("RESEARCH_SCORE_MULTIPLIER_ENABLED", "true").lower() == "true"
+        )
+        self.RESEARCH_MIN_SNAPSHOTS_FOR_SCORING: int = int(
+            os.getenv("RESEARCH_MIN_SNAPSHOTS_FOR_SCORING", "30")
+        )
+        self.RESEARCH_LOOKBACK_DAYS: int = int(
+            os.getenv("RESEARCH_LOOKBACK_DAYS", "30")
+        )
+        self.RESEARCH_SCAN_BELOW_FLOOR: bool = (
+            os.getenv("RESEARCH_SCAN_BELOW_FLOOR", "false").lower() == "true"
+        )
+
+        # Research layer — backtest stats
+        self.RESEARCH_WINRATE_MULTIPLIER_ENABLED: bool = (
+            os.getenv("RESEARCH_WINRATE_MULTIPLIER_ENABLED", "true").lower() == "true"
+        )
+        self.RESEARCH_BACKTEST_MIN_TRADES_HIGH_CONFIDENCE: int = int(
+            os.getenv("RESEARCH_BACKTEST_MIN_TRADES_HIGH_CONFIDENCE", "30")
+        )
+        self.RESEARCH_BACKTEST_MIN_TRADES_LOW_CONFIDENCE: int = int(
+            os.getenv("RESEARCH_BACKTEST_MIN_TRADES_LOW_CONFIDENCE", "10")
+        )
+        self.RESEARCH_BACKTEST_REGIME_MIN_TRADES: int = int(
+            os.getenv("RESEARCH_BACKTEST_REGIME_MIN_TRADES", "100")
+        )
+        self.RESEARCH_BACKTEST_LOOKBACK_YEARS: int = int(
+            os.getenv("RESEARCH_BACKTEST_LOOKBACK_YEARS", "3")
+        )
+        self.RESEARCH_BACKTEST_SWEEP_MODE: str = os.getenv(
+            "RESEARCH_BACKTEST_SWEEP_MODE", "watchlist"
+        )
+        self.RESEARCH_BACKTEST_MAX_SYMBOLS_PER_RUN: int = int(
+            os.getenv("RESEARCH_BACKTEST_MAX_SYMBOLS_PER_RUN", "50")
+        )
+
+        # Research layer — watchlist recommendations
+        self.RESEARCH_RECOMMENDATIONS_ENABLED: bool = (
+            os.getenv("RESEARCH_RECOMMENDATIONS_ENABLED", "true").lower() == "true"
+        )
+        self.RESEARCH_MAX_RECOMMENDATIONS_PER_LIST: int = int(
+            os.getenv("RESEARCH_MAX_RECOMMENDATIONS_PER_LIST", "5")
+        )
+        self.RESEARCH_REMOVE_MIN_WEEKS_OBSERVED: int = int(
+            os.getenv("RESEARCH_REMOVE_MIN_WEEKS_OBSERVED", "12")
+        )
 
         # Circuit breaker thresholds (percentages)
         self.DAILY_LOSS_HALT_PCT: float = float(os.getenv("DAILY_LOSS_HALT_PCT", "3.0"))
@@ -129,11 +191,12 @@ class Settings:
             try:
                 data = json.loads(watchlist_path.read_text(encoding="utf-8"))
                 self.WATCHLIST: list[str] = data.get("wheel", ["AAPL", "SPY"])
+                self.CONSERVATIVE_WHEEL_WATCHLIST: list[str] = data.get("conservative_wheel", list(self.WATCHLIST))
                 self.SPREAD_WATCHLIST: list[str] = data.get("spreads", list(self.WATCHLIST))
                 self.IRON_CONDOR_WATCHLIST: list[str] = data.get("iron_condor", list(self.SPREAD_WATCHLIST))
                 log.info(
-                    "Loaded watchlist from %s: %d wheel, %d iron_condor, %d spreads",
-                    watchlist_path, len(self.WATCHLIST),
+                    "Loaded watchlist from %s: %d wheel, %d conservative_wheel, %d iron_condor, %d spreads",
+                    watchlist_path, len(self.WATCHLIST), len(self.CONSERVATIVE_WHEEL_WATCHLIST),
                     len(self.IRON_CONDOR_WATCHLIST), len(self.SPREAD_WATCHLIST),
                 )
                 return
@@ -143,6 +206,7 @@ class Settings:
         # watchlist.json missing or unreadable — seed from built-in defaults
         log.warning("watchlist.json not found at %s; using built-in defaults", watchlist_path)
         self.WATCHLIST = ["AAPL", "SPY", "MSFT", "AMD", "JPM", "XOM"]
+        self.CONSERVATIVE_WHEEL_WATCHLIST = list(self.WATCHLIST)
         self.IRON_CONDOR_WATCHLIST = ["SPY", "QQQ", "IWM", "AAPL", "MSFT", "GOOGL", "AMZN", "JPM", "XOM", "META", "NVDA"]
         self.SPREAD_WATCHLIST = [
             "AAPL", "MSFT", "AMD", "GOOGL", "AMZN", "META", "NVDA", "TSLA",
@@ -170,14 +234,19 @@ class Settings:
     # Three strategies share Paper Account 1 (ALPACA_PAPER1_API_KEY).
     # DEPRECATED: Use AccountManager instead. Will be removed in v1.1.
     STRATEGY_ACCOUNT_MAP: dict[str, tuple[str, str]] = {
-        "wheel":              ("ALPACA_PAPER2_API_KEY", "ALPACA_PAPER2_SECRET_KEY"),
-        "iron_condor":        ("ALPACA_PAPER3_API_KEY", "ALPACA_PAPER3_SECRET_KEY"),
-        "bull_put_spread":    ("ALPACA_PAPER1_API_KEY", "ALPACA_PAPER1_SECRET_KEY"),
-        "bear_call_spread":   ("ALPACA_PAPER1_API_KEY", "ALPACA_PAPER1_SECRET_KEY"),
-        "long_call_vertical": ("ALPACA_PAPER1_API_KEY", "ALPACA_PAPER1_SECRET_KEY"),
-        "iron_butterfly":     ("ALPACA_PAPER4_API_KEY", "ALPACA_PAPER4_SECRET_KEY"),
-        "calendar_spread":    ("ALPACA_PAPER5_API_KEY", "ALPACA_PAPER5_SECRET_KEY"),
+        "wheel":               ("ALPACA_PAPER2_API_KEY", "ALPACA_PAPER2_SECRET_KEY"),
+        "conservative_wheel":  ("ALPACA_CONSERVATIVE_WHEEL_API_KEY", "ALPACA_CONSERVATIVE_WHEEL_SECRET_KEY"),
+        "iron_condor":         ("ALPACA_PAPER3_API_KEY", "ALPACA_PAPER3_SECRET_KEY"),
+        "bull_put_spread":     ("ALPACA_PAPER1_API_KEY", "ALPACA_PAPER1_SECRET_KEY"),
+        "bear_call_spread":    ("ALPACA_PAPER1_API_KEY", "ALPACA_PAPER1_SECRET_KEY"),
+        "long_call_vertical":  ("ALPACA_PAPER1_API_KEY", "ALPACA_PAPER1_SECRET_KEY"),
+        "iron_butterfly":      ("ALPACA_PAPER4_API_KEY", "ALPACA_PAPER4_SECRET_KEY"),
+        "calendar_spread":     ("ALPACA_PAPER5_API_KEY", "ALPACA_PAPER5_SECRET_KEY"),
     }
+
+    # Conservative Wheel position sizing (differs from standard wheel)
+    CONSERVATIVE_WHEEL_MAX_POSITION_PCT: float = 0.05   # 5% of BP per position
+    CONSERVATIVE_WHEEL_MAX_CONCURRENT: int = 10
 
     def get_broker_credentials(self, strategy_name: str) -> tuple[str, str]:
         """Return (api_key, secret_key) for the account assigned to *strategy_name*."""

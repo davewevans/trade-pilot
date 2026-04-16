@@ -43,13 +43,13 @@ class StrategyRouter:
         Returns:
             List of strategy name strings.
         """
-        active: list[str] = ["wheel"]
+        active: list[str] = ["wheel", "conservative_wheel"]
 
         regime = context.get("confirmed_market_regime", "NEUTRAL")
 
-        # CRASH: only wheel management
+        # CRASH: only wheel strategies (both wheels manage open positions)
         if regime == "CRASH":
-            logger.info("Router: CRASH regime — wheel only")
+            logger.info("Router: CRASH regime — wheel strategies only")
             return active
 
         # RED: no new positions at all

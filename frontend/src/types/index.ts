@@ -176,3 +176,52 @@ export interface CircuitBreaker {
   current_drawdown_pct: number
   dry_run?: boolean
 }
+
+export interface TokenUsageToday {
+  date: string
+  total_input: number
+  total_output: number
+  total_cache_read: number
+  total_cache_creation: number
+  calls_count: number
+  avg_response_ms: number
+  estimated_cost_usd: number
+  cache_hit_rate: number
+}
+
+export interface TokenUsageDaily {
+  date: string
+  total_input: number
+  total_output: number
+  calls_count: number
+  estimated_cost_usd: number
+  cache_hit_rate: number
+}
+
+export interface TokenUsageSummary {
+  lifetime: {
+    total_calls: number
+    total_input: number
+    total_output: number
+    total_cache_read: number
+    total_cache_creation: number
+    total_cost_usd: number
+    avg_cost_per_call: number
+    overall_cache_hit_rate: number
+    first_recorded: string | null
+    last_recorded: string | null
+  }
+  by_strategy: Array<{
+    strategy_type: string
+    calls: number
+    total_cost_usd: number
+    avg_cost_per_call: number
+    cache_hit_rate: number
+  }>
+  prompt_size: {
+    system_prompt_tokens: number | null
+    context_window: number
+    utilization_pct: number | null
+    measured_at: string
+  } | null
+}

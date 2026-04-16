@@ -2,6 +2,24 @@ import { useEffect, useState } from 'react'
 import { NavLink, useLocation } from 'react-router-dom'
 import { useAccounts } from '../../hooks/useAccounts'
 
+function usePendingRecsCount(): number {
+  const [count, setCount] = useState(0)
+  useEffect(() => {
+    fetch('/api/research/recommendations', { credentials: 'same-origin' })
+      .then((r) => r.ok ? r.json() : null)
+      .then((d) => {
+        if (!d) return
+        let pending = 0
+        for (const wl of Object.values(d.watchlists as Record<string, { add: unknown[]; remove: unknown[] }>)) {
+          pending += (wl.add?.length ?? 0) + (wl.remove?.length ?? 0)
+        }
+        setCount(pending)
+      })
+      .catch(() => {})
+  }, [])
+  return count
+}
+
 const linkClass = ({ isActive }: { isActive: boolean }) =>
   `block px-3 py-2 rounded text-sm transition-all ${
     isActive ? 'font-semibold' : 'hover:bg-[var(--bg-card)]'
@@ -21,7 +39,9 @@ const linkStyle = (isActive: boolean): React.CSSProperties => ({
 const LEARN_ROUTES = [
   '/options-basics',
   '/trade-lifecycle',
+  '/research-guide',
   '/how-it-works',
+  '/playbook',
   '/how-backtesting-works',
   '/strategies',
   '/guardrails',
@@ -95,6 +115,7 @@ export function Sidebar() {
   const location = useLocation()
   const isLearnRoute = LEARN_ROUTES.some((p) => location.pathname.startsWith(p))
   const { accounts } = useAccounts()
+  const pendingRecs = usePendingRecsCount()
 
   return (
     <aside
@@ -117,6 +138,29 @@ export function Sidebar() {
       </SidebarSection>
 
       <SidebarSection label="Research" storageKey="research" defaultOpen={true}>
+        <NavLink to="/research" className={linkClass} style={({ isActive }) => linkStyle(isActive)}>
+          Research Dashboard
+        </NavLink>
+        <NavLink to="/recommendations" className={linkClass} style={({ isActive }) => linkStyle(isActive)}>
+          <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            Recommendations
+            {pendingRecs > 0 && (
+              <span
+                style={{
+                  fontSize: 10,
+                  padding: '1px 6px',
+                  borderRadius: 10,
+                  backgroundColor: 'var(--accent)',
+                  color: '#fff',
+                  fontWeight: 700,
+                  marginLeft: 4,
+                }}
+              >
+                {pendingRecs}
+              </span>
+            )}
+          </span>
+        </NavLink>
         <NavLink to="/backtest" className={linkClass} style={({ isActive }) => linkStyle(isActive)}>
           Backtester
         </NavLink>
@@ -156,8 +200,14 @@ export function Sidebar() {
         <NavLink to="/trade-lifecycle" className={linkClass} style={({ isActive }) => linkStyle(isActive)}>
           Life of a Trade
         </NavLink>
+        <NavLink to="/research-guide" className={linkClass} style={({ isActive }) => linkStyle(isActive)}>
+          Research Guide
+        </NavLink>
         <NavLink to="/how-it-works" className={linkClass} style={({ isActive }) => linkStyle(isActive)}>
           How Claude Decides
+        </NavLink>
+        <NavLink to="/playbook" className={linkClass} style={({ isActive }) => linkStyle(isActive)}>
+          Claude's Playbook
         </NavLink>
         <NavLink to="/strategies" className={linkClass} style={({ isActive }) => linkStyle(isActive)}>
           Strategies

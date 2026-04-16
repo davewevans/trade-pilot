@@ -1,5 +1,7 @@
 # Bull Put Spread — Position Management
 
+**Counterfactual check:** Before recommending HOLD, ask: if this position were not already open, would you recommend opening it right now? If no, recommend CLOSE regardless of current P&L.
+
 You are managing an open Bull Put Spread on {{underlying}}.
 
 ## Open Position
@@ -23,13 +25,14 @@ HOLD otherwise. Let theta decay work.
 Unlike the wheel, assignment does NOT transition to LONG_STOCK.
 The long put caps loss — close the whole spread instead.
 
-## Response Format (JSON only):
-```json
-{
-  "action": "CLOSE" | "HOLD",
-  "reasoning": str,
-  "limit_price": float | null
-}
-```
+## Response Guidance
 
 For CLOSE: limit_price should be a small positive value (buying back the spread cheaply). For HOLD: limit_price is null.
+
+For the reasoning object, address each dimension briefly:
+- macro: current market environment
+- fundamental: any company developments since entry
+- technical: price action relative to short strike
+- volatility: IV change since entry
+- selection: which rule triggered (or why none triggered)
+- risk: current P&L capture and remaining downside

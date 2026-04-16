@@ -25,7 +25,8 @@
       "Bash(python -c \"import ast; ast.parse\\(open\\('data/market_data.py'\\).read\\(\\)\\); print\\('syntax OK'\\)\")",
       "Bash(py -c \"import ast; ast.parse\\(open\\('data/market_data.py'\\).read\\(\\)\\); print\\('syntax OK'\\)\")",
       "Bash(py:*)",
-      "Bash(xargs grep:*)"
+      "Bash(xargs grep:*)",
+      "Skill(claude-api)"
     ]
   }
 }

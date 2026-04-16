@@ -26,7 +26,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTex
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from config import settings
-from database.repositories import DecisionRepository, TradeRepository
+from database.repositories import BacktestStatsRepository, DecisionRepository, LiquidityRepository, RecommendationRepository, TradeRepository, TokenUsageRepository
 
 logger = logging.getLogger(__name__)
 
@@ -1763,6 +1763,431 @@ def pending_count():
     except Exception:
         logger.exception("pending-count query failed")
         return {"count": 0}
+    finally:
+        conn.close()
+
+
+# ── Research endpoints ────────────────────────────────────────────────────────
+
+
+@app.get("/api/research/liquidity/scores")
+def research_liquidity_scores():
+    """All symbol_liquidity_scores rows, grouped by strategy_type."""
+    conn = _open_db()
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    if conn is None:
+        return {"generated_at": now, "strategies": {}}
+    try:
+        repo = LiquidityRepository(conn)
+        rows = repo.get_all_scores()
+        grouped: dict[str, list] = {}
+        for r in rows:
+            strat = r.get("strategy_type", "unknown")
+            grouped.setdefault(strat, []).append(r)
+        return {"generated_at": now, "strategies": grouped}
+    except Exception:
+        logger.exception("research/liquidity/scores query failed")
+        return JSONResponse(status_code=500, content={"error": "query failed"})
+    finally:
+        conn.close()
+
+
+@app.get("/api/research/winrate/symbol-stats")
+def research_winrate_symbol_stats():
+    """All symbol_strategy_stats rows, grouped by strategy_type."""
+    conn = _open_db()
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    if conn is None:
+        return {"generated_at": now, "strategies": {}}
+    try:
+        repo = BacktestStatsRepository(conn)
+        rows = repo.get_all_symbol_stats()
+        grouped: dict[str, list] = {}
+        for r in rows:
+            strat = r.get("strategy_type", "unknown")
+            grouped.setdefault(strat, []).append(r)
+        return {"generated_at": now, "strategies": grouped}
+    except Exception:
+        logger.exception("research/winrate/symbol-stats query failed")
+        return JSONResponse(status_code=500, content={"error": "query failed"})
+    finally:
+        conn.close()
+
+
+@app.get("/api/research/winrate/regime-stats")
+def research_winrate_regime_stats():
+    """All regime_strategy_stats rows, grouped by entry_regime."""
+    conn = _open_db()
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    if conn is None:
+        return {"generated_at": now, "regimes": {}}
+    try:
+        repo = BacktestStatsRepository(conn)
+        rows = repo.get_all_regime_stats()
+        grouped: dict[str, list] = {}
+        for r in rows:
+            regime = r.get("entry_regime", "unknown")
+            grouped.setdefault(regime, []).append(r)
+        return {"generated_at": now, "regimes": grouped}
+    except Exception:
+        logger.exception("research/winrate/regime-stats query failed")
+        return JSONResponse(status_code=500, content={"error": "query failed"})
+    finally:
+        conn.close()
+
+
+@app.get("/api/research/winrate/symbol/{ticker}")
+def research_winrate_symbol(ticker: str):
+    """Per-symbol deep dive: all strategy stats + last 20 trades per strategy.
+
+    Returns 404 if the ticker has no backtest data at all.
+    """
+    ticker = ticker.upper()
+    conn = _open_db()
+    if conn is None:
+        return JSONResponse(status_code=503, content={"error": "database unavailable"})
+    try:
+        repo = BacktestStatsRepository(conn)
+        all_stats = repo.get_all_symbol_stats()
+        symbol_stats = {
+            r["strategy_type"]: r
+            for r in all_stats
+            if r.get("symbol", "").upper() == ticker
+        }
+        if not symbol_stats:
+            return JSONResponse(
+                status_code=404,
+                content={"error": f"No backtest data for symbol: {ticker}"},
+            )
+
+        strategies = [
+            "wheel_csp", "bull_put_spread", "bear_call_spread",
+            "iron_condor", "long_call_vertical",
+        ]
+        recent_trades: dict[str, list] = {}
+        for strat in strategies:
+            trades = repo.get_trades(symbol=ticker, strategy_type=strat)
+            # Return most recent 20, sorted by entry_date desc
+            trades_sorted = sorted(trades, key=lambda t: t.get("entry_date", ""), reverse=True)
+            recent_trades[strat] = trades_sorted[:20]
+
+        return {
+            "symbol": ticker,
+            "stats": symbol_stats,
+            "recent_trades": recent_trades,
+        }
+    except Exception:
+        logger.exception("research/winrate/symbol/%s query failed", ticker)
+        return JSONResponse(status_code=500, content={"error": "query failed"})
+    finally:
+        conn.close()
+
+
+@app.get("/api/research/winrate/coverage")
+def research_winrate_coverage():
+    """Summary coverage metrics for the win-rate research layer."""
+    conn = _open_db()
+    if conn is None:
+        return {
+            "total_backtest_trades": 0,
+            "symbols_with_stats": 0,
+            "high_confidence_pairs": 0,
+            "low_confidence_pairs": 0,
+            "no_data_pairs": 0,
+            "oldest_trade": None,
+            "newest_trade": None,
+            "last_sweep_run": None,
+        }
+    try:
+        repo = BacktestStatsRepository(conn)
+
+        # Count trades
+        trade_row = conn.execute("SELECT COUNT(*) FROM backtest_trades").fetchone()
+        total_trades = int(trade_row[0]) if trade_row else 0
+
+        # Date range
+        date_row = conn.execute(
+            "SELECT MIN(entry_date), MAX(entry_date) FROM backtest_trades"
+        ).fetchone()
+        oldest_trade = date_row[0] if date_row else None
+        newest_trade = date_row[1] if date_row else None
+
+        # Stats summary
+        all_stats = repo.get_all_symbol_stats()
+        symbols_with_stats = len({r["symbol"] for r in all_stats})
+        high_conf = sum(1 for r in all_stats if r.get("confidence") == "high")
+        low_conf = sum(1 for r in all_stats if r.get("confidence") == "low")
+        no_data = sum(1 for r in all_stats if r.get("confidence") == "none")
+
+        # Last sweep run from state file
+        sweep_state_path = DATA_DIR / "backtest_sweep_state.json"
+        last_sweep_run = None
+        if sweep_state_path.exists():
+            try:
+                state = json.loads(sweep_state_path.read_text(encoding="utf-8"))
+                last_sweep_run = state.get("last_completed_at")
+            except Exception:
+                pass
+
+        return {
+            "total_backtest_trades": total_trades,
+            "symbols_with_stats": symbols_with_stats,
+            "high_confidence_pairs": high_conf,
+            "low_confidence_pairs": low_conf,
+            "no_data_pairs": no_data,
+            "oldest_trade": oldest_trade,
+            "newest_trade": newest_trade,
+            "last_sweep_run": last_sweep_run,
+        }
+    except Exception:
+        logger.exception("research/winrate/coverage query failed")
+        return JSONResponse(status_code=500, content={"error": "query failed"})
+    finally:
+        conn.close()
+
+
+# ── Recommendation endpoints ─────────────────────────────────────────────────
+
+_WATCHLIST_KEY = {
+    "wheel": "WATCHLIST",
+    "iron_condor": "IRON_CONDOR_WATCHLIST",
+    "spreads": "SPREAD_WATCHLIST",
+}
+_WATCHLIST_MIN_MEMBERS = 5
+
+
+@app.get("/api/research/recommendations")
+def research_recommendations():
+    """Return the latest watchlist recommendations from the snapshot file."""
+    path = SNAPSHOTS / "watchlist_recommendations.json"
+    data = _read_json(path)
+    if data is None:
+        return JSONResponse(status_code=404, content={"error": "no recommendations generated yet"})
+    # Load current watchlist members so the UI can show them alongside recs
+    wl_path = DATA_DIR / "watchlist.json"
+    wl_data = _read_json(wl_path) or {}
+    result: dict = {"generated_at": data.get("generated_at"), "watchlists": {}}
+    for key in ("wheel", "iron_condor", "spreads"):
+        wl_entry = data.get(key, {})
+        result["watchlists"][key] = {
+            "current_members": wl_data.get(key, []),
+            "add": wl_entry.get("add", []),
+            "remove": wl_entry.get("remove", []),
+            "no_change": wl_entry.get("no_change", []),
+            "considered_but_rejected": wl_entry.get("considered_but_rejected", []),
+        }
+    return result
+
+
+@app.get("/api/research/recommendations/history")
+def research_recommendations_history():
+    """Return last 100 recommendation rows including operator decisions."""
+    conn = _open_db()
+    if conn is None:
+        return {"rows": []}
+    try:
+        repo = RecommendationRepository(conn)
+        rows = repo.get_history(limit=100)
+        return {"rows": rows}
+    except Exception:
+        logger.exception("research/recommendations/history query failed")
+        return JSONResponse(status_code=500, content={"error": "query failed"})
+    finally:
+        conn.close()
+
+
+@app.post("/api/research/recommendations/apply")
+async def research_recommendations_apply(request: Request):
+    """Accept or reject pending recommendations, applying accepted ones to watchlist.json."""
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(status_code=400, content={"error": "invalid JSON body"})
+
+    accepted_items = body.get("accepted", [])
+    rejected_items = body.get("rejected", [])
+
+    if not isinstance(accepted_items, list) or not isinstance(rejected_items, list):
+        return JSONResponse(status_code=400, content={"error": "'accepted' and 'rejected' must be arrays"})
+
+    all_ids = [item.get("recommendation_id") for item in accepted_items + rejected_items]
+    if not all(isinstance(i, int) for i in all_ids):
+        return JSONResponse(status_code=400, content={"error": "each item must have an integer recommendation_id"})
+
+    conn = _open_db()
+    if conn is None:
+        return JSONResponse(status_code=503, content={"error": "database unavailable"})
+
+    try:
+        repo = RecommendationRepository(conn)
+
+        # Validate: all IDs must exist and be undecided
+        all_history = repo.get_history(limit=10000)
+        history_by_id = {r["recommendation_id"]: r for r in all_history}
+
+        errors: list[str] = []
+        for rid in all_ids:
+            if rid not in history_by_id:
+                errors.append(f"recommendation_id {rid} not found")
+            elif history_by_id[rid]["operator_decision"] is not None:
+                errors.append(f"recommendation_id {rid} already decided as {history_by_id[rid]['operator_decision']!r}")
+        if errors:
+            return JSONResponse(status_code=400, content={"errors": errors})
+
+        # Load current watchlist
+        wl_path = DATA_DIR / "watchlist.json"
+        wl_data = _read_json(wl_path) or {"wheel": [], "iron_condor": [], "spreads": []}
+        wheel = list(wl_data.get("wheel", []))
+        iron_condor = list(wl_data.get("iron_condor", []))
+        spreads = list(wl_data.get("spreads", []))
+        wl_map = {"wheel": wheel, "iron_condor": iron_condor, "spreads": spreads}
+
+        # Pre-validate: check remove would not drop below minimum
+        for item in accepted_items:
+            rid = item["recommendation_id"]
+            rec = history_by_id[rid]
+            if rec["action"] == "remove":
+                wl_name = rec["watchlist_name"]
+                current = wl_map.get(wl_name, [])
+                if len(current) - 1 < _WATCHLIST_MIN_MEMBERS:
+                    return JSONResponse(
+                        status_code=400,
+                        content={
+                            "error": (
+                                f"Cannot remove {rec['symbol']} from {wl_name}: "
+                                f"would drop below minimum {_WATCHLIST_MIN_MEMBERS} members "
+                                f"(currently {len(current)})"
+                            )
+                        },
+                    )
+
+        # Apply accepted changes
+        applied = 0
+        now_iso = datetime.now().isoformat()
+        for item in accepted_items:
+            rid = item["recommendation_id"]
+            rec = history_by_id[rid]
+            wl_name = rec["watchlist_name"]
+            symbol = rec["symbol"]
+            action = rec["action"]
+            current = wl_map.get(wl_name, [])
+            try:
+                if action == "add" and symbol not in current:
+                    current.append(symbol)
+                    wl_map[wl_name] = current
+                    logger.info("AUDIT apply accept: add %s to %s (rec_id=%d)", symbol, wl_name, rid)
+                elif action == "remove" and symbol in current:
+                    current.remove(symbol)
+                    wl_map[wl_name] = current
+                    logger.info("AUDIT apply accept: remove %s from %s (rec_id=%d)", symbol, wl_name, rid)
+                else:
+                    logger.info("AUDIT apply accept no-op: action=%s symbol=%s wl=%s (rec_id=%d)", action, symbol, wl_name, rid)
+                repo.record_decision(rid, "accepted", decided_at=now_iso)
+                applied += 1
+            except Exception as exc:
+                errors.append(f"rec_id={rid}: {exc}")
+
+        # Record rejected
+        rejected_count = 0
+        for item in rejected_items:
+            rid = item["recommendation_id"]
+            rec = history_by_id[rid]
+            try:
+                repo.record_decision(rid, "rejected", decided_at=now_iso)
+                logger.info("AUDIT apply reject: %s on %s (rec_id=%d)", rec["action"], rec["symbol"], rid)
+                rejected_count += 1
+            except Exception as exc:
+                errors.append(f"rec_id={rid}: {exc}")
+
+        # Save watchlist.json and hot-reload
+        updated_wl = {
+            "wheel": wl_map["wheel"],
+            "iron_condor": wl_map["iron_condor"],
+            "spreads": wl_map["spreads"],
+            "updated_at": now_iso,
+        }
+        wl_path.write_text(json.dumps(updated_wl, indent=2), encoding="utf-8")
+
+        settings.WATCHLIST = wl_map["wheel"]
+        settings.IRON_CONDOR_WATCHLIST = wl_map["iron_condor"]
+        settings.SPREAD_WATCHLIST = wl_map["spreads"]
+
+        logger.info(
+            "Watchlist updated via recommendations: %d wheel, %d iron_condor, %d spreads",
+            len(wl_map["wheel"]), len(wl_map["iron_condor"]), len(wl_map["spreads"]),
+        )
+
+        return {
+            "applied": applied,
+            "rejected": rejected_count,
+            "updated_watchlists": updated_wl,
+            "errors": errors,
+        }
+    except Exception:
+        logger.exception("research/recommendations/apply failed")
+        return JSONResponse(status_code=500, content={"error": "apply failed"})
+    finally:
+        conn.close()
+
+
+# ── Token usage endpoints ────────────────────────────────────────────────────
+
+
+@app.get("/api/token-usage")
+def token_usage(days: int = Query(default=30, ge=1, le=365)):
+    """Daily token usage aggregates for the last N days."""
+    conn = _open_db()
+    if conn is None:
+        return {"daily": []}
+    try:
+        repo = TokenUsageRepository(conn)
+        return {"daily": repo.get_daily_summaries(days)}
+    except Exception:
+        logger.exception("token-usage query failed")
+        return JSONResponse(status_code=500, content={"error": "query failed"})
+    finally:
+        conn.close()
+
+
+@app.get("/api/token-usage/today")
+def token_usage_today():
+    """Today's running token usage totals."""
+    conn = _open_db()
+    if conn is None:
+        return {"calls_count": 0, "estimated_cost_usd": 0.0, "cache_hit_rate": 0.0}
+    try:
+        repo = TokenUsageRepository(conn)
+        return repo.get_today_summary()
+    except Exception:
+        logger.exception("token-usage/today query failed")
+        return JSONResponse(status_code=500, content={"error": "query failed"})
+    finally:
+        conn.close()
+
+
+@app.get("/api/token-usage/summary")
+def token_usage_summary():
+    """Lifetime stats, per-strategy breakdown, and current prompt size."""
+    conn = _open_db()
+    prompt_size = _read_json(SNAPSHOTS / "prompt_size.json")
+    if conn is None:
+        return {
+            "lifetime": {"total_calls": 0, "total_cost_usd": 0.0, "overall_cache_hit_rate": 0.0},
+            "by_strategy": [],
+            "prompt_size": prompt_size,
+        }
+    try:
+        repo = TokenUsageRepository(conn)
+        lifetime = repo.get_lifetime_summary()
+        by_strategy = repo.get_by_strategy()
+        return {
+            "lifetime": lifetime,
+            "by_strategy": by_strategy,
+            "prompt_size": prompt_size,
+        }
+    except Exception:
+        logger.exception("token-usage/summary query failed")
+        return JSONResponse(status_code=500, content={"error": "query failed"})
     finally:
         conn.close()
 

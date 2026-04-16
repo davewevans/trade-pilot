@@ -205,6 +205,9 @@ class TradeJournal:
             if (
                 e.get("underlying", "").upper() == symbol.upper()
                 and e.get("timestamp", "") >= cutoff
+                # Exclude guardrail rejections (status="rejected") — those
+                # are surfaced separately via format_rejections_for_prompt.
+                and e.get("status") != "rejected"
                 and (
                     e.get("action") in ("skip", "hold")
                     or e.get("status") == "skipped"
@@ -215,25 +218,38 @@ class TradeJournal:
     def format_skip_history_for_prompt(self, symbol: str, days: int = 30) -> str:
         """Format recent skip history as a string for Claude's context.
 
-        Helps Claude recognize persistent conditions — e.g. if it has been
-        skipping SPY for IV rank 12 cycles in a row, that is worth knowing.
+        Aggregates primarily by skip_code (machine-readable) with the most
+        common free-text skip_reason shown as secondary context. Older
+        entries without skip_code are bucketed under OTHER.
+
+        Helps Claude recognise persistent conditions — e.g. 12 consecutive
+        LOW_IVR skips signals the IV threshold may be mis-tuned.
         """
         skips = self.get_recent_skips(symbol, days)
         if not skips:
             return ""
 
-        # Summarize skip reasons by frequency
-        from collections import Counter
-        reasons = Counter(
-            e.get("skip_reason") or e.get("reasoning", "unknown")
-            for e in skips
-        )
+        from collections import Counter, defaultdict
+        from strategies.skip_codes import SkipCode, normalize_skip_code
+
+        # Group by skip_code, collecting representative reason strings
+        code_counts: Counter = Counter()
+        code_reasons: dict = defaultdict(Counter)
+        for e in skips:
+            code = normalize_skip_code(e.get("skip_code"))
+            code_counts[code] += 1
+            reason = (e.get("skip_reason") or e.get("reasoning") or "")[:60]
+            if reason:
+                code_reasons[code][reason] += 1
 
         lines = [f"Recent skips on {symbol.upper()} (last {days} days): {len(skips)} total"]
-        for reason, count in reasons.most_common(5):
-            # Truncate long reasoning strings
-            reason_short = reason[:80] + "..." if len(reason) > 80 else reason
-            lines.append(f"  x{count}: {reason_short}")
+        for code, count in code_counts.most_common(5):
+            # Append the most common free-text reason as context
+            top_reason = ""
+            if code_reasons[code]:
+                top_reason_text = code_reasons[code].most_common(1)[0][0]
+                top_reason = f": {top_reason_text}"
+            lines.append(f"  x{count} {code}{top_reason}")
 
         body = "\n".join(lines)
         return f"<skip_history>\n{body}\n</skip_history>"
@@ -312,6 +328,61 @@ class TradeJournal:
             "avg_iv_rank_losing_trades": avg_loss_ivr,
             "most_active_symbols": dict(symbol_counts.most_common(5)),
         }
+
+    def get_recent_rejections(self, symbol: str, days: int = 30) -> list[dict]:
+        """Return recent guardrail-rejection entries for *symbol* within N days.
+
+        Guardrail rejections are written with ``status == "rejected"``
+        (distinct from Claude-initiated skips which use ``status == "skipped"``).
+        Returns entries newest-first.
+        """
+        from datetime import date, timedelta
+        cutoff = (date.today() - timedelta(days=days)).isoformat()
+
+        entries = self._read_all()
+        matching = [
+            e for e in entries
+            if (
+                e.get("underlying", "").upper() == symbol.upper()
+                and e.get("timestamp", "") >= cutoff
+                and e.get("status") == "rejected"
+            )
+        ]
+        return list(reversed(matching))
+
+    def format_rejections_for_prompt(self, symbol: str, days: int = 30) -> str:
+        """Format recent guardrail rejections as an XML-wrapped block for Claude.
+
+        Returns empty string when there are no recent rejections.
+        Format example:
+            <guardrail_rejections>
+            Recent rejections on AAPL (last 30 days): 3 total
+              2026-04-08: proposed sell_put → DELTA_OUT_OF_RANGE: delta -0.38 out of range
+              2026-04-03: proposed sell_call → STRIKE_BELOW_COST_BASIS: strike below cost basis
+            </guardrail_rejections>
+        """
+        rejections = self.get_recent_rejections(symbol, days)
+        if not rejections:
+            return ""
+
+        from strategies.skip_codes import normalize_skip_code
+
+        lines = [
+            f"Recent rejections on {symbol.upper()} (last {days} days): "
+            f"{len(rejections)} total"
+        ]
+        for e in rejections[:10]:  # cap at 10 most recent
+            date_str = e.get("timestamp", "?")[:10]
+            proposed = e.get("action_proposed") or e.get("action", "unknown")
+            code = normalize_skip_code(e.get("skip_code"))
+            reason = e.get("rejection_reason") or e.get("skip_reason") or ""
+            reason_short = reason[:80] + "..." if len(reason) > 80 else reason
+            lines.append(
+                f"  {date_str}: proposed {proposed} \u2192 {code}: {reason_short}"
+            )
+
+        body = "\n".join(lines)
+        return f"<guardrail_rejections>\n{body}\n</guardrail_rejections>"
 
     def get_recent_by_days(self, symbol: str, days: int = 30) -> list[dict]:
         """Return all trade entries for a symbol within the past N days.
