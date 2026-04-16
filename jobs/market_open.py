@@ -101,7 +101,7 @@ def run() -> None:
     )
 
     # ── Shared dependencies ─────────────────────────────────
-    advisor = ClaudeAdvisor()
+    # advisor is created after DB init below so it can receive api_usage_repo.
     guardrails = Guardrails(broker=broker)
     journal = TradeJournal(path=settings.JOURNAL_PATH)
     ctx_builder = ContextBuilder(broker=broker, journal=journal)
@@ -112,13 +112,20 @@ def run() -> None:
     # the existing JSON snapshots. Failures are logged but never block the job.
     from database.db import Database
     from database.recorder import TradeRecorder
+    from database.repositories import ApiUsageRepository
     try:
         _db = Database()
         _db.init_schema()
-        recorder = TradeRecorder(_db.get_connection())
+        _conn = _db.get_connection()
+        recorder = TradeRecorder(_conn)
+        api_usage_repo = ApiUsageRepository(_conn)
     except Exception:
         logger.exception("Failed to initialize DB recorder — continuing without DB writes")
         recorder = None
+        api_usage_repo = None
+
+    # Re-create advisor with DB-backed usage repo so per-call stats are persisted.
+    advisor = ClaudeAdvisor(api_usage_repo=api_usage_repo)
 
     # Each strategy gets a broker pointed at its designated account
     try:

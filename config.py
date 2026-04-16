@@ -57,6 +57,10 @@ class Settings:
         self.ALPACA_DATA_URL = "https://data.alpaca.markets"
 
         self.ANTHROPIC_API_KEY: str = self._require("ANTHROPIC_API_KEY")
+        # Prompt cache TTL passed as cache_control.ttl on ephemeral blocks.
+        # Default "5m"; set PROMPT_CACHE_TTL=1h to extend after Story 1 data
+        # shows the cache is warming correctly.
+        self.PROMPT_CACHE_TTL: str = os.getenv("PROMPT_CACHE_TTL", "5m")
 
         self.FRED_API_KEY: str = self._require("FRED_API_KEY")
 

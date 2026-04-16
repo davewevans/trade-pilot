@@ -2,6 +2,7 @@
 
 import json
 import logging
+import time
 from pathlib import Path
 
 import anthropic
@@ -21,14 +22,65 @@ _REQUIRED_FIELDS = {
 _VALID_ACTIONS = {"sell_put", "sell_call", "roll", "close", "hold", "skip"}
 
 
+def _cache_hit_pct(cache_read: int, cache_write: int, input_tokens: int) -> float:
+    """Return cache_read / total_tokens as a percentage, rounded to 1 decimal."""
+    total = cache_read + cache_write + input_tokens
+    if total == 0:
+        return 0.0
+    return round(cache_read / total * 100, 1)
+
+
 class ClaudeAdvisor:
     """Uses the Anthropic API to get wheel strategy trade recommendations."""
 
-    def __init__(self):
+    def __init__(self, api_usage_repo=None):
         self.client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
         self.model = "claude-sonnet-4-6"
         self._last_usage: dict | None = None
+        self._api_usage_repo = api_usage_repo
         self.load_prompts()
+
+    def _record_usage(
+        self,
+        usage,
+        *,
+        strategy: str | None,
+        phase: str | None,
+        latency_ms: int,
+    ) -> None:
+        """Emit a structured log line and persist usage stats to DB.
+
+        ``usage`` is the Anthropic UsageBlock (or None). Never raises.
+        """
+        if usage is None:
+            cache_read = cache_write = input_tokens = output_tokens = 0
+        else:
+            cache_read = getattr(usage, "cache_read_input_tokens", 0) or 0
+            cache_write = getattr(usage, "cache_creation_input_tokens", 0) or 0
+            input_tokens = getattr(usage, "input_tokens", 0) or 0
+            output_tokens = getattr(usage, "output_tokens", 0) or 0
+
+        hit_pct = _cache_hit_pct(cache_read, cache_write, input_tokens)
+        logger.info(
+            "claude_api_usage strategy=%s phase=%s input=%d cache_read=%d "
+            "cache_write=%d output=%d cache_hit_pct=%.1f",
+            strategy, phase, input_tokens, cache_read, cache_write, output_tokens, hit_pct,
+        )
+
+        if self._api_usage_repo is not None:
+            try:
+                self._api_usage_repo.record_api_call(
+                    strategy=strategy,
+                    phase=phase,
+                    model=self.model,
+                    input_tokens=input_tokens,
+                    cache_read_tokens=cache_read,
+                    cache_write_tokens=cache_write,
+                    output_tokens=output_tokens,
+                    latency_ms=latency_ms,
+                )
+            except Exception:
+                logger.warning("Failed to persist API usage to DB", exc_info=True)
 
     def load_prompts(self) -> None:
         """Load (or reload) all prompt files from disk.
@@ -133,6 +185,7 @@ class ClaudeAdvisor:
         for attempt in range(2):
             content = user_content if attempt == 0 else user_content + retry_suffix
             try:
+                _t0 = time.monotonic()
                 response = self.client.messages.create(
                     model=self.model,
                     max_tokens=2048,
@@ -145,11 +198,18 @@ class ClaudeAdvisor:
                     ],
                     messages=[{"role": "user", "content": content}],
                 )
+                _latency_ms = int((time.monotonic() - _t0) * 1000)
             except Exception:
                 logger.exception("Anthropic API call failed")
                 raise
 
             self._last_usage = response.usage.model_dump() if response.usage else None
+            self._record_usage(
+                response.usage,
+                strategy="wheel",
+                phase=phase.value if hasattr(phase, "value") else str(phase),
+                latency_ms=_latency_ms,
+            )
             raw_text = response.content[0].text.strip()
 
             try:
@@ -239,6 +299,7 @@ class ClaudeAdvisor:
         for attempt in range(2):
             content = user_content if attempt == 0 else user_content + retry_suffix
             try:
+                _t0 = time.monotonic()
                 response = self.client.messages.create(
                     model=self.model,
                     max_tokens=2048,
@@ -251,6 +312,7 @@ class ClaudeAdvisor:
                     ],
                     messages=[{"role": "user", "content": content}],
                 )
+                _latency_ms = int((time.monotonic() - _t0) * 1000)
             except Exception:
                 logger.exception("Anthropic API call failed for spread %s", key)
                 return {
@@ -260,6 +322,12 @@ class ClaudeAdvisor:
                 }
 
             self._last_usage = response.usage.model_dump() if response.usage else None
+            self._record_usage(
+                response.usage,
+                strategy=strategy_type,
+                phase=phase,
+                latency_ms=_latency_ms,
+            )
             raw_text = response.content[0].text.strip()
 
             try:

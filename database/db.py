@@ -113,6 +113,22 @@ _SCHEMA_STATEMENTS: tuple[str, ...] = (
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_orats_cache_endpoint ON orats_cache(endpoint)",
+    # ── claude_api_calls ─────────────────────────────────────────
+    """
+    CREATE TABLE IF NOT EXISTS claude_api_calls (
+        id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+        created_at          TEXT NOT NULL,
+        strategy            TEXT,
+        phase               TEXT,
+        model               TEXT NOT NULL,
+        input_tokens        INTEGER NOT NULL DEFAULT 0,
+        cache_read_tokens   INTEGER NOT NULL DEFAULT 0,
+        cache_write_tokens  INTEGER NOT NULL DEFAULT 0,
+        output_tokens       INTEGER NOT NULL DEFAULT 0,
+        latency_ms          INTEGER NOT NULL DEFAULT 0
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_api_calls_created ON claude_api_calls(created_at)",
 )
 
 
