@@ -314,6 +314,104 @@ export function Strategies() {
         </ul>
       </AccountSection>
 
+      {/* --- Conservative Wheel --- */}
+      <AccountSection
+        accent="var(--accent-wheel, var(--accent))"
+        header="Conservative Wheel — Shorter-DTE Variant"
+        tagline="A second wheel account running a shorter-DTE, cost-basis-driven variant. Same market, different rules — we compare results against the original Wheel over time."
+      >
+        <Prose>
+          The Conservative Wheel runs the same four-phase cycle as the original Wheel, but follows a different
+          philosophy for the covered call phase. The idea: get rid of assigned shares quickly and return to
+          selling cash-secured puts, which are more capital-efficient. Paper-traded in its own Alpaca account
+          so we can compare results directly against the original Wheel.
+        </Prose>
+        <PhaseStepper
+          steps={[
+            'IDLE',
+            'Sell Cash-Secured Put',
+            '(if assigned) Own Stock',
+            'Sell Covered Call',
+            'repeat',
+          ]}
+        />
+
+        <Subheading>What's different from the original Wheel</Subheading>
+        <div className="grid gap-3 md:grid-cols-2">
+          <SubCard
+            title="Shorter covered calls (7–14 DTE)"
+            bullets={[
+              'Original Wheel: CCs are 21–35 days out',
+              'Conservative: CCs are 7–14 days out',
+              'More CC cycles per year, faster share turnover',
+            ]}
+          >
+            The goal is to get called away quickly and return to selling puts. Shorter DTE means we write more
+            CCs per year and collect premium more often, at the cost of higher gamma risk per contract.
+          </SubCard>
+          <SubCard
+            title="Cost-basis strike selection"
+            bullets={[
+              'Original Wheel: strike must be above the upper Bollinger Band AND above cost basis',
+              'Conservative: strike must be above cost basis, period',
+              'No technical-indicator filter on CC strike',
+            ]}
+          >
+            We remove the Bollinger Band check. As long as the strike is above our net cost basis (so we can't
+            lock in a loss), the bot can sell the CC. The tradeoff: we may sell CCs closer to the money than the
+            original Wheel would, increasing assignment frequency.
+          </SubCard>
+          <SubCard
+            title="Smaller, more diversified positions"
+            bullets={[
+              'Original Wheel: max 10% of buying power per position, 5 concurrent',
+              'Conservative: max 5% of buying power per position, 10 concurrent',
+              'Spreads capital across more names',
+            ]}
+          >
+            Halving the per-position size and doubling the concurrent cap pushes the account toward
+            diversification over concentration.
+          </SubCard>
+          <SubCard
+            title="More roll flexibility"
+            bullets={[
+              'Original Wheel: max 2 rolls, new contract must return to target delta range',
+              'Conservative: max 3 rolls, wider delta window',
+              'Rolls still require net credit (never debit)',
+            ]}
+          >
+            The original Wheel gives up on a position after two rolls. The Conservative Wheel allows one more
+            roll attempt and widens the acceptable delta range on the replacement contract (short put within
+            −0.40, short call within 0.45). Net-credit requirement is unchanged — no rolls for a debit.
+          </SubCard>
+        </div>
+
+        <Subheading>What's the same as the original Wheel</Subheading>
+        <ul className="space-y-1.5 text-sm" style={{ color: 'var(--text-secondary)' }}>
+          <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> CSP entry: target delta −0.20 to −0.30, 21–35 DTE, IV Rank ≥ 30</li>
+          <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Earnings avoidance: no entries within 21 days of an earnings announcement</li>
+          <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Open interest minimum: ≥ 200 contracts per leg</li>
+          <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> 50% profit close on both CSPs and CCs</li>
+          <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> All universal guardrails apply — OCC regex validation, limit orders only, qty = 1, credit-sign enforcement</li>
+          <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Watchlist: starts as a copy of the original Wheel's watchlist (AAPL, MSFT, AMD, GOOGL, AMZN, JPM, GS, XOM, CVX, JNJ, UNH, SPY)</li>
+        </ul>
+
+        <div
+          className="mt-4 p-3 rounded text-xs"
+          style={{
+            backgroundColor: 'color-mix(in srgb, var(--accent) 8%, transparent)',
+            color: 'var(--text-secondary)',
+            borderLeft: '3px solid var(--accent)',
+          }}
+        >
+          <strong>Why run two wheels?</strong> Paper trading lets us test philosophies without risking real capital.
+          The two wheels run on the same watchlist and same market conditions, so performance differences come
+          from the rule differences listed above rather than stock selection or timing. Give it at least three
+          months before reading too much into the comparison — options strategies don't produce meaningful
+          signal in a few weeks.
+        </div>
+      </AccountSection>
+
       {/* --- Iron Condor --- */}
       <AccountSection
         accent="var(--accent-iron-condor, var(--accent))"
@@ -690,6 +788,7 @@ export function Strategies() {
           <SubCard title="Position Sizing Caps">
             <ul className="space-y-1 text-xs" style={{ color: 'var(--text-secondary)' }}>
               <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Wheel: max 10% of buying power per CSP, max 5 concurrent positions</li>
+              <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Conservative Wheel: max 5% of buying power per CSP, max 10 concurrent positions</li>
               <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Iron Condor: max loss ≤ 5% of buying power</li>
               <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Credit spreads: max loss ≤ 2% of buying power per spread</li>
               <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Debit spreads: max risk ≤ 1% of buying power</li>
@@ -701,7 +800,7 @@ export function Strategies() {
               <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Max 3 wheel positions per sector (prevents concentrated sector bets)</li>
               <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Watchlist spans Technology, Financials, Energy, and Index ETFs</li>
               <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Spread strategies scan across the full watchlist for uncorrelated setups</li>
-              <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Circuit breaker monitors aggregate equity across all three accounts</li>
+              <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Circuit breaker monitors aggregate equity across all four accounts</li>
             </ul>
           </SubCard>
         </div>
