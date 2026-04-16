@@ -183,6 +183,67 @@ _SCHEMA_STATEMENTS: tuple[str, ...] = (
         PRIMARY KEY (symbol, strategy_type)
     )
     """,
+    # ── backtest_trades ───────────────────────────────────────────
+    """
+    CREATE TABLE IF NOT EXISTS backtest_trades (
+        trade_id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        sweep_run_id     TEXT NOT NULL,
+        symbol           TEXT NOT NULL,
+        strategy_type    TEXT NOT NULL,
+        entry_date       TEXT NOT NULL,
+        exit_date        TEXT,
+        entry_credit     REAL,
+        exit_debit       REAL,
+        pnl              REAL,
+        exit_reason      TEXT,
+        entry_delta      REAL,
+        entry_ivr        REAL,
+        entry_regime     TEXT,
+        entry_iv_env     TEXT,
+        holding_days     INTEGER,
+        contracts        INTEGER NOT NULL DEFAULT 1,
+        trade_json       TEXT,
+        inserted_at      TEXT NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_bt_trades_sym_strat ON backtest_trades(symbol, strategy_type)",
+    "CREATE INDEX IF NOT EXISTS idx_bt_trades_regime ON backtest_trades(entry_regime, strategy_type)",
+    "CREATE INDEX IF NOT EXISTS idx_bt_trades_run ON backtest_trades(sweep_run_id)",
+    # ── symbol_strategy_stats ─────────────────────────────────────
+    """
+    CREATE TABLE IF NOT EXISTS symbol_strategy_stats (
+        symbol            TEXT NOT NULL,
+        strategy_type     TEXT NOT NULL,
+        trade_count       INTEGER NOT NULL,
+        win_count         INTEGER NOT NULL,
+        win_rate          REAL NOT NULL,
+        avg_pnl_per_trade REAL NOT NULL,
+        total_pnl         REAL NOT NULL,
+        max_drawdown      REAL NOT NULL,
+        sharpe_ratio      REAL,
+        confidence        TEXT NOT NULL,
+        last_updated      TEXT NOT NULL,
+        date_range_start  TEXT NOT NULL,
+        date_range_end    TEXT NOT NULL,
+        PRIMARY KEY (symbol, strategy_type)
+    )
+    """,
+    # ── regime_strategy_stats ─────────────────────────────────────
+    """
+    CREATE TABLE IF NOT EXISTS regime_strategy_stats (
+        entry_regime      TEXT NOT NULL,
+        strategy_type     TEXT NOT NULL,
+        trade_count       INTEGER NOT NULL,
+        win_count         INTEGER NOT NULL,
+        win_rate          REAL NOT NULL,
+        avg_pnl_per_trade REAL NOT NULL,
+        total_pnl         REAL NOT NULL,
+        max_drawdown      REAL NOT NULL,
+        confidence        TEXT NOT NULL,
+        last_updated      TEXT NOT NULL,
+        PRIMARY KEY (entry_regime, strategy_type)
+    )
+    """,
 )
 
 

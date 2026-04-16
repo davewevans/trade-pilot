@@ -1,6 +1,7 @@
 """Repository classes — one per table."""
 
 from database.repositories.api_usage_repository import ApiUsageRepository
+from database.repositories.backtest_stats import BacktestStatsRepository
 from database.repositories.cycles import CycleRepository
 from database.repositories.daily_summaries import DailySummaryRepository
 from database.repositories.decisions import DecisionRepository
@@ -11,6 +12,7 @@ from database.repositories.trades import TradeRepository
 
 __all__ = [
     "ApiUsageRepository",
+    "BacktestStatsRepository",
     "CycleRepository",
     "DailySummaryRepository",
     "DecisionRepository",

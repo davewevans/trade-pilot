@@ -26,6 +26,7 @@ JOB_MODULES = {
     "market_close": "jobs.market_close",
     "post_market": "jobs.post_market",
     "weekly_report": "jobs.weekly_report",
+    "weekly_research": "jobs.weekly_research",
 }
 
 
