@@ -39,6 +39,7 @@ const linkStyle = (isActive: boolean): React.CSSProperties => ({
 const LEARN_ROUTES = [
   '/options-basics',
   '/trade-lifecycle',
+  '/research-guide',
   '/how-it-works',
   '/playbook',
   '/how-backtesting-works',
@@ -198,6 +199,9 @@ export function Sidebar() {
         </NavLink>
         <NavLink to="/trade-lifecycle" className={linkClass} style={({ isActive }) => linkStyle(isActive)}>
           Life of a Trade
+        </NavLink>
+        <NavLink to="/research-guide" className={linkClass} style={({ isActive }) => linkStyle(isActive)}>
+          Research Guide
         </NavLink>
         <NavLink to="/how-it-works" className={linkClass} style={({ isActive }) => linkStyle(isActive)}>
           How Claude Decides
