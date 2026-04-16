@@ -25,6 +25,7 @@ from alpaca.trading.requests import (
     OptionLegRequest,
 )
 
+from brokers._oi_cache import OpenInterestCache
 from brokers.base import BaseBroker
 from config import settings
 
@@ -77,6 +78,7 @@ class AlpacaBroker(BaseBroker):
             api_key=_api_key,
             secret_key=_secret_key,
         )
+        self._oi_cache = OpenInterestCache(self.client)
         logger.info("AlpacaBroker initialized: paper=%s", _paper)
 
     # ── account ──────────────────────────────────────────────
@@ -448,8 +450,13 @@ class AlpacaBroker(BaseBroker):
     _SNAPSHOT_BATCH_SIZE = 50
 
     @retry_on_transient()
-    def get_option_snapshots(self, symbols: list[str]) -> dict[str, dict]:
+    def get_option_snapshots(self, symbols: list[str], underlying: str = "") -> dict[str, dict]:
         """Fetch real-time snapshots (bid/ask, Greeks, IV) for option symbols.
+
+        Open interest is sourced from the per-underlying OI cache (backed by
+        /v2/options/contracts) rather than the snapshot object, which does not
+        carry OI.  Pass ``underlying`` to enable cache lookup; omit it (or pass
+        an empty string) when OI is not needed (e.g. position management calls).
 
         Symbols are chunked into batches of 50 to avoid HTTP 400 errors caused
         by URL length limits when the watchlist is large.  A batch failure is
@@ -461,6 +468,8 @@ class AlpacaBroker(BaseBroker):
         result: dict[str, dict] = {}
         if not symbols:
             return result
+
+        oi_map = self._oi_cache.get_map(underlying) if underlying else {}
 
         batch_size = self._SNAPSHOT_BATCH_SIZE
         batches = [symbols[i:i + batch_size] for i in range(0, len(symbols), batch_size)]
@@ -500,7 +509,7 @@ class AlpacaBroker(BaseBroker):
                         "vega": float(greeks.vega) if greeks and greeks.vega is not None else None,
                         "gamma": float(greeks.gamma) if greeks and greeks.gamma is not None else None,
                         "iv": float(snap.implied_volatility) if snap.implied_volatility is not None else None,
-                        "open_interest": int(snap.open_interest) if snap.open_interest is not None else None,
+                        "open_interest": oi_map.get(sym, 0),
                         "volume": int(snap.daily_bar.volume) if snap.daily_bar and snap.daily_bar.volume is not None else None,
                     }
                 except Exception:
@@ -509,7 +518,7 @@ class AlpacaBroker(BaseBroker):
                         "bid": None, "ask": None, "mid": None,
                         "delta": None, "theta": None, "vega": None,
                         "gamma": None, "iv": None,
-                        "open_interest": None, "volume": None,
+                        "open_interest": 0, "volume": None,
                     }
 
         return result

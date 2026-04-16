@@ -216,7 +216,7 @@ class IronCondorStrategy:
 
         snapshots = {}
         try:
-            snapshots = self.broker.get_option_snapshots(all_symbols)
+            snapshots = self.broker.get_option_snapshots(all_symbols, underlying=spread.get("underlying", ""))
         except Exception:
             logger.warning("Failed to fetch snapshots for condor management")
 

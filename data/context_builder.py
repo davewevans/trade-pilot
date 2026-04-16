@@ -721,7 +721,7 @@ class ContextBuilder:
 
         # Fetch snapshots
         all_syms = [c["symbol"] for c in short_contracts + long_contracts]
-        snapshots = self.broker.get_option_snapshots(all_syms)
+        snapshots = self.broker.get_option_snapshots(all_syms, underlying=underlying_symbol)
 
         # Index by (expiration, strike)
         def _index(contracts):
@@ -1173,7 +1173,7 @@ class ContextBuilder:
                 dte_min, dte_max, delta_min, delta_max,
                 alpaca_fallback[:5],
             )
-            alpaca_snaps = self.broker.get_option_snapshots(alpaca_fallback)
+            alpaca_snaps = self.broker.get_option_snapshots(alpaca_fallback, underlying=symbol)
             result.update(alpaca_snaps)
 
         return result

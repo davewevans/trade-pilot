@@ -537,5 +537,5 @@ class TestORATSSnapshotEnrichment:
         assert result["SPY250502P00525000"] is alpaca_snap_525
         # Alpaca was called only for the missing contract
         builder.broker.get_option_snapshots.assert_called_once_with(
-            ["SPY250502P00525000"]
+            ["SPY250502P00525000"], underlying="SPY"
         )
