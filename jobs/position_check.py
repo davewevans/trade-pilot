@@ -120,7 +120,19 @@ def run() -> None:
             except Exception as e:
                 logger.warning("Failed to write context snapshot for %s: %s", underlying, e)
 
+            import time as _time
+            _t0_ask = _time.monotonic()
             decision = advisor.ask(context, state)
+            _elapsed_ask_ms = int((_time.monotonic() - _t0_ask) * 1000)
+            if recorder is not None:
+                recorder.record_token_usage(
+                    strategy_type="wheel",
+                    underlying=underlying,
+                    model=advisor.model,
+                    usage=advisor.prompt_cache_stats or {},
+                    response_time_ms=_elapsed_ask_ms,
+                    decision_action=decision.get("action"),
+                )
             action = decision.get("action", "hold")
             logger.info(
                 "%s position check: %s (confidence: %s)",

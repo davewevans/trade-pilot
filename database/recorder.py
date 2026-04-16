@@ -16,7 +16,9 @@ from database.repositories import (
     CycleRepository,
     DecisionRepository,
     TradeRepository,
+    TokenUsageRepository,
 )
+from database.repositories.token_usage_repository import estimate_cost_usd
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +92,7 @@ class TradeRecorder:
         self.cycles = CycleRepository(conn)
         self.decisions = DecisionRepository(conn)
         self.trades = TradeRepository(conn)
+        self.token_usage = TokenUsageRepository(conn)
 
     # ── Decision recording ─────────────────────────────────
 
@@ -217,6 +220,44 @@ class TradeRecorder:
             )
             return None
 
+
+    def record_token_usage(
+        self,
+        *,
+        strategy_type: str,
+        underlying: str | None,
+        model: str,
+        usage: dict,
+        response_time_ms: int,
+        decision_action: str | None = None,
+    ) -> None:
+        """Best-effort insert into token_usage. Never raises."""
+        try:
+            input_tokens = usage.get("input_tokens", 0) or 0
+            output_tokens = usage.get("output_tokens", 0) or 0
+            cache_read = usage.get("cache_read_input_tokens", 0) or 0
+            cache_creation = usage.get("cache_creation_input_tokens", 0) or 0
+
+            cost = estimate_cost_usd(input_tokens, output_tokens, cache_read, cache_creation)
+
+            self.token_usage.insert({
+                "timestamp": _now_iso(),
+                "strategy_type": strategy_type,
+                "underlying": underlying,
+                "model": model,
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "cache_read_tokens": cache_read,
+                "cache_creation_tokens": cache_creation,
+                "response_time_ms": response_time_ms,
+                "estimated_cost_usd": cost,
+                "decision_action": decision_action,
+            })
+        except Exception:
+            logger.warning(
+                "Failed to record token usage (strategy=%s underlying=%s)",
+                strategy_type, underlying, exc_info=True,
+            )
 
     def resolve_trade(
         self,

@@ -26,7 +26,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTex
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from config import settings
-from database.repositories import DecisionRepository, TradeRepository
+from database.repositories import DecisionRepository, TradeRepository, TokenUsageRepository
 
 logger = logging.getLogger(__name__)
 
@@ -1763,6 +1763,68 @@ def pending_count():
     except Exception:
         logger.exception("pending-count query failed")
         return {"count": 0}
+    finally:
+        conn.close()
+
+
+# ── Token usage endpoints ────────────────────────────────────────────────────
+
+
+@app.get("/api/token-usage")
+def token_usage(days: int = Query(default=30, ge=1, le=365)):
+    """Daily token usage aggregates for the last N days."""
+    conn = _open_db()
+    if conn is None:
+        return {"daily": []}
+    try:
+        repo = TokenUsageRepository(conn)
+        return {"daily": repo.get_daily_summaries(days)}
+    except Exception:
+        logger.exception("token-usage query failed")
+        return JSONResponse(status_code=500, content={"error": "query failed"})
+    finally:
+        conn.close()
+
+
+@app.get("/api/token-usage/today")
+def token_usage_today():
+    """Today's running token usage totals."""
+    conn = _open_db()
+    if conn is None:
+        return {"calls_count": 0, "estimated_cost_usd": 0.0, "cache_hit_rate": 0.0}
+    try:
+        repo = TokenUsageRepository(conn)
+        return repo.get_today_summary()
+    except Exception:
+        logger.exception("token-usage/today query failed")
+        return JSONResponse(status_code=500, content={"error": "query failed"})
+    finally:
+        conn.close()
+
+
+@app.get("/api/token-usage/summary")
+def token_usage_summary():
+    """Lifetime stats, per-strategy breakdown, and current prompt size."""
+    conn = _open_db()
+    prompt_size = _read_json(SNAPSHOTS / "prompt_size.json")
+    if conn is None:
+        return {
+            "lifetime": {"total_calls": 0, "total_cost_usd": 0.0, "overall_cache_hit_rate": 0.0},
+            "by_strategy": [],
+            "prompt_size": prompt_size,
+        }
+    try:
+        repo = TokenUsageRepository(conn)
+        lifetime = repo.get_lifetime_summary()
+        by_strategy = repo.get_by_strategy()
+        return {
+            "lifetime": lifetime,
+            "by_strategy": by_strategy,
+            "prompt_size": prompt_size,
+        }
+    except Exception:
+        logger.exception("token-usage/summary query failed")
+        return JSONResponse(status_code=500, content={"error": "query failed"})
     finally:
         conn.close()
 

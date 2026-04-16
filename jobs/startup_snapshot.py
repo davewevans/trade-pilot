@@ -5,9 +5,12 @@ per-account portfolio snapshots so the dashboard has data immediately,
 before any trading cycle has run.
 """
 
+import json
 import logging
+from datetime import datetime, timezone
 
 from brokers.broker_factory import make_broker
+from config import settings
 from data.state_writer import StateWriter
 
 logger = logging.getLogger(__name__)
@@ -22,6 +25,36 @@ ACCOUNT_BROKER_MAP = {
     "iron_condor": "iron_condor",
     "spreads":     "bull_put_spread",
 }
+
+# Sonnet 4.6 context window size (tokens)
+_CONTEXT_WINDOW = 200_000
+
+
+def _write_prompt_size_snapshot() -> None:
+    """Measure system prompt token count and write prompt_size.json."""
+    try:
+        from ai.claude_advisor import ClaudeAdvisor
+        advisor = ClaudeAdvisor()
+        prompt_tokens = advisor.count_system_prompt_tokens()
+        snapshot = {
+            "system_prompt_tokens": prompt_tokens,
+            "model": advisor.model,
+            "context_window": _CONTEXT_WINDOW,
+            "utilization_pct": (
+                round(prompt_tokens / _CONTEXT_WINDOW * 100, 2)
+                if prompt_tokens is not None else None
+            ),
+            "measured_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        }
+        out_path = settings.SNAPSHOTS_DIR / "prompt_size.json"
+        out_path.write_text(json.dumps(snapshot, indent=2), encoding="utf-8")
+        logger.info(
+            "Prompt size snapshot written: %s tokens (%.2f%% of context window)",
+            prompt_tokens,
+            snapshot["utilization_pct"] or 0,
+        )
+    except Exception as e:
+        logger.warning("Failed to write prompt_size snapshot: %s", e)
 
 
 def run() -> None:
@@ -45,3 +78,5 @@ def run() -> None:
                 "Failed to write startup snapshot for %s: %s",
                 account_name, e,
             )
+
+    _write_prompt_size_snapshot()

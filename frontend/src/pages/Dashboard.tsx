@@ -1,5 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
+import {
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+} from 'recharts'
 import { api, type ContextResponse, type SourceHealthEntry } from '../api/client'
 import { useAccount } from '../hooks/useAccount'
 import { useAccounts } from '../hooks/useAccounts'
@@ -8,7 +11,15 @@ import { Badge } from '../components/shared/Badge'
 import { EmptyState } from '../components/shared/EmptyState'
 import { LoadingSpinner } from '../components/shared/LoadingSpinner'
 import { StatCard } from '../components/shared/StatCard'
-import type { CircuitBreaker, Decision, FillQualityResponse, Portfolio } from '../types'
+import type {
+  CircuitBreaker,
+  Decision,
+  FillQualityResponse,
+  Portfolio,
+  TokenUsageDaily,
+  TokenUsageSummary,
+  TokenUsageToday,
+} from '../types'
 
 const fmtMoney = (n: number | null | undefined) =>
   n == null ? '—' : `$${n.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
@@ -396,6 +407,165 @@ function FillQualityCard() {
   )
 }
 
+// ── AI usage panel ───────────────────────────────────────────
+
+function cacheHitColor(rate: number): string {
+  if (rate >= 70) return 'var(--green)'
+  if (rate >= 40) return 'var(--yellow, #d29922)'
+  return 'var(--red)'
+}
+
+function AiUsagePanel() {
+  const [today, setToday] = useState<TokenUsageToday | null>(null)
+  const [summary, setSummary] = useState<TokenUsageSummary | null>(null)
+  const [daily, setDaily] = useState<TokenUsageDaily[]>([])
+
+  useEffect(() => {
+    let cancelled = false
+
+    const loadFast = () => {
+      api.tokenUsageToday().then((d) => { if (!cancelled) setToday(d) }).catch(() => {})
+      api.tokenUsageSummary().then((d) => { if (!cancelled) setSummary(d) }).catch(() => {})
+    }
+    const loadSlow = () => {
+      api.tokenUsageDaily(30).then((d) => { if (!cancelled) setDaily(d.daily) }).catch(() => {})
+    }
+
+    loadFast()
+    loadSlow()
+    const fastId = setInterval(loadFast, 60_000)
+    const slowId = setInterval(loadSlow, 5 * 60_000)
+    return () => { cancelled = true; clearInterval(fastId); clearInterval(slowId) }
+  }, [])
+
+  const hasData = (today?.calls_count ?? 0) > 0 || (summary?.lifetime?.total_calls ?? 0) > 0
+
+  return (
+    <div>
+      <h2 className="section-heading">AI usage</h2>
+      {!hasData ? (
+        <EmptyState
+          icon="chart"
+          message="No AI usage data yet"
+          hint="Token tracking starts on the next decision cycle."
+        />
+      ) : (
+        <div className="space-y-4">
+          {/* Row 1 — today's stats */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <StatCard
+              label="API calls today"
+              value={today?.calls_count ?? 0}
+            />
+            <StatCard
+              label="Cost today"
+              value={`$${(today?.estimated_cost_usd ?? 0).toFixed(2)}`}
+            />
+            <StatCard
+              label="Cache hit rate"
+              value={`${(today?.cache_hit_rate ?? 0).toFixed(1)}%`}
+              valueColor={cacheHitColor(today?.cache_hit_rate ?? 0)}
+            />
+            <StatCard
+              label="System prompt"
+              value={
+                summary?.prompt_size?.system_prompt_tokens != null
+                  ? `${summary.prompt_size.system_prompt_tokens.toLocaleString()} tokens`
+                  : '—'
+              }
+              sub={
+                summary?.prompt_size?.utilization_pct != null
+                  ? `${summary.prompt_size.utilization_pct}% of context window`
+                  : undefined
+              }
+            />
+          </div>
+
+          {/* Row 2 — 30-day cost chart */}
+          {daily.length > 0 && (
+            <div
+              className="rounded-md p-4"
+              style={{ backgroundColor: 'var(--bg-card)', border: '1px solid var(--border)' }}
+            >
+              <div className="text-xs uppercase tracking-wider mb-3 font-semibold" style={{ color: 'var(--text-secondary)' }}>
+                30-day cost (USD)
+              </div>
+              <ResponsiveContainer width="100%" height={140}>
+                <BarChart data={[...daily].reverse()} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+                  <XAxis
+                    dataKey="date"
+                    tick={{ fontSize: 10, fill: 'var(--text-muted)' }}
+                    tickFormatter={(v: string) => v.slice(5)}
+                    interval="preserveStartEnd"
+                  />
+                  <YAxis
+                    tick={{ fontSize: 10, fill: 'var(--text-muted)' }}
+                    tickFormatter={(v: number) => `$${v.toFixed(2)}`}
+                    width={52}
+                  />
+                  <Tooltip
+                    contentStyle={{
+                      backgroundColor: 'var(--bg-card)',
+                      border: '1px solid var(--border)',
+                      fontSize: 12,
+                    }}
+                    formatter={(value: number, name: string) => {
+                      if (name === 'estimated_cost_usd') return [`$${value.toFixed(4)}`, 'Cost']
+                      return [value, name]
+                    }}
+                    labelFormatter={(label: string) => `Date: ${label}`}
+                  />
+                  <Bar dataKey="estimated_cost_usd" fill="var(--accent)" radius={[2, 2, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+
+          {/* Row 3 — per-strategy breakdown */}
+          {summary && (summary.by_strategy?.length ?? 0) > 0 && (
+            <div
+              className="rounded-md p-4"
+              style={{ backgroundColor: 'var(--bg-card)', border: '1px solid var(--border)' }}
+            >
+              <div className="text-xs uppercase tracking-wider mb-3 font-semibold" style={{ color: 'var(--text-secondary)' }}>
+                By strategy (30 days)
+              </div>
+              <table style={{ width: '100%', fontSize: 12 }}>
+                <thead>
+                  <tr style={{ color: 'var(--text-muted)' }}>
+                    <th style={{ textAlign: 'left', paddingBottom: 4 }}>Strategy</th>
+                    <th style={{ textAlign: 'right', paddingBottom: 4 }}>Calls</th>
+                    <th style={{ textAlign: 'right', paddingBottom: 4 }}>Total cost</th>
+                    <th style={{ textAlign: 'right', paddingBottom: 4 }}>Avg/call</th>
+                    <th style={{ textAlign: 'right', paddingBottom: 4 }}>Cache hit</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {summary.by_strategy.map((s) => (
+                    <tr key={s.strategy_type} style={{ color: 'var(--text-secondary)' }}>
+                      <td className="font-mono" style={{ paddingTop: 4 }}>{s.strategy_type}</td>
+                      <td style={{ textAlign: 'right', paddingTop: 4 }}>{s.calls}</td>
+                      <td className="font-mono" style={{ textAlign: 'right', paddingTop: 4 }}>${s.total_cost_usd.toFixed(4)}</td>
+                      <td className="font-mono" style={{ textAlign: 'right', paddingTop: 4 }}>${s.avg_cost_per_call.toFixed(4)}</td>
+                      <td
+                        className="font-mono"
+                        style={{ textAlign: 'right', paddingTop: 4, color: cacheHitColor(s.cache_hit_rate) }}
+                      >
+                        {s.cache_hit_rate.toFixed(1)}%
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function Dashboard() {
   const { data, loading } = useDecisions({ limit: 20 })
   const { accounts: accountList } = useAccounts()
@@ -495,6 +665,8 @@ export function Dashboard() {
       <FillQualityCard />
 
       <DataHealthPanel />
+
+      <AiUsagePanel />
 
       <div>
         <h2 className="section-heading">Recent activity</h2>

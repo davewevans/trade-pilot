@@ -129,6 +129,24 @@ _SCHEMA_STATEMENTS: tuple[str, ...] = (
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_api_calls_created ON claude_api_calls(created_at)",
+    # ── token_usage ──────────────────────────────────────────
+    """
+    CREATE TABLE IF NOT EXISTS token_usage (
+        id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+        timestamp               TEXT NOT NULL,
+        strategy_type           TEXT NOT NULL,
+        underlying              TEXT,
+        model                   TEXT NOT NULL,
+        input_tokens            INTEGER NOT NULL DEFAULT 0,
+        output_tokens           INTEGER NOT NULL DEFAULT 0,
+        cache_read_tokens       INTEGER NOT NULL DEFAULT 0,
+        cache_creation_tokens   INTEGER NOT NULL DEFAULT 0,
+        response_time_ms        INTEGER,
+        estimated_cost_usd      REAL,
+        decision_action         TEXT
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_token_usage_ts ON token_usage(timestamp)",
 )
 
 

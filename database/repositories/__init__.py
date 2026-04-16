@@ -5,6 +5,7 @@ from database.repositories.cycles import CycleRepository
 from database.repositories.daily_summaries import DailySummaryRepository
 from database.repositories.decisions import DecisionRepository
 from database.repositories.strategy_states import StrategyStateRepository
+from database.repositories.token_usage_repository import TokenUsageRepository
 from database.repositories.trades import TradeRepository
 
 __all__ = [
@@ -13,5 +14,6 @@ __all__ = [
     "DailySummaryRepository",
     "DecisionRepository",
     "StrategyStateRepository",
+    "TokenUsageRepository",
     "TradeRepository",
 ]

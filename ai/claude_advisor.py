@@ -275,7 +275,7 @@ class ClaudeAdvisor:
                     {
                         "type": "text",
                         "text": self.system_prompt,
-                        "cache_control": {"type": "ephemeral"},
+                        "cache_control": {"type": "ephemeral", "ttl": "1h"},
                     }
                 ],
                 messages=[{"role": "user", "content": user_content}],
@@ -364,7 +364,7 @@ class ClaudeAdvisor:
                     {
                         "type": "text",
                         "text": self.system_prompt,
-                        "cache_control": {"type": "ephemeral"},
+                        "cache_control": {"type": "ephemeral", "ttl": "1h"},
                     }
                 ],
                 messages=[{"role": "user", "content": user_content}],
@@ -403,3 +403,19 @@ class ClaudeAdvisor:
         when prompt caching is active, useful for monitoring savings.
         """
         return self._last_usage
+
+    def count_system_prompt_tokens(self) -> int | None:
+        """Use the token counting API to measure the system prompt size.
+
+        Free endpoint, no cost. Returns token count or None on failure.
+        """
+        try:
+            response = self.client.messages.count_tokens(
+                model=self.model,
+                system=[{"type": "text", "text": self.system_prompt}],
+                messages=[{"role": "user", "content": "test"}],
+            )
+            return response.input_tokens
+        except Exception:
+            logger.warning("Token counting failed", exc_info=True)
+            return None
