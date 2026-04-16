@@ -337,12 +337,15 @@ def run() -> None:
             # Claude-initiated skip/hold — log before guardrails so we capture
             # the decision and its reason even though no order will be placed.
             if decision.get("action") in ("skip", "hold"):
+                from strategies.skip_codes import normalize_skip_code
                 journal.append({
                     "symbol": None,
                     "underlying": symbol,
                     "wheel_state": state.value,
                     "action": decision.get("action"),
                     "skip_reason": decision.get("skip_reason") or decision.get("reasoning", ""),
+                    # skip_code from Claude's response; absent on old responses → OTHER
+                    "skip_code": normalize_skip_code(decision.get("skip_code")),
                     "reasoning": decision.get("reasoning", ""),
                     "confidence": decision.get("confidence"),
                     "status": "skipped",
@@ -381,11 +384,17 @@ def run() -> None:
                         context=context,
                         research_metadata=context.get("_research"),
                     )
+                from strategies.guardrails import Guardrails as _G
                 journal.append({
                     "symbol": decision.get("symbol"), "underlying": symbol,
-                    "wheel_state": state.value, "action": "skip",
-                    "reasoning": f"Guardrail rejected: {rejection}", "status": "skipped",
-                    "skip_reason": rejection,
+                    "wheel_state": state.value,
+                    # "rejected" status distinguishes guardrail blocks from
+                    # Claude-initiated skips ("skipped") for query purposes.
+                    "action": "skip", "status": "rejected",
+                    "action_proposed": decision.get("action"),
+                    "rejection_reason": rejection,
+                    "skip_reason": rejection,  # kept for backward compat
+                    "skip_code": _G.classify_rejection(rejection),
                     "strategy_type": "wheel_csp" if state.value == "IDLE" else "wheel_cc",
                     "iv_rank": context.get("iv_rank"),
                     "iv_environment": context.get("iv_environment"),
@@ -726,6 +735,7 @@ def run() -> None:
                         _handle_spread_open(
                             strategy_name, strat, decision, guardrails,
                             spread_ctx, account, tracker, settings, report_lines,
+                            journal=journal,
                         )
                         # Re-poll order status immediately so a same-cycle fast
                         # fill flips PENDING_OPEN → OPEN before the next loop.
@@ -760,6 +770,7 @@ _GUARDRAIL_MAP = {
 
 def _handle_spread_open(
     name, strat, decision, guardrails, context, account, tracker, settings, report_lines,
+    journal=None,
 ):
     """Validate and execute a spread OPEN decision."""
     validator_name = _GUARDRAIL_MAP.get(name)
@@ -785,6 +796,22 @@ def _handle_spread_open(
     if not is_valid:
         logger.warning("%s GUARDRAIL REJECTED: %s", name, rejection)
         report_lines.append(f"**{name}** -- REJECTED: {rejection}")
+        if journal is not None:
+            from strategies.guardrails import Guardrails as _G
+            underlying = decision.get("underlying", "")
+            journal.append({
+                "underlying": underlying,
+                "action": "skip", "status": "rejected",
+                "action_proposed": decision.get("action"),
+                "rejection_reason": rejection,
+                "skip_reason": rejection,  # kept for backward compat
+                "skip_code": _G.classify_rejection(rejection),
+                "strategy_type": name,
+                "iv_rank": context.get("iv_rank"),
+                "iv_environment": context.get("iv_environment"),
+                "vix": (context.get("macro") or {}).get("vix"),
+                "market_regime": context.get("confirmed_market_regime"),
+            })
         return
 
     # ── Shared-account capital guard ────────────────────────

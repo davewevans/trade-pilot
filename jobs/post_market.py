@@ -1,5 +1,6 @@
 """Post-market job — runs at 4:30 PM ET every weekday."""
 
+import json
 import logging
 from datetime import datetime
 
@@ -103,6 +104,20 @@ def run() -> None:
                 })
 
     strategy.save_state()
+
+    # ── Refresh portfolio patterns (daily) ─────────────────
+    # Context builder reads this file on every Claude API call; writing it
+    # daily keeps the data fresh. weekly_report.py also writes it on Sunday —
+    # whichever runs last wins, no race condition since both produce identical
+    # content from the same journal source.
+    try:
+        patterns = journal.get_portfolio_patterns(days=30)
+        patterns_path = settings.SNAPSHOTS_DIR / "portfolio_patterns.json"
+        patterns_path.parent.mkdir(parents=True, exist_ok=True)
+        patterns_path.write_text(json.dumps(patterns, indent=2), encoding="utf-8")
+        logger.info("Portfolio patterns refreshed: %s", patterns_path)
+    except Exception:
+        logger.exception("Failed to refresh portfolio patterns")
 
     # ── Finalize daily report ───────────────────────────────
     if report_lines:

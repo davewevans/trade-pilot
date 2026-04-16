@@ -77,18 +77,20 @@ def test_get_symbol_stats_counts_and_win_rate(journal):
     assert stats["avg_delta_at_entry"] == round((-0.30 + 0.20 - 0.25 - 0.20) / 4, 3)
 
 
-def test_format_skip_history_top_reasons(journal):
-    # 3x IV too low, 2x earnings, 1x other reason
+def test_format_skip_history_aggregates_by_skip_code(journal):
+    # 3x LOW_IVR, 2x EARNINGS_TOO_CLOSE, 1x OTHER (no skip_code)
     for _ in range(3):
         journal.append({
             "underlying": "SPY", "action": "skip", "status": "skipped",
-            "skip_reason": "IV rank too low",
+            "skip_reason": "IV rank too low", "skip_code": "LOW_IVR",
         })
     for _ in range(2):
         journal.append({
             "underlying": "SPY", "action": "skip", "status": "skipped",
             "skip_reason": "earnings within 7 days",
+            "skip_code": "EARNINGS_TOO_CLOSE",
         })
+    # Entry with no skip_code (legacy) — should bucket as OTHER
     journal.append({
         "underlying": "SPY", "action": "hold", "status": "hold",
         "skip_reason": "delta within band",
@@ -96,22 +98,32 @@ def test_format_skip_history_top_reasons(journal):
     # Different symbol — should not appear
     journal.append({
         "underlying": "AAPL", "action": "skip", "status": "skipped",
-        "skip_reason": "guardrail",
+        "skip_reason": "guardrail", "skip_code": "OTHER",
     })
 
     out = journal.format_skip_history_for_prompt("SPY", days=30)
     assert "<skip_history>" in out
     assert "Recent skips on SPY (last 30 days): 6 total" in out
-    # Most-common first
-    spy_section = out.split("\n")
-    assert "  x3: IV rank too low" in spy_section
-    assert "  x2: earnings within 7 days" in spy_section
-    assert "  x1: delta within band" in spy_section
+    # Aggregated by skip_code — codes should appear in output
+    assert "LOW_IVR" in out
+    assert "EARNINGS_TOO_CLOSE" in out
+    assert "OTHER" in out
     assert "AAPL" not in out
-    assert "guardrail" not in out
 
-    # Order: x3 line should come before x2 line
-    assert out.index("x3:") < out.index("x2:")
+    # Most-frequent code (x3 LOW_IVR) should come before x2 EARNINGS_TOO_CLOSE
+    assert out.index("x3") < out.index("x2")
+
+
+def test_format_skip_history_legacy_entries_bucket_as_other(journal):
+    # Entries without skip_code field (pre-Item-1.2 journal entries)
+    for _ in range(2):
+        journal.append({
+            "underlying": "SPY", "action": "skip", "status": "skipped",
+            "skip_reason": "IV too low",
+        })
+    out = journal.format_skip_history_for_prompt("SPY", days=30)
+    assert "<skip_history>" in out
+    assert "OTHER" in out  # legacy entries bucket under OTHER
 
 
 def test_format_skip_history_empty(journal):
@@ -250,3 +262,80 @@ def test_format_stats_for_prompt_renders(journal):
     assert "Performance on SPY (last 30 days)" in out
     assert "Win rate:" in out
     assert "+$100" in out
+
+
+# ── Item 1.2: skip_code aggregation and rejection tracking ─────
+
+
+def test_get_recent_rejections_empty(journal):
+    assert journal.get_recent_rejections("SPY") == []
+
+
+def test_get_recent_rejections_filters_by_status_rejected(journal):
+    # Guardrail rejection — should be returned
+    journal.append({
+        "underlying": "SPY", "action": "skip", "status": "rejected",
+        "action_proposed": "sell_put", "rejection_reason": "Earnings in 5 days",
+        "skip_code": "EARNINGS_TOO_CLOSE",
+    })
+    # Claude-initiated skip — should NOT be returned
+    journal.append({
+        "underlying": "SPY", "action": "skip", "status": "skipped",
+        "skip_reason": "IV rank too low", "skip_code": "LOW_IVR",
+    })
+    # Different symbol — should NOT be returned
+    journal.append({
+        "underlying": "AAPL", "action": "skip", "status": "rejected",
+        "skip_code": "OTHER",
+    })
+
+    rejections = journal.get_recent_rejections("SPY")
+    assert len(rejections) == 1
+    assert rejections[0]["status"] == "rejected"
+    assert rejections[0]["skip_code"] == "EARNINGS_TOO_CLOSE"
+
+
+def test_format_rejections_for_prompt_empty(journal):
+    assert journal.format_rejections_for_prompt("SPY") == ""
+
+
+def test_format_rejections_for_prompt_renders(journal):
+    journal.append({
+        "underlying": "SPY", "action": "skip", "status": "rejected",
+        "action_proposed": "sell_put",
+        "rejection_reason": "Earnings in 5 days — must be > 21 days away",
+        "skip_code": "EARNINGS_TOO_CLOSE",
+    })
+    journal.append({
+        "underlying": "SPY", "action": "skip", "status": "rejected",
+        "action_proposed": "sell_call",
+        "rejection_reason": "Strike below cost basis",
+        "skip_code": "STRIKE_BELOW_COST_BASIS",
+    })
+
+    out = journal.format_rejections_for_prompt("SPY", days=30)
+    assert "<guardrail_rejections>" in out
+    assert "Recent rejections on SPY (last 30 days): 2 total" in out
+    assert "EARNINGS_TOO_CLOSE" in out
+    assert "sell_put" in out
+    assert "STRIKE_BELOW_COST_BASIS" in out
+
+
+def test_format_skip_history_excludes_rejected_entries(journal):
+    # Guardrail rejection — must NOT appear in skip_history
+    journal.append({
+        "underlying": "SPY", "action": "skip", "status": "rejected",
+        "skip_code": "EARNINGS_TOO_CLOSE",
+        "rejection_reason": "Earnings in 5 days",
+    })
+    # Claude skip — should appear
+    journal.append({
+        "underlying": "SPY", "action": "skip", "status": "skipped",
+        "skip_code": "LOW_IVR",
+        "skip_reason": "IV rank 22 below 30",
+    })
+
+    out = journal.format_skip_history_for_prompt("SPY", days=30)
+    # Only 1 skip entry (the Claude skip), not 2
+    assert "1 total" in out
+    assert "LOW_IVR" in out

@@ -4,6 +4,8 @@ import logging
 import re
 from datetime import date
 
+from strategies.skip_codes import SkipCode
+
 logger = logging.getLogger(__name__)
 
 # ── Shared-account capital guard ───────────────────────────────
@@ -888,6 +890,70 @@ class Guardrails:
         if not spread_id:
             return False, "Missing spread_id for calendar exit"
         return True, ""
+
+    # ── skip-code classification ─────────────────────────────
+
+    @staticmethod
+    def classify_rejection(rejection_reason: str) -> str:
+        """Map a free-text rejection reason to a canonical SkipCode.
+
+        Used by callers that write guardrail rejections to the journal so
+        the entry carries a machine-aggregatable skip_code alongside the
+        human-readable rejection_reason string.
+
+        Keyword matching is intentionally conservative: when no pattern
+        matches, SkipCode.OTHER is returned rather than guessing.
+        """
+        if not rejection_reason:
+            return SkipCode.OTHER
+        r = rejection_reason.lower()
+
+        # Earnings / events
+        if "earnings" in r:
+            return SkipCode.EARNINGS_TOO_CLOSE
+        if "ex-dividend" in r or "ex_dividend" in r:
+            return SkipCode.EX_DIVIDEND_IN_WINDOW
+
+        # Volatility / IV
+        if "iv rank" in r and any(w in r for w in ("minimum", "<", "< 50", "< 30")):
+            return SkipCode.LOW_IVR
+        if "iv environment" in r:
+            return SkipCode.IV_ENV_MISMATCH
+
+        # Market regime
+        if "regime must be" in r or ("regime" in r and "mismatch" in r):
+            return SkipCode.REGIME_MISMATCH
+
+        # Buying power / capital
+        if "buying power" in r or "committed" in r and "capital" in r:
+            return SkipCode.BUYING_POWER_INSUFFICIENT
+
+        # Position limits
+        if "already have an open" in r or (
+            "sector" in r and any(w in r for w in ("max", "positions"))
+        ):
+            return SkipCode.POSITION_LIMIT_REACHED
+
+        # DTE
+        if "dte" in r and "outside" in r:
+            return SkipCode.DTE_OUT_OF_RANGE
+
+        # Credit / debit limits
+        if (
+            ("net credit" in r or "total credit" in r)
+            and any(w in r for w in ("minimum", "<=", "<", "below"))
+        ):
+            return SkipCode.CREDIT_TOO_LOW
+        if "credit-to-width" in r and any(w in r for w in ("minimum", "<")):
+            return SkipCode.CREDIT_TOO_LOW
+        if "net debit" in r and any(w in r for w in ("maximum", ">=", "outside")):
+            return SkipCode.DEBIT_TOO_HIGH
+
+        # Circuit breaker (message generated in circuit_breaker.py, not here)
+        if "circuit breaker" in r:
+            return SkipCode.CIRCUIT_BREAKER_ACTIVE
+
+        return SkipCode.OTHER
 
     # ── helpers ──────────────────────────────────────────────
 
