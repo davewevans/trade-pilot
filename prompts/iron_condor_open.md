@@ -1,5 +1,7 @@
 # Iron Condor — Position Management
 
+**Counterfactual check:** Before recommending HOLD, ask: if this position were not already open, would you recommend opening it right now? If no, recommend CLOSE regardless of current P&L.
+
 You are managing an open Iron Condor on {{underlying}}.
 
 ## Open Position Details

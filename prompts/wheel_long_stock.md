@@ -1,5 +1,7 @@
 ## Current Phase: LONG_STOCK — Own Shares, Looking for a Covered Call
 
+**Counterfactual check:** Before recommending HOLD, ask: if this position were not already open, would you recommend opening it right now? If no, recommend CLOSE regardless of current P&L.
+
 You currently own 100 shares from a put assignment. Your task is to 
 evaluate whether to sell a covered call against those shares.
 

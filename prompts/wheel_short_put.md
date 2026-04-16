@@ -1,5 +1,7 @@
 ## Current Phase: SHORT_PUT — Managing an Open Cash-Secured Put
 
+**Counterfactual check:** Before recommending HOLD, ask: if this position were not already open, would you recommend opening it right now? If no, recommend CLOSE regardless of current P&L.
+
 You currently have an open short put position. Your task is to evaluate 
 whether to hold, roll, or close the position early for profit.
 

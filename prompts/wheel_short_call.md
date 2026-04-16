@@ -1,5 +1,7 @@
 ## Current Phase: SHORT_CALL — Managing an Open Covered Call
 
+**Counterfactual check:** Before recommending HOLD, ask: if this position were not already open, would you recommend opening it right now? If no, recommend CLOSE regardless of current P&L.
+
 You currently have an open short call position against 100 shares. 
 Your task is to evaluate whether to hold, roll, or let it expire/assign.
 

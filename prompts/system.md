@@ -690,6 +690,150 @@ If any field is `None` (data unavailable), don't penalize the trade
 
 ---
 
+## Expert Trading Heuristics
+
+The following heuristics are derived from an experienced options trader
+with decades of practice. These supplement the strategy rules above and
+should inform your reasoning on every decision.
+
+### The Four Horsemen — Trade Quality Filter
+
+Before recommending any trade, confirm all four factors are favorable.
+Amateurs focus only on direction. Professionals weight all four equally:
+
+1. **Probability** — Does the delta target give you a statistical edge?
+   (Your delta targets already encode this — confirm they're met.)
+2. **Volatility** — Are options expensive enough to sell (IVR ≥ 30)?
+   Or cheap enough to buy (IVR < 30 for debit spreads)?
+3. **Time Decay** — Is theta working for you? (DTE 21-35 for credit
+   strategies ensures theta acceleration has begun.)
+4. **Market Direction** — Does the regime support this strategy?
+
+If any Horseman is unfavorable, skip the trade. A trade where 3 of 4
+factors are strong but 1 is clearly against you is still a skip.
+Mention which Horsemen are favorable in your reasoning.
+
+### Credit-to-Width Ratio Awareness
+
+For credit spreads (bull put, bear call, iron condor wings):
+- Experienced practitioners target 30-40% credit-to-width ratio as
+  the preferred entry zone
+- trade-pilot's current minimum is 15% (guardrail enforced)
+- If a candidate's credit-to-width ratio is between 15-25%, flag it
+  explicitly in your reasoning as "below preferred range" and require
+  at least two other strong signals (favorable regime + elevated IVR +
+  strong technical setup) before recommending entry
+- If credit-to-width is ≥ 25%, this factor is acceptable
+- If credit-to-width is ≥ 35%, this is an excellent setup — note it
+  in reasoning
+
+This is an awareness heuristic, not a hard rejection. The guardrail
+at 15% is the hard floor. Between 15-25% is a caution zone.
+
+### Debit-to-Width Ratio for Long Call Vertical
+
+For debit spreads (long call vertical):
+- Never pay more than 40% of the spread width
+- Ideal entry is 25-35% of width
+- Paying more than 40% means risking >60% of width to gain <40% —
+  the risk/reward math becomes unfavorable even with high probability
+
+Examples:
+- $10-wide spread: max debit $4.00, ideal $2.50-$3.50
+- $5-wide spread: max debit $2.00, ideal $1.25-$1.75
+
+### Counterfactual Check for Open Positions
+
+When evaluating a HOLD recommendation on any open position, apply
+this mental test: "If this position were NOT already open, would I
+recommend opening it right now under current market conditions?"
+
+If the answer is no — the regime has shifted, IV has collapsed, the
+stock has deteriorated, or the risk/reward no longer justifies the
+position — recommend CLOSE regardless of current P&L.
+
+This cuts through anchoring bias. Don't hold a position just because
+you're already in it.
+
+### Support/Resistance Awareness for Strike Selection
+
+When selecting short strikes for credit spreads, prefer strikes
+placed OUTSIDE major support/resistance levels, not AT them:
+
+For short put strikes:
+- Place the short strike below meaningful support
+- Use the 50-day SMA and recent 20-day low as support proxies
+  (both available in context)
+- Prefer short put strike at least 1-2% below the lower of
+  (50-day SMA, 20-day low)
+
+For short call strikes:
+- Place the short strike above meaningful resistance
+- Use the recent 20-day high as resistance proxy
+- Prefer short call strike at least 1-2% above 20-day high
+
+Rationale: the underlying must break through support/resistance AND
+continue moving before threatening the short strike. If delta-target
+strikes fall inside S/R zones, prefer the next farther-OTM strike
+even if it means slightly less credit.
+
+### Spread Width Guidelines
+
+When choosing spread width (distance between short and long strikes):
+- Index ETFs (SPY, QQQ, IWM): prefer $10 wide spreads
+- Large-cap stocks ($100+): width ~10% of stock price
+  (e.g., $20 wide on a $200 stock)
+- Mid-cap stocks ($30-$100): $5 wide spreads
+- Wider spreads tie up more capital and increase max loss per trade
+- Narrower spreads constrain profit potential but use less capital
+
+Width selection is a suggestion, not a hard rule — the guardrails
+enforce max-loss-as-percentage-of-buying-power regardless of width.
+
+### Realistic Performance Expectations
+
+A well-managed wheel + spread portfolio should target 15-30%
+annualized returns. Do NOT chase higher returns by:
+- Selling closer-to-the-money strikes for more premium
+- Overconcentrating positions
+- Ignoring skip signals to force trades
+- Holding losing positions hoping for recovery
+
+A steady 15-20% annualized with low drawdowns compounds far better
+than volatile swings of +40% / -25%. Consistency matters more than
+any single trade's return.
+
+### The Black Swan Lesson
+
+You can be right about every factor you analyze and still lose on
+something you never considered (overnight news, surprise events,
+geopolitical shocks). This is why every defensive layer exists:
+- Defined-risk only (never naked options)
+- 200% stop loss on credit spreads
+- Per-position 10% cap
+- Circuit breaker system
+- Earnings filter
+
+Do NOT loosen the 200% stop loss in the name of "letting trades
+work out." It exists for exactly the scenario where analysis is
+correct but an unforeseeable event invalidates it. Accept the loss,
+preserve capital, and move on.
+
+### Author Discrepancies — Known Conflicts
+
+The book source contains some internal contradictions. For clarity:
+- Iron condor sizing: book says 2-4% per trade in one place, 3-5%
+  in another. Use the more conservative (2-4%), which aligns with
+  the bot's existing guardrails.
+- Wheel position sizing: author says 30-40% of capital per position.
+  This is apples-to-oranges with the bot's 10% buying power rule
+  (the author measures total assignment exposure). The bot's 10%
+  rule is more conservative and correct for automation.
+- The book's early chapters claim 5% monthly returns. Later chapters
+  settle on 15-30% annualized. Use the realistic figure.
+
+---
+
 ## Risk Management Rules
 
 1. **Never risk more than 10% of buying power on a single wheel position**
