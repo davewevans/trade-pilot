@@ -30,12 +30,16 @@ class LongCallVerticalStrategy:
     """State machine for the long call vertical (bull call debit spread)."""
 
     State = LongCallVerticalState
+    STRATEGY_TYPE = "long_call_vertical"
 
-    def __init__(self, broker, state_writer=None, spread_tracker=None, recorder=None):
+    def __init__(self, broker, state_writer=None, spread_tracker=None, recorder=None,
+                 liquidity_repo=None, backtest_stats_repo=None):
         self.broker = broker
         self.state_writer = state_writer
         self.spread_tracker = spread_tracker
         self.recorder = recorder
+        self._liquidity_repo = liquidity_repo
+        self._backtest_stats_repo = backtest_stats_repo
         self.cb_status_at_entry: str | None = None
         self.state = LongCallVerticalState.IDLE
         self.open_spread_id: str | None = None
@@ -162,7 +166,53 @@ class LongCallVerticalStrategy:
         elif iv_ov == "OVERVALUED":
             score *= 0.70  # Strong penalty — buying expensive options
 
-        return None, float(score)
+        # ── Liquidity multiplier ──────────────────────────────────────────────
+        symbol = context.get("symbol", "")
+        if self._liquidity_repo is not None and symbol:
+            try:
+                liq_mult, liq_tier, liq_conf = self._liquidity_repo.get_multiplier(
+                    symbol, self.STRATEGY_TYPE,
+                )
+            except Exception:
+                logger.warning(
+                    "Liquidity multiplier lookup failed for %s/%s",
+                    symbol, self.STRATEGY_TYPE, exc_info=True,
+                )
+                liq_mult, liq_tier, liq_conf = (1.0, "B", "none")
+        else:
+            liq_mult, liq_tier, liq_conf = (1.0, "B", "disabled")
+
+        if liq_mult == 0.0:
+            return "below_liquidity_floor", 0.0
+
+        # ── Win-rate multiplier ───────────────────────────────────────────────
+        if self._backtest_stats_repo is not None and symbol:
+            try:
+                wr_mult, wr_tier, wr_conf = self._backtest_stats_repo.get_winrate_multiplier(
+                    symbol, self.STRATEGY_TYPE,
+                )
+            except Exception:
+                logger.warning(
+                    "Win-rate multiplier lookup failed for %s/%s",
+                    symbol, self.STRATEGY_TYPE, exc_info=True,
+                )
+                wr_mult, wr_tier, wr_conf = (1.0, "neutral", "none")
+        else:
+            wr_mult, wr_tier, wr_conf = (1.0, "neutral", "disabled")
+
+        if wr_mult == 0.0:
+            return "below_winrate_floor", 0.0
+
+        combined_multiplier = liq_mult * wr_mult
+        final_score = score * combined_multiplier
+
+        research_meta = context.setdefault("_research", {})
+        research_meta["liquidity"] = {"multiplier": liq_mult, "tier": liq_tier, "confidence": liq_conf}
+        research_meta["winrate"] = {"multiplier": wr_mult, "tier": wr_tier, "confidence": wr_conf}
+        research_meta["combined_multiplier"] = combined_multiplier
+        research_meta["final_score"] = final_score
+
+        return None, final_score
 
     def _check_entry_conditions(self, context: dict) -> str | None:
         regime = context.get("confirmed_market_regime", "NEUTRAL")

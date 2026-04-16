@@ -135,14 +135,21 @@ def run() -> None:
         wheel_broker = broker
 
     _wheel_liq_repo = None
+    _bt_stats_repo = None
     if _conn is not None:
         try:
             from database.repositories import LiquidityRepository
             _wheel_liq_repo = LiquidityRepository(_conn)
         except Exception:
             logger.warning("Failed to init LiquidityRepository for wheel — proceeding without liquidity gating")
+        try:
+            from database.repositories import BacktestStatsRepository
+            _bt_stats_repo = BacktestStatsRepository(_conn)
+        except Exception:
+            logger.warning("Failed to init BacktestStatsRepository — proceeding without win-rate gating")
 
-    wheel_strategy = WheelStrategy(wheel_broker, liquidity_repo=_wheel_liq_repo)
+    wheel_strategy = WheelStrategy(wheel_broker, liquidity_repo=_wheel_liq_repo,
+                                   backtest_stats_repo=_bt_stats_repo)
 
     try:
         ic_broker = make_broker("iron_condor")
@@ -153,11 +160,23 @@ def run() -> None:
     # Bull put, bear call, long call vertical share the default account
     default_broker = broker
 
+    _spread_liq_repo = None
+    if _conn is not None:
+        try:
+            from database.repositories import LiquidityRepository as _LiqRepo
+            _spread_liq_repo = _LiqRepo(_conn)
+        except Exception:
+            logger.warning("Failed to init LiquidityRepository for spreads — proceeding without liquidity gating")
+
     spread_strategies = {
-        "iron_condor": IronCondorStrategy(broker=ic_broker, state_writer=sw, spread_tracker=tracker, recorder=recorder),
-        "bull_put_spread": BullPutSpreadStrategy(broker=default_broker, state_writer=sw, spread_tracker=tracker, recorder=recorder),
-        "bear_call_spread": BearCallSpreadStrategy(broker=default_broker, state_writer=sw, spread_tracker=tracker, recorder=recorder),
-        "long_call_vertical": LongCallVerticalStrategy(broker=default_broker, state_writer=sw, spread_tracker=tracker, recorder=recorder),
+        "iron_condor": IronCondorStrategy(broker=ic_broker, state_writer=sw, spread_tracker=tracker, recorder=recorder,
+                                          liquidity_repo=_spread_liq_repo, backtest_stats_repo=_bt_stats_repo),
+        "bull_put_spread": BullPutSpreadStrategy(broker=default_broker, state_writer=sw, spread_tracker=tracker, recorder=recorder,
+                                                  liquidity_repo=_spread_liq_repo, backtest_stats_repo=_bt_stats_repo),
+        "bear_call_spread": BearCallSpreadStrategy(broker=default_broker, state_writer=sw, spread_tracker=tracker, recorder=recorder,
+                                                    liquidity_repo=_spread_liq_repo, backtest_stats_repo=_bt_stats_repo),
+        "long_call_vertical": LongCallVerticalStrategy(broker=default_broker, state_writer=sw, spread_tracker=tracker, recorder=recorder,
+                                                        liquidity_repo=_spread_liq_repo, backtest_stats_repo=_bt_stats_repo),
     }
 
     # Paper Account 4 — Iron Butterfly (inactive until tested; only wired when active)
@@ -664,6 +683,7 @@ def run() -> None:
                         reasoning=decision.get("reasoning"),
                         confidence=decision.get("confidence"),
                         context=spread_ctx,
+                        research_metadata=(spread_ctx or {}).get("_research"),
                     )
 
                 # Journal SKIPs from spread strategies so Claude sees them

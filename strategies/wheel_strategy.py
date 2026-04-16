@@ -46,7 +46,7 @@ class WheelStrategy:
         WheelState.LONG_STOCK: "wheel_cc",
     }
 
-    def __init__(self, broker: BaseBroker, liquidity_repo=None):
+    def __init__(self, broker: BaseBroker, liquidity_repo=None, backtest_stats_repo=None):
         """Initialise the strategy with a broker and optional data client.
 
         Args:
@@ -54,9 +54,13 @@ class WheelStrategy:
             liquidity_repo: Optional LiquidityRepository. When provided,
                 CSP and CC entries are gated by the liquidity tier. Defaults
                 to None (no gating — existing behaviour preserved).
+            backtest_stats_repo: Optional BacktestStatsRepository. When provided,
+                CSP and CC entries are also gated by historical win-rate.
+                Defaults to None (no gating — existing behaviour preserved).
         """
         self.broker = broker
         self._liquidity_repo = liquidity_repo
+        self._backtest_stats_repo = backtest_stats_repo
         self.symbol: str | None = None
         self.state: WheelState = WheelState.IDLE
         self.open_position: dict | None = None
@@ -258,16 +262,49 @@ class WheelStrategy:
                 },
             }
 
-        # Attach metadata to context for downstream logging.
-        # Wheel doesn't rank symbols by a raw_score × multiplier the way
-        # spreads do — it evaluates each symbol independently. So the
-        # multiplier here is informational (and the Tier D hard floor above
-        # is the only scoring-driven behaviour change).
+        # Attach liquidity metadata to context for downstream logging.
+        liq_multiplier = multiplier
         context.setdefault("_research", {})["liquidity"] = {
-            "multiplier": multiplier,
+            "multiplier": liq_multiplier,
             "tier": tier,
             "confidence": confidence,
         }
+
+        # ── Win-rate multiplier ───────────────────────────────────────────────
+        if self._backtest_stats_repo is not None:
+            try:
+                wr_mult, wr_tier, wr_conf = self._backtest_stats_repo.get_winrate_multiplier(
+                    symbol, strategy_type,
+                )
+            except Exception:
+                logger.warning(
+                    "Win-rate multiplier lookup failed for %s/%s",
+                    symbol, strategy_type, exc_info=True,
+                )
+                wr_mult, wr_tier, wr_conf = (1.0, "neutral", "none")
+        else:
+            wr_mult, wr_tier, wr_conf = (1.0, "neutral", "disabled")
+
+        if wr_mult == 0.0:
+            return {
+                "action": "SKIP",
+                "reasoning": f"Win-rate below 30% floor for {strategy_type} — rejecting entry",
+                "skip_reason": "below_winrate_floor",
+                "_research": {
+                    "liquidity": {"multiplier": liq_multiplier, "tier": tier, "confidence": confidence},
+                    "winrate": {"multiplier": 0.0, "tier": wr_tier, "confidence": wr_conf},
+                    "combined_multiplier": 0.0,
+                },
+            }
+
+        combined_multiplier = liq_multiplier * wr_mult
+        context["_research"]["winrate"] = {
+            "multiplier": wr_mult,
+            "tier": wr_tier,
+            "confidence": wr_conf,
+        }
+        context["_research"]["combined_multiplier"] = combined_multiplier
+
         return None
 
     # ── context building ─────────────────────────────────────
