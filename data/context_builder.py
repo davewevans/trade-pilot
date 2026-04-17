@@ -652,9 +652,11 @@ class ContextBuilder:
                 round(total_credit / underlying_price, 6)
                 if underlying_price and underlying_price > 0 else 0
             )
+            _put_oi = put_leg.get("short_leg", {}).get("open_interest")
+            _call_oi = call_leg.get("short_leg", {}).get("open_interest")
             liquidity_ok = (
-                put_leg.get("short_leg", {}).get("open_interest", 0) >= 200
-                and call_leg.get("short_leg", {}).get("open_interest", 0) >= 200
+                _put_oi is not None and _put_oi >= 200
+                and _call_oi is not None and _call_oi >= 200
                 and put_leg.get("short_leg", {}).get("bid_ask_spread_pct", 100) < 15
                 and call_leg.get("short_leg", {}).get("bid_ask_spread_pct", 100) < 15
             )
@@ -788,9 +790,12 @@ class ContextBuilder:
                 if long_dte - short_dte < 30:
                     continue  # Expirations too close together
 
-                short_oi = short_data.get("open_interest") or 0
-                long_oi = long_data.get("open_interest") or 0
-                liquidity_ok = short_oi >= 200 and long_oi >= 100
+                short_oi = short_data.get("open_interest")
+                long_oi = long_data.get("open_interest")
+                liquidity_ok = (
+                    short_oi is not None and short_oi >= 200
+                    and long_oi is not None and long_oi >= 100
+                )
 
                 candidates.append({
                     "short_expiration": short_exp,
@@ -926,9 +931,13 @@ class ContextBuilder:
                     if short_mid > 0 else 999
                 )
 
-                short_oi = short_data.get("open_interest") or 0
-                long_oi = long_data.get("open_interest") or 0
-                liquidity_ok = short_oi >= 100 and long_oi >= 100 and spread_pct < 20
+                short_oi = short_data.get("open_interest")
+                long_oi = long_data.get("open_interest")
+                liquidity_ok = (
+                    short_oi is not None and short_oi >= 100
+                    and long_oi is not None and long_oi >= 100
+                    and spread_pct < 20
+                )
 
                 max_loss = round((wing_width * 100) - (net_credit * 100), 2)
                 max_gain = round(net_credit * 100, 2)
@@ -1067,8 +1076,8 @@ class ContextBuilder:
                 if net_debit <= 0:
                     continue
 
-                long_oi = long_data.get("open_interest") or 0
-                short_oi = short_data.get("open_interest") or 0
+                long_oi = long_data.get("open_interest")
+                short_oi = short_data.get("open_interest")
 
                 long_bid = long_data.get("bid", 0) or 0
                 long_ask = long_data.get("ask", 0) or 0
@@ -1076,7 +1085,11 @@ class ContextBuilder:
                     ((long_ask - long_bid) / long_mid * 100)
                     if long_mid > 0 else 999
                 )
-                liquidity_ok = long_oi >= 100 and short_oi >= 100 and long_spread_pct < 20
+                liquidity_ok = (
+                    long_oi is not None and long_oi >= 100
+                    and short_oi is not None and short_oi >= 100
+                    and long_spread_pct < 20
+                )
 
                 max_loss = round(net_debit * 100, 2)
                 max_gain = round((wing_width - net_debit) * 100, 2)
@@ -1144,7 +1157,7 @@ class ContextBuilder:
 
         Returns:
             Dict keyed by Alpaca OCC symbol with snapshot fields
-            (bid, ask, mid, delta, theta, vega, gamma, iv, open_interest, volume).
+            (bid, ask, mid, delta, theta, vega, gamma, iv, open_interest, last_trade_size).
         """
         if not hasattr(self, '_orats_client'):
             from data.orats_client import ORATSClient
@@ -1456,11 +1469,10 @@ class ContextBuilder:
                 delta = snap.get("delta")
                 if delta is None:
                     continue
-                oi = c.get("open_interest") or snap.get("open_interest") or 0
-                try:
-                    if int(oi) < 100:
-                        continue
-                except (TypeError, ValueError):
+                _c_oi = c.get("open_interest")
+                _s_oi = snap.get("open_interest")
+                oi = _c_oi if _c_oi is not None else _s_oi
+                if oi is not None and int(oi) < 100:
                     continue
                 try:
                     exp = datetime.strptime(

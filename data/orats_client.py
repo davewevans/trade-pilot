@@ -478,7 +478,7 @@ class ORATSClient:
                 "gamma": float | None,
                 "iv": float | None,      # mapped from smvVol
                 "open_interest": int | None,
-                "volume": None,          # ORATS /strikes does not return volume
+                "last_trade_size": None,  # ORATS /strikes does not return trade size
             }
 
         Never raises — returns an empty dict on failure.
@@ -515,7 +515,7 @@ class ORATSClient:
                 "gamma": row.get("gamma"),
                 "iv": row.get("smv_vol"),
                 "open_interest": row.get("open_interest"),
-                "volume": None,
+                "last_trade_size": None,
             }
 
         logger.info(
