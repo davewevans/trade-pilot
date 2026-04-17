@@ -58,22 +58,29 @@ def run() -> None:
     account = broker.get_account()
     # Aggregate equity across all trading accounts so the circuit breaker
     # sees the real portfolio risk (not just one account's equity).
-    from jobs.startup_snapshot import ACCOUNT_BROKER_MAP
-    total_equity = 0.0
-    aggregation_ok = True
-    for acct_name, strategy_key in ACCOUNT_BROKER_MAP.items():
+    cb_status = None
+    equity = CircuitBreaker.calculate_portfolio_equity(make_broker)
+    if equity is None:
+        logger.warning(
+            "Skipping circuit breaker update: portfolio equity aggregation failed — "
+            "one or more accounts unreachable. CB state preserved from last successful update."
+        )
         try:
-            acct_broker = make_broker(strategy_key)
-            acct = acct_broker.get_account()
-            total_equity += float(acct.get("portfolio_value", 0))
-        except Exception as e:
-            logger.warning("Failed to get equity for %s account: %s", acct_name, e)
-            aggregation_ok = False
-            break
-    if not aggregation_ok or total_equity <= 0:
-        total_equity = float(account.get("portfolio_value", 0))
-    equity = total_equity
-    cb_status = cb.update(equity)
+            from notifications import notify
+            notify(
+                "warning",
+                "Equity aggregation failed",
+                "Circuit breaker not updated this cycle — one or more broker accounts unreachable.",
+                tags=["circuit_breaker", "data_source"],
+            )
+        except Exception:
+            pass
+    else:
+        cb_status = cb.update(equity)
+
+    # If aggregation failed, use the last-known status from the CB's internal state.
+    if cb_status is None:
+        cb_status = cb._status
 
     try:
         sw.write_circuit_breaker_status(asdict(cb_status))

@@ -45,8 +45,29 @@ def run() -> None:
         return
 
     account = broker.get_account()
-    equity = float(account.get("portfolio_value", 0))
-    cb_status = cb.update(equity)
+    cb_status = None
+    equity = CircuitBreaker.calculate_portfolio_equity(make_broker)
+    if equity is None:
+        logger.warning(
+            "Skipping circuit breaker update in position_check: portfolio equity aggregation failed."
+        )
+        try:
+            from notifications import notify
+            notify(
+                "warning",
+                "Equity aggregation failed",
+                "Circuit breaker not updated this cycle — one or more broker accounts unreachable.",
+                tags=["circuit_breaker", "data_source"],
+            )
+        except Exception:
+            pass
+    else:
+        cb_status = cb.update(equity)
+
+    # If aggregation failed, use the last-known status from the CB's internal state.
+    if cb_status is None:
+        cb_status = cb._status
+
     logger.info(
         "Circuit breaker: %s | Daily P&L: %.2f%% | Drawdown: %.2f%%",
         cb_status.status, cb_status.daily_pnl_pct, cb_status.drawdown_pct,

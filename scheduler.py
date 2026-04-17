@@ -51,14 +51,27 @@ def safe_run(job_fn, job_name: str) -> None:
 
     Logs start/end with elapsed time.  On exception the full
     traceback is logged but the error is **not** re-raised so the
-    scheduler loop keeps running.
+    scheduler loop keeps running.  A "critical" notification is fired
+    on job crash so the operator is alerted immediately.
     """
     logger.info("=== STARTING: %s ===", job_name)
     t0 = time.monotonic()
     try:
         job_fn()
     except Exception:
+        import traceback
+        tb = traceback.format_exc()
         logger.exception("=== FAILED: %s ===", job_name)
+        try:
+            from notifications import notify
+            notify(
+                "critical",
+                f"Job crashed: {job_name}",
+                tb[:500],
+                tags=["crash"],
+            )
+        except Exception:
+            pass  # notification failure must not cascade
     else:
         elapsed = time.monotonic() - t0
         logger.info("=== COMPLETED: %s in %.1fs ===", job_name, elapsed)

@@ -310,6 +310,33 @@ def validate_startup() -> None:
     except Exception as e:
         logger.warning("Startup snapshot failed (non-fatal): %s", e)
 
+    # Reconcile pending order state across all accounts (spread tracker +
+    # SQLite trades) so the bot starts with accurate position state.
+    reconciler_summary: dict = {}
+    try:
+        from jobs.startup_reconciler import run as run_startup_reconciler
+        reconciler_summary = run_startup_reconciler()
+        logger.info("Startup reconciler: %s", reconciler_summary)
+    except Exception:
+        logger.exception("Startup reconciler failed — continuing without reconciliation")
+
+    # Liveness notification — fire after startup reconciler so we can
+    # include the reconciler summary in the message.
+    try:
+        from config import settings as _settings
+        from notifications import notify
+        notify(
+            "critical",
+            "Bot started",
+            (
+                f"trade-pilot started. Reconciler: {reconciler_summary}. "
+                f"Mode: {'DRY RUN' if _settings.DRY_RUN else 'LIVE'}"
+            ),
+            tags=["startup"],
+        )
+    except Exception:
+        pass  # notification failure must not crash startup
+
 
 # ── main ────────────────────────────────────────────────────
 

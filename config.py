@@ -151,6 +151,17 @@ class Settings:
             os.getenv("RESEARCH_REMOVE_MIN_WEEKS_OBSERVED", "12")
         )
 
+        # ── Notifications ──────────────────────────────────────
+        # ntfy.sh topic name. When unset, ntfy notifications are silently dropped.
+        # Set to any unique string (e.g. "trade-pilot-abc123") to enable push alerts.
+        self.NTFY_TOPIC: str = os.getenv("NTFY_TOPIC", "")
+        # ntfy server URL. Defaults to the public ntfy.sh server.
+        # Override for self-hosted deployments (e.g. "https://ntfy.example.com").
+        self.NTFY_SERVER: str = os.getenv("NTFY_SERVER", "https://ntfy.sh")
+        # Controls severity of fill notifications.
+        # "true" (default) → critical (immediate push); "false" → info (digest only).
+        self.ALERT_FILLS: bool = os.getenv("ALERT_FILLS", "true").lower() == "true"
+
         # Circuit breaker thresholds (percentages)
         self.DAILY_LOSS_HALT_PCT: float = float(os.getenv("DAILY_LOSS_HALT_PCT", "3.0"))
         self.DAILY_LOSS_REDUCE_PCT: float = float(os.getenv("DAILY_LOSS_REDUCE_PCT", "1.5"))

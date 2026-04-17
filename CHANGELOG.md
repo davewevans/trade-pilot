@@ -8,6 +8,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Prompt 3-alt — Notification layer** (`notifications/`) — Severity-routed push notification
+  system with ntfy primary backend and JSONL digest accumulator. `notify(severity, title, message)`
+  routes "critical" to ntfy + digest, "warning"/"info" to digest only. Non-blocking: all exceptions
+  are swallowed so a failed notification never breaks the calling code. `NTFY_TOPIC`, `NTFY_SERVER`,
+  and `ALERT_FILLS` env vars added to `config.py` and `.env.example`.
+- **Prompt 3-alt — Circuit-breaker state notifications** — `CircuitBreaker.update()` fires
+  "critical" on RED transition and "warning" on YELLOW transition. `_write_halt_lock()` fires
+  "critical" when the HALTED.lock file is written. Notifications use `_prev_status_str` guard
+  so repeated calls at the same state do not spam.
+- **Prompt 3-alt — Portfolio equity aggregation** (`CircuitBreaker.calculate_portfolio_equity`) —
+  Static method that sums `portfolio_value` across all three trading accounts (wheel, iron_condor,
+  spreads). Returns `None` if any account call fails so the CB never receives partial equity.
+  `PORTFOLIO_ACCOUNTS` constant added to `strategies/circuit_breaker.py`.
+- **Prompt 3-alt — Startup order reconciler** (`jobs/startup_reconciler.py`) — Reconciles
+  PENDING_* spread tracker state and SQLite pending trades against live Alpaca order status at
+  boot. HALTED.lock does not gate this job. Returns a summary dict. No order-creation calls.
+- **Prompt 3-alt — Job crash notifications** — `scheduler.safe_run()` now fires a "critical"
+  ntfy notification with a 500-char traceback excerpt on any unhandled job exception.
+- **Prompt 3-alt — ORATS consecutive failure alerting** — Module-level
+  `_consecutive_failures` counter in `data/orats_client.py` fires a "warning" notification after
+  3 consecutive failures on any ORATS endpoint. Resets to 0 on success.
+
+### Changed
+- **Prompt 3-alt — Equity aggregation in market_open and position_check** — Both jobs now call
+  `CircuitBreaker.calculate_portfolio_equity(make_broker)` instead of the previous per-account
+  loop with fallback. If aggregation fails, CB state is preserved from the last successful update
+  and a "warning" notification is fired.
+- **Prompt 3-alt — Startup reconciler wired to main.py** — `validate_startup()` now calls
+  `jobs.startup_reconciler.run()` after the snapshot job; summary is logged and a "critical"
+  liveness notification fires on every bot start.
+
+### Fixed
+
+
 - **R4 UI — Skip-reason-by-gate dashboard** — `DecisionRepository.get_skip_breakdown()` aggregates
   SKIP decisions by gate and reason code for a configurable time window. New `GET /api/decisions/skip-breakdown`
   endpoint. `SkipReasons.tsx` rewritten: account/window filters, horizontal Recharts BarChart clickable by gate,
