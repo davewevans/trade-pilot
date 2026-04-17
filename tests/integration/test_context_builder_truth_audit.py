@@ -276,6 +276,33 @@ def mock_context(tmp_path):
         "volatility.term_structure_slope",
         "DataSources.tsx: term structure slope from ORATS /summaries",
     ),
+    pytest.param(
+        "backtest_stats",
+        "HowBacktestingWorks.tsx line 597: 'injects this data as the backtest_stats field in Claude's context'",
+        marks=pytest.mark.xfail(
+            strict=False,
+            reason="TODO: context_builder doesn't populate backtest_stats; "
+                   "either wire BacktestStatsRepository into ContextBuilder or remove the claim from HowBacktestingWorks.tsx"
+        ),
+    ),
+    pytest.param(
+        "research.liquidity",
+        "ResearchGuide.tsx: liquidity scoring described as part of Claude's research context",
+        marks=pytest.mark.xfail(
+            strict=False,
+            reason="TODO: context_builder doesn't populate a 'research' key with liquidity data; "
+                   "either wire LiquidityRepository into ContextBuilder or remove the claim from ResearchGuide.tsx"
+        ),
+    ),
+    pytest.param(
+        "research.winrate",
+        "ResearchGuide.tsx: win-rate data described as part of Claude's research context",
+        marks=pytest.mark.xfail(
+            strict=False,
+            reason="TODO: context_builder doesn't populate a 'research' key with win-rate data; "
+                   "either wire BacktestStatsRepository into ContextBuilder or remove the claim from ResearchGuide.tsx"
+        ),
+    ),
 ])
 def test_advertised_context_field_populated(field_path, dashboard_source, mock_context):
     """Each field that the dashboard advertises as live must be present in the context."""
