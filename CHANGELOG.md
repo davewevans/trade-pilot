@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **R8 — EV-based win-rate gate** — `_winrate_to_multiplier` and `_winrate_to_tier_label` now
+  accept `avg_pnl` as a second parameter. Win rate < 30% with positive average P&L is downgraded
+  to `(0.7, 'poor')` instead of hard-rejected `(0.0, 'reject')`, allowing profitable low-win-rate
+  strategies (e.g. high-premium outliers) to remain on the watchlist.
+- **R4 — Skip-reason-by-gate enum** (`strategies/skip_reasons.py`) — `SkipGate` and `SkipReason`
+  enums with a `REASON_TO_GATE` mapping. Two new columns (`skip_gate`, `skip_reason_code`) added
+  to the `decisions` table. `TradeRecorder.record_decision` and `DecisionRepository.insert` accept
+  the new fields. Key skip sites in `jobs/market_open.py` (liquidity floor, guardrail rejection,
+  circuit breaker, Claude skip, no-candidates) now populate these columns.
+- **R1 — Live-outcome feedback into recommender** — `TradeRepository` gains
+  `get_closed_trades_for_symbol` and `get_closed_trades_in_window` methods. A module-level
+  `trade_pnl` helper is defined in `database/repositories/trades.py`. `WatchlistRecommender`
+  accepts an optional `trade_repo` and applies a live-performance penalty (−10/−15/−25 points)
+  to incumbent symbols with poor recent live win rates, providing a feedback loop from live
+  trading outcomes back into watchlist maintenance.
+- **R2 — Recommendation accuracy tracking** — `recommendation_outcomes` table added to the schema
+  (PK: `recommendation_id × outcome_type × window_days`). `OutcomeRepository` provides insert/
+  exists/get_all. `OutcomeComputer` implements the 4-cell accuracy scorecard: accepted-add and
+  rejected-remove use ground-truth live trades; rejected-add and accepted-remove use a proxy
+  backtest over the same 90-day window. Phase 4 added to `jobs/weekly_research.py` to run the
+  computation weekly. New API endpoint `GET /api/research/recommendations/outcomes` exposes
+  all outcome rows.
+
 ## [1.4.0] - 2026-04-16
 
 ### Added

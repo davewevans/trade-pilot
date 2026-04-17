@@ -54,11 +54,13 @@ class WatchlistRecommender:
         universe,
         candidate_universe,
         settings_obj=None,
+        trade_repo=None,
     ):
         self._liq_repo = liquidity_repo
         self._bt_repo = backtest_stats_repo
         self._universe = universe
         self._candidate_universe = candidate_universe
+        self._trade_repo = trade_repo
 
         if settings_obj is None:
             from config import settings
@@ -67,6 +69,72 @@ class WatchlistRecommender:
             self._settings = settings_obj
 
     # ── Internal helpers ──────────────────────────────────────────────────────
+
+    def _get_live_performance_penalty(
+        self,
+        symbol: str,
+        strategy_type: str,
+    ) -> tuple[float, dict]:
+        """Compute a live-performance penalty for an incumbent.
+
+        Returns (penalty_points, sub_scores_dict).
+        penalty_points is 0 or negative.
+        sub_scores_dict contains: live_trade_count, live_win_rate,
+        live_avg_pnl_per_trade, live_penalty_applied.
+        """
+        from datetime import date, timedelta
+        from database.repositories.trades import trade_pnl
+
+        LOOKBACK_DAYS = 90
+        MIN_SAMPLE = 10
+
+        sub = {
+            "live_trade_count": 0,
+            "live_win_rate": None,
+            "live_avg_pnl_per_trade": None,
+            "live_penalty_applied": 0.0,
+        }
+
+        if self._trade_repo is None:
+            return 0.0, sub
+
+        since = (date.today() - timedelta(days=LOOKBACK_DAYS)).isoformat()
+        try:
+            trades = self._trade_repo.get_closed_trades_for_symbol(
+                symbol, strategy_type, since
+            )
+        except Exception:
+            logger.warning(
+                "get_closed_trades_for_symbol failed for %s/%s", symbol, strategy_type
+            )
+            return 0.0, sub
+
+        pnl_list = [trade_pnl(t) for t in trades]
+        pnl_list = [p for p in pnl_list if p is not None]
+
+        sub["live_trade_count"] = len(pnl_list)
+
+        if len(pnl_list) < MIN_SAMPLE:
+            return 0.0, sub
+
+        wins = sum(1 for p in pnl_list if p > 0)
+        win_rate = wins / len(pnl_list)
+        avg_pnl = sum(pnl_list) / len(pnl_list)
+
+        sub["live_win_rate"] = round(win_rate, 4)
+        sub["live_avg_pnl_per_trade"] = round(avg_pnl, 2)
+
+        if win_rate < 0.30:
+            penalty = -25.0
+        elif win_rate < 0.40:
+            penalty = -15.0
+        elif avg_pnl < 0:
+            penalty = -10.0
+        else:
+            penalty = 0.0
+
+        sub["live_penalty_applied"] = penalty
+        return penalty, sub
 
     def _get_liq_score(self, symbol: str, strategy_type: str) -> Optional[dict]:
         """Return the liquidity score row, or None."""
@@ -102,6 +170,7 @@ class WatchlistRecommender:
         symbol: str,
         strategy_type: str,
         all_watchlist_members: set[str],
+        is_incumbent: bool = False,
     ) -> tuple[float, dict, str]:
         """Score a single (symbol, strategy_type) pair.
 
@@ -135,6 +204,12 @@ class WatchlistRecommender:
 
         composite = round(liq_score * 0.6 + winrate_bonus + novelty, 3)
 
+        if is_incumbent:
+            penalty, live_sub = self._get_live_performance_penalty(symbol, strategy_type)
+            composite = round(composite + penalty, 3)
+        else:
+            live_sub = {}
+
         sub_scores = {
             "liq_score": liq_score,
             "liq_tier": liq_tier,
@@ -145,6 +220,8 @@ class WatchlistRecommender:
             "winrate_bonus": winrate_bonus,
             "novelty_bonus": novelty,
         }
+        if live_sub:
+            sub_scores.update(live_sub)
 
         # Determine data confidence
         conf_rank = {"none": 0, "low": 1, "high": 2}
@@ -265,7 +342,7 @@ class WatchlistRecommender:
             scores = []
             combined_sub: dict[str, Any] = {}
             for strat in strategy_types:
-                score, sub, _ = self._score_candidate(sym, strat, all_members)
+                score, sub, _ = self._score_candidate(sym, strat, all_members, is_incumbent=True)
                 scores.append(score)
                 # Merge sub_scores (last strategy wins for shared keys; good enough)
                 combined_sub.update(sub)

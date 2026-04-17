@@ -302,6 +302,7 @@ def run() -> None:
                     "iv_rank": context.get("iv_rank"),
                 })
                 if recorder is not None:
+                    from strategies.skip_reasons import SkipGate, SkipReason
                     recorder.record_decision(
                         strategy_type="wheel",
                         underlying=symbol,
@@ -310,6 +311,8 @@ def run() -> None:
                         reasoning=_liq_skip.get("reasoning"),
                         context=context,
                         research_metadata=_liq_skip.get("_research"),
+                        skip_gate=SkipGate.LIQUIDITY_FLOOR,
+                        skip_reason_code=SkipReason.LIQUIDITY_TIER_D,
                     )
                 report_lines.append(
                     f"**{symbol}** -- SKIPPED (liquidity floor: {_liq_skip.get('skip_reason')})"
@@ -355,6 +358,19 @@ def run() -> None:
                     "vix": (context.get("macro") or {}).get("vix"),
                     "market_regime": context.get("confirmed_market_regime"),
                 })
+                if recorder is not None:
+                    from strategies.skip_reasons import SkipGate, SkipReason
+                    recorder.record_decision(
+                        strategy_type="wheel", underlying=symbol,
+                        action="SKIP",
+                        wheel_state=state.value,
+                        reasoning=decision.get("reasoning"),
+                        confidence=decision.get("confidence"),
+                        context=context,
+                        research_metadata=context.get("_research"),
+                        skip_gate=SkipGate.CLAUDE_SKIP,
+                        skip_reason_code=SkipReason.CLAUDE_SKIP,
+                    )
                 report_lines.append(
                     f"**{symbol}** -- {decision.get('action').upper()} "
                     f"(Claude: {(decision.get('skip_reason') or decision.get('reasoning', ''))[:60]})"
@@ -375,6 +391,7 @@ def run() -> None:
                 except Exception as e:
                     logger.warning("Failed to write decision snapshot: %s", e)
                 if recorder is not None:
+                    from strategies.skip_reasons import SkipGate, SkipReason
                     recorder.record_decision(
                         strategy_type="wheel", underlying=symbol,
                         action="SKIP",
@@ -383,6 +400,8 @@ def run() -> None:
                         confidence=decision.get("confidence"),
                         context=context,
                         research_metadata=context.get("_research"),
+                        skip_gate=SkipGate.GUARDRAIL,
+                        skip_reason_code=SkipReason.GUARDRAIL_OTHER,
                     )
                 from strategies.guardrails import Guardrails as _G
                 journal.append({
@@ -462,6 +481,23 @@ def run() -> None:
                         "strategy_type": "wheel_csp" if state.value == "IDLE" else "wheel_cc",
                         "confidence": decision.get("confidence"),
                     })
+                    if recorder is not None:
+                        from strategies.skip_reasons import SkipGate, SkipReason
+                        _cb_reason_code = (
+                            SkipReason.CIRCUIT_BREAKER_RED
+                            if block_all_new_entries
+                            else SkipReason.CIRCUIT_BREAKER_YELLOW
+                        )
+                        recorder.record_decision(
+                            strategy_type="wheel", underlying=symbol,
+                            action="SKIP",
+                            wheel_state=state.value,
+                            reasoning=cb_skip_reason,
+                            confidence=decision.get("confidence"),
+                            context=context,
+                            skip_gate=SkipGate.CIRCUIT_BREAKER,
+                            skip_reason_code=_cb_reason_code,
+                        )
                     report_lines.append(f"**{symbol}** -- SKIPPED ({cb_skip_reason})")
                     continue
 
@@ -685,6 +721,17 @@ def run() -> None:
                 )
 
                 if recorder is not None:
+                    _spread_skip_gate = None
+                    _spread_skip_reason_code = None
+                    if action == "SKIP":
+                        from strategies.skip_reasons import SkipGate, SkipReason
+                        _raw_skip = decision.get("skip_reason", "")
+                        if "no_candidates" in (_raw_skip or ""):
+                            _spread_skip_gate = SkipGate.NO_CANDIDATE
+                            _spread_skip_reason_code = SkipReason.NO_CANDIDATES_FOUND
+                        else:
+                            _spread_skip_gate = SkipGate.CLAUDE_SKIP
+                            _spread_skip_reason_code = SkipReason.CLAUDE_SKIP
                     recorder.record_decision(
                         strategy_type=strategy_name,
                         underlying=spread_underlying,
@@ -693,6 +740,8 @@ def run() -> None:
                         confidence=decision.get("confidence"),
                         context=spread_ctx,
                         research_metadata=(spread_ctx or {}).get("_research"),
+                        skip_gate=_spread_skip_gate,
+                        skip_reason_code=_spread_skip_reason_code,
                     )
 
                 # Journal SKIPs from spread strategies so Claude sees them

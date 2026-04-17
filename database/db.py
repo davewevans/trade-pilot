@@ -263,6 +263,22 @@ _SCHEMA_STATEMENTS: tuple[str, ...] = (
     "CREATE INDEX IF NOT EXISTS idx_wl_rec_generated ON watchlist_recommendations(generated_at DESC)",
     "CREATE INDEX IF NOT EXISTS idx_wl_rec_action ON watchlist_recommendations(watchlist_name, action)",
     "CREATE INDEX IF NOT EXISTS idx_wl_rec_pending ON watchlist_recommendations(operator_decision) WHERE operator_decision IS NULL",
+    # ── recommendation_outcomes ───────────────────────────────────────
+    """
+    CREATE TABLE IF NOT EXISTS recommendation_outcomes (
+        recommendation_id INTEGER NOT NULL REFERENCES watchlist_recommendations(recommendation_id),
+        outcome_type TEXT NOT NULL,
+        window_days INTEGER NOT NULL,
+        window_end_date TEXT NOT NULL,
+        trade_count INTEGER,
+        pnl_total REAL,
+        pnl_per_trade REAL,
+        win_rate REAL,
+        proxy_params_json TEXT,
+        computed_at TEXT NOT NULL,
+        PRIMARY KEY (recommendation_id, outcome_type, window_days)
+    )
+    """,
 )
 
 
@@ -279,6 +295,12 @@ _MIGRATIONS: tuple[str, ...] = (
     "ALTER TABLE trades ADD COLUMN outcome TEXT",
     "ALTER TABLE trades ADD COLUMN cb_status_at_entry TEXT",
     "ALTER TABLE decisions ADD COLUMN research_metadata_json TEXT",
+    "ALTER TABLE decisions ADD COLUMN skip_gate TEXT",
+    "ALTER TABLE decisions ADD COLUMN skip_reason_code TEXT",
+    """UPDATE watchlist_recommendations
+   SET operator_decision = 'expired'
+   WHERE operator_decision IS NULL
+   AND generated_at < datetime('now', '-14 days')""",
 )
 
 

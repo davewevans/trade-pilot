@@ -276,13 +276,14 @@ class BacktestStatsRepository:
           - disabled → (1.0, 'neutral', 'disabled')
           - no row    → (1.0, 'neutral', 'none')
           - low/none confidence → (1.0, tier_label, confidence)
-          - high confidence:
-              win_rate < 0.30  → (0.0,  'reject',  'high')  hard floor
-              win_rate ≥ 0.70  → (1.3,  'strong',  'high')
-              win_rate ≥ 0.60  → (1.15, 'good',    'high')
-              win_rate ≥ 0.50  → (1.0,  'neutral', 'high')
-              win_rate ≥ 0.40  → (0.85, 'weak',    'high')
-              else             → (0.7,  'poor',    'high')
+          - high confidence (EV-gated):
+              win_rate < 0.30 AND avg_pnl < 0  → (0.0,  'reject',  'high')  hard floor
+              win_rate < 0.30 AND avg_pnl >= 0 → (0.7,  'poor',    'high')  downgraded, not rejected
+              win_rate ≥ 0.70                  → (1.3,  'strong',  'high')
+              win_rate ≥ 0.60                  → (1.15, 'good',    'high')
+              win_rate ≥ 0.50                  → (1.0,  'neutral', 'high')
+              win_rate ≥ 0.40                  → (0.85, 'weak',    'high')
+              else (0.30 ≤ wr < 0.40)          → (0.7,  'poor',    'high')
 
         Return value is bounded: never < 0.7 unless exactly 0.0, never > 1.3.
         """
@@ -297,20 +298,21 @@ class BacktestStatsRepository:
 
         confidence = stat["confidence"]
         win_rate = stat["win_rate"]  # stored as 0.0–1.0
+        avg_pnl = float(stat.get("avg_pnl_per_trade") or 0.0)
 
         if confidence in ("low", "none"):
-            tier_label = _winrate_to_tier_label(win_rate)
+            tier_label = _winrate_to_tier_label(win_rate, avg_pnl)
             return (1.0, tier_label, confidence)
 
-        # High confidence — apply multiplier
-        tier_label = _winrate_to_tier_label(win_rate)
-        multiplier = _winrate_to_multiplier(win_rate)
+        # High confidence — apply EV-gated multiplier
+        tier_label = _winrate_to_tier_label(win_rate, avg_pnl)
+        multiplier = _winrate_to_multiplier(win_rate, avg_pnl)
         return (multiplier, tier_label, confidence)
 
 
-def _winrate_to_tier_label(win_rate: float) -> str:
+def _winrate_to_tier_label(win_rate: float, avg_pnl: float = 0.0) -> str:
     if win_rate < 0.30:
-        return "reject"
+        return "reject" if avg_pnl < 0 else "poor"
     if win_rate >= 0.70:
         return "strong"
     if win_rate >= 0.60:
@@ -322,9 +324,9 @@ def _winrate_to_tier_label(win_rate: float) -> str:
     return "poor"
 
 
-def _winrate_to_multiplier(win_rate: float) -> float:
+def _winrate_to_multiplier(win_rate: float, avg_pnl: float = 0.0) -> float:
     if win_rate < 0.30:
-        return 0.0
+        return 0.0 if avg_pnl < 0 else 0.7
     if win_rate >= 0.70:
         return 1.3
     if win_rate >= 0.60:

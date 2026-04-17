@@ -2130,6 +2130,22 @@ async def research_recommendations_apply(request: Request):
         conn.close()
 
 
+@app.get("/api/research/recommendations/outcomes")
+def research_recommendation_outcomes():
+    """Return all recommendation outcome rows."""
+    conn = _open_db()
+    if conn is None:
+        return JSONResponse(status_code=503, content={"error": "database unavailable"})
+    try:
+        from database.repositories.outcome_repository import OutcomeRepository
+        repo = OutcomeRepository(conn)
+        rows = repo.get_all()
+        return {"outcomes": rows, "count": len(rows)}
+    except Exception:
+        logger.exception("research/recommendations/outcomes query failed")
+        return JSONResponse(status_code=500, content={"error": "query failed"})
+
+
 # ── Token usage endpoints ────────────────────────────────────────────────────
 
 

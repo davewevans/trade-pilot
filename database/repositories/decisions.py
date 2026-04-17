@@ -47,8 +47,9 @@ class DecisionRepository:
             INSERT INTO decisions (
                 timestamp, strategy_type, underlying, cycle_id, wheel_state,
                 action, reasoning, confidence, alpaca_order_id,
-                prompt_version, context_json, research_metadata_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                prompt_version, context_json, research_metadata_json,
+                skip_gate, skip_reason_code
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 decision["timestamp"],
@@ -63,6 +64,8 @@ class DecisionRepository:
                 decision.get("prompt_version"),
                 ctx_json,
                 research_json,
+                decision.get("skip_gate"),
+                decision.get("skip_reason_code"),
             ),
         )
         self._conn.commit()

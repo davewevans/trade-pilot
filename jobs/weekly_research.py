@@ -133,6 +133,41 @@ def run() -> None:
         logger.exception("Recommendation generation failed — continuing")
         rec_summary = {"error": True}
 
+    # ── Phase 4: compute recommendation outcomes ──────────────────────────
+    logger.info("Phase 4: computing recommendation outcomes")
+    outcome_summary: dict = {}
+    try:
+        from research.recommendations.outcomes import OutcomeComputer
+        from database.repositories import (
+            TradeRepository,
+            RecommendationRepository,
+        )
+        from database.repositories.outcome_repository import OutcomeRepository
+        from datetime import date as _date
+
+        trade_repo_p4 = TradeRepository(db.get_connection())
+        rec_repo_p4 = RecommendationRepository(db.get_connection())
+        outcome_repo_p4 = OutcomeRepository(db.get_connection())
+
+        # BacktestEngine may not be available in all environments
+        try:
+            from backtesting.engine import BacktestEngine as _BE
+            bt_engine_p4 = _BE()
+        except Exception:
+            bt_engine_p4 = None
+
+        computer = OutcomeComputer(
+            trade_repo=trade_repo_p4,
+            backtest_engine=bt_engine_p4,
+            outcome_repo=outcome_repo_p4,
+            rec_repo=rec_repo_p4,
+        )
+        outcome_summary = computer.compute_pending_outcomes(as_of_date=_date.today())
+        logger.info("Outcome computation complete: %s", outcome_summary)
+    except Exception:
+        logger.exception("Phase 4 outcome computation failed — continuing")
+        outcome_summary = {"error": True}
+
     # ── Persist run summary ───────────────────────────────────────────────
     summary = {
         "run_at": datetime.now(timezone.utc).isoformat(),
@@ -140,6 +175,7 @@ def run() -> None:
         "rescore_stats": rescore_stats,
         "sweep_stats": sweep_stats,
         "rec_summary": rec_summary,
+        "outcome_summary": outcome_summary,
     }
 
     summary_path: Path = settings.DATA_DIR / "research_last_run.json"
