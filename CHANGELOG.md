@@ -7,6 +7,87 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-04-17
+
+### Added
+- **Prompt 3-alt — Notification layer** (`notifications/`) — Severity-routed push notification
+  system with ntfy primary backend and JSONL digest accumulator. `notify(severity, title, message)`
+  routes "critical" to ntfy + digest, "warning"/"info" to digest only. Non-blocking: all exceptions
+  are swallowed so a failed notification never breaks the calling code. `NTFY_TOPIC`, `NTFY_SERVER`,
+  and `ALERT_FILLS` env vars added to `config.py` and `.env.example`.
+- **Prompt 3-alt — Circuit-breaker state notifications** — `CircuitBreaker.update()` fires
+  "critical" on RED transition and "warning" on YELLOW transition. `_write_halt_lock()` fires
+  "critical" when the HALTED.lock file is written. Notifications use `_prev_status_str` guard
+  so repeated calls at the same state do not spam.
+- **Prompt 3-alt — Portfolio equity aggregation** (`CircuitBreaker.calculate_portfolio_equity`) —
+  Static method that sums `portfolio_value` across all three trading accounts (wheel, iron_condor,
+  spreads). Returns `None` if any account call fails so the CB never receives partial equity.
+  `PORTFOLIO_ACCOUNTS` constant added to `strategies/circuit_breaker.py`.
+- **Prompt 3-alt — Startup order reconciler** (`jobs/startup_reconciler.py`) — Reconciles
+  PENDING_* spread tracker state and SQLite pending trades against live Alpaca order status at
+  boot. HALTED.lock does not gate this job. Returns a summary dict. No order-creation calls.
+- **Prompt 3-alt — Job crash notifications** — `scheduler.safe_run()` now fires a "critical"
+  ntfy notification with a 500-char traceback excerpt on any unhandled job exception.
+- **Prompt 3-alt — ORATS consecutive failure alerting** — Module-level
+  `_consecutive_failures` counter in `data/orats_client.py` fires a "warning" notification after
+  3 consecutive failures on any ORATS endpoint. Resets to 0 on success.
+
+### Changed
+- **Prompt 3-alt — Equity aggregation in market_open and position_check** — Both jobs now call
+  `CircuitBreaker.calculate_portfolio_equity(make_broker)` instead of the previous per-account
+  loop with fallback. If aggregation fails, CB state is preserved from the last successful update
+  and a "warning" notification is fired.
+- **Prompt 3-alt — Startup reconciler wired to main.py** — `validate_startup()` now calls
+  `jobs.startup_reconciler.run()` after the snapshot job; summary is logged and a "critical"
+  liveness notification fires on every bot start.
+
+### Fixed
+
+
+- **R4 UI — Skip-reason-by-gate dashboard** — `DecisionRepository.get_skip_breakdown()` aggregates
+  SKIP decisions by gate and reason code for a configurable time window. New `GET /api/decisions/skip-breakdown`
+  endpoint. `SkipReasons.tsx` rewritten: account/window filters, horizontal Recharts BarChart clickable by gate,
+  unclassified callout, reason-code table. Static reference content collapsed into a `<details>` block.
+- **R2 UI — Recommendation accuracy scorecard** — `ScorecardRepository.get_scorecard()` computes the
+  4-cell accepted/rejected × add/remove matrix, joining `watchlist_recommendations` and `recommendation_outcomes`.
+  New `GET /api/research/recommendations/scorecard` endpoint. `RecommendationScorecard.tsx` component renders
+  a 2×2 grid with LIVE DATA (solid border) vs PROXY EST. (dashed border) visual distinction. Added as new
+  "Scorecard" tab in `Research.tsx`.
+- **R3 — Staleness badges** — `StalenessBadge.tsx` shared component shows "Updated today / Nd ago / Stale — Nd old"
+  with red highlight past a configurable threshold. New `GET /api/research/last-run` endpoint reads
+  `research_last_run.json` and queries MAX timestamps from all four research tables. Applied to Research.tsx
+  (scan staleness) and Recommendations.tsx header.
+- **R6 — ORATS cost telemetry** — `ORATSClient` gains `_track_call()`, `get_usage()`, and `reset_usage()`
+  methods; all six HTTP-making methods now call `_track_call` with the endpoint name. `ORATSUsageTracker`
+  (`data/orats_usage_tracker.py`) appends per-run records to a JSONL file and supports daily aggregation.
+  `jobs/weekly_research.py` attempts to record usage after phases 1, 2, and 4. New `GET /api/orats/usage`
+  endpoint. `DataSources.tsx` gains an "ORATS API Usage" section with StatCards, a Recharts LineChart,
+  and a recent-runs table.
+
+### Changed
+- **R8 — EV-based win-rate gate** — `_winrate_to_multiplier` and `_winrate_to_tier_label` now
+  accept `avg_pnl` as a second parameter. Win rate < 30% with positive average P&L is downgraded
+  to `(0.7, 'poor')` instead of hard-rejected `(0.0, 'reject')`, allowing profitable low-win-rate
+  strategies (e.g. high-premium outliers) to remain on the watchlist.
+- **R4 — Skip-reason-by-gate enum** (`strategies/skip_reasons.py`) — `SkipGate` and `SkipReason`
+  enums with a `REASON_TO_GATE` mapping. Two new columns (`skip_gate`, `skip_reason_code`) added
+  to the `decisions` table. `TradeRecorder.record_decision` and `DecisionRepository.insert` accept
+  the new fields. Key skip sites in `jobs/market_open.py` (liquidity floor, guardrail rejection,
+  circuit breaker, Claude skip, no-candidates) now populate these columns.
+- **R1 — Live-outcome feedback into recommender** — `TradeRepository` gains
+  `get_closed_trades_for_symbol` and `get_closed_trades_in_window` methods. A module-level
+  `trade_pnl` helper is defined in `database/repositories/trades.py`. `WatchlistRecommender`
+  accepts an optional `trade_repo` and applies a live-performance penalty (−10/−15/−25 points)
+  to incumbent symbols with poor recent live win rates, providing a feedback loop from live
+  trading outcomes back into watchlist maintenance.
+- **R2 — Recommendation accuracy tracking** — `recommendation_outcomes` table added to the schema
+  (PK: `recommendation_id × outcome_type × window_days`). `OutcomeRepository` provides insert/
+  exists/get_all. `OutcomeComputer` implements the 4-cell accuracy scorecard: accepted-add and
+  rejected-remove use ground-truth live trades; rejected-add and accepted-remove use a proxy
+  backtest over the same 90-day window. Phase 4 added to `jobs/weekly_research.py` to run the
+  computation weekly. New API endpoint `GET /api/research/recommendations/outcomes` exposes
+  all outcome rows.
+
 ## [1.4.0] - 2026-04-16
 
 ### Added

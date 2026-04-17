@@ -5,6 +5,9 @@ import { LiquidityHeatmap } from '../components/research/LiquidityHeatmap'
 import { WinRateHeatmap } from '../components/research/WinRateHeatmap'
 import { CombinedHeatmap } from '../components/research/CombinedHeatmap'
 import { SymbolDeepDive } from '../components/research/SymbolDeepDive'
+import { RecommendationScorecard } from '../components/research/RecommendationScorecard'
+import { StalenessBadge } from '../components/shared/StalenessBadge'
+import { api, type ResearchLastRunResponse } from '../api/client'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -18,7 +21,7 @@ interface LiqScore {
 
 // ── Tab config ────────────────────────────────────────────────────────────────
 
-type Tab = 'liquidity' | 'winrate' | 'combined'
+type Tab = 'liquidity' | 'winrate' | 'combined' | 'scorecard'
 
 const TABS: { key: Tab; label: string; description: string }[] = [
   {
@@ -36,6 +39,11 @@ const TABS: { key: Tab; label: string; description: string }[] = [
     label: 'Combined',
     description: 'Effective total score multiplier = liquidity × win-rate',
   },
+  {
+    key: 'scorecard',
+    label: 'Scorecard',
+    description: 'Recommendation accuracy — how often did accepted/rejected decisions turn out to be right?',
+  },
 ]
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -45,6 +53,7 @@ export function Research() {
   const [selectedSymbol, setSelectedSymbol] = useState<string | null>(null)
   const [liquidityScores, setLiquidityScores] = useState<LiqScore[]>([])
   const [pendingRecs, setPendingRecs] = useState<number>(0)
+  const [lastRun, setLastRun] = useState<ResearchLastRunResponse | null>(null)
 
   // Fetch pending recommendation count for the nudge card
   useEffect(() => {
@@ -58,6 +67,13 @@ export function Research() {
         }
         setPendingRecs(pending)
       })
+      .catch(() => {})
+  }, [])
+
+  // Fetch last-run staleness info
+  useEffect(() => {
+    api.researchLastRun()
+      .then((d) => setLastRun(d))
       .catch(() => {})
   }, [])
 
@@ -116,7 +132,16 @@ export function Research() {
       )}
 
       {/* Coverage stats */}
-      <CoverageStats />
+      <div className="flex items-center justify-between flex-wrap gap-2 mb-1">
+        <div className="flex-1">
+          <CoverageStats />
+        </div>
+        {lastRun && (
+          <div className="flex gap-4 text-xs shrink-0">
+            <StalenessBadge last_updated={lastRun.most_recent_scores} label="scan" />
+          </div>
+        )}
+      </div>
 
       {/* Tab selector */}
       <div
@@ -158,6 +183,9 @@ export function Research() {
         )}
         {activeTab === 'combined' && (
           <CombinedHeatmap onSymbolClick={setSelectedSymbol} />
+        )}
+        {activeTab === 'scorecard' && (
+          <RecommendationScorecard lastRun={lastRun} />
         )}
       </div>
 

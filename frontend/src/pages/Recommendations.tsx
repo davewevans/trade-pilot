@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { api, type ResearchLastRunResponse } from '../api/client'
+import { StalenessBadge } from '../components/shared/StalenessBadge'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -530,6 +532,11 @@ export function Recommendations() {
   const [showModal, setShowModal] = useState(false)
   const [applying, setApplying] = useState(false)
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null)
+  const [lastRun, setLastRun] = useState<ResearchLastRunResponse | null>(null)
+
+  useEffect(() => {
+    api.researchLastRun().then(setLastRun).catch(() => {})
+  }, [])
 
   useEffect(() => {
     fetch('/api/research/recommendations', { credentials: 'same-origin' })
@@ -629,14 +636,19 @@ export function Recommendations() {
         <h1 className="text-2xl font-bold mb-1" style={{ color: 'var(--text-primary)' }}>
           Watchlist Recommendations
         </h1>
-        <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
-          Approve or reject suggested watchlist changes
-          {data.generated_at && (
-            <span style={{ marginLeft: 8, opacity: 0.7 }}>
-              · Generated {timeAgo(data.generated_at)}
-            </span>
+        <div className="flex items-center gap-4 flex-wrap">
+          <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
+            Approve or reject suggested watchlist changes
+            {data.generated_at && (
+              <span style={{ marginLeft: 8, opacity: 0.7 }}>
+                · Generated {timeAgo(data.generated_at)}
+              </span>
+            )}
+          </p>
+          {lastRun && (
+            <StalenessBadge last_updated={lastRun.most_recent_recommendation} label="recommendations" />
           )}
-        </p>
+        </div>
       </div>
 
       {/* Watchlist sections */}

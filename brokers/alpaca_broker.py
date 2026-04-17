@@ -500,6 +500,10 @@ class AlpacaBroker(BaseBroker):
                     bid = float(quote.bid_price) if quote and quote.bid_price is not None else None
                     ask = float(quote.ask_price) if quote and quote.ask_price is not None else None
 
+                    # OptionsSnapshot has no daily_bar — that field exists only
+                    # on the stock Snapshot model. Use latest_trade.size as a
+                    # weak liquidity hint (last-trade contract size).
+                    trade = snap.latest_trade
                     result[sym] = {
                         "bid": bid,
                         "ask": ask,
@@ -509,8 +513,8 @@ class AlpacaBroker(BaseBroker):
                         "vega": float(greeks.vega) if greeks and greeks.vega is not None else None,
                         "gamma": float(greeks.gamma) if greeks and greeks.gamma is not None else None,
                         "iv": float(snap.implied_volatility) if snap.implied_volatility is not None else None,
-                        "open_interest": oi_map.get(sym, 0),
-                        "volume": int(snap.daily_bar.volume) if snap.daily_bar and snap.daily_bar.volume is not None else None,
+                        "open_interest": oi_map.get(sym),
+                        "last_trade_size": int(trade.size) if trade and trade.size is not None else None,
                     }
                 except Exception:
                     logger.warning("Failed to parse snapshot for %s", sym, exc_info=True)
@@ -518,7 +522,7 @@ class AlpacaBroker(BaseBroker):
                         "bid": None, "ask": None, "mid": None,
                         "delta": None, "theta": None, "vega": None,
                         "gamma": None, "iv": None,
-                        "open_interest": 0, "volume": None,
+                        "open_interest": None, "last_trade_size": None,
                     }
 
         return result

@@ -17,6 +17,10 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+# Accounts whose portfolio_value is aggregated to compute total portfolio equity
+# for the circuit breaker. Matches the keys used in startup_snapshot.ACCOUNT_BROKER_MAP.
+PORTFOLIO_ACCOUNTS = ("wheel", "iron_condor", "spreads")
+
 
 @dataclass
 class CircuitBreakerStatus:
@@ -255,6 +259,30 @@ class CircuitBreaker:
             halted=halted,
         )
 
+        # Fire notifications on state transitions (non-blocking, swallowed).
+        prev_status = getattr(self, "_prev_status_str", None)
+        if status != prev_status:
+            try:
+                from notifications import notify
+                if status == "RED":
+                    notify(
+                        "critical",
+                        "Circuit breaker RED",
+                        f"Daily P&L: {round(daily_pnl_pct, 1):.1f}%, "
+                        f"Drawdown: {round(drawdown_pct, 1):.1f}%",
+                        tags=["circuit_breaker"],
+                    )
+                elif status == "YELLOW":
+                    notify(
+                        "warning",
+                        "Circuit breaker YELLOW",
+                        f"Daily P&L: {round(daily_pnl_pct, 1):.1f}%",
+                        tags=["circuit_breaker"],
+                    )
+            except Exception:
+                pass
+        self._prev_status_str = status
+
         self._save_state()
         return self._status
 
@@ -314,6 +342,55 @@ class CircuitBreaker:
         )
         self._save_state()
 
+    # ── static helpers ───────────────────────────────────────
+
+    @staticmethod
+    def calculate_portfolio_equity(make_broker_fn) -> float | None:
+        """Aggregate portfolio equity across all trading accounts.
+
+        Returns sum of portfolio_value across all accounts in PORTFOLIO_ACCOUNTS.
+        Returns None if ANY account call fails — callers must treat None as
+        "do not update the circuit breaker this cycle."
+
+        Intentionally strict: partial equity is worse than no equity. A partial
+        value causes the CB to see artificially healthy balances.
+        """
+        # Mapping from logical account name to strategy key used by make_broker.
+        # Mirrors startup_snapshot.ACCOUNT_BROKER_MAP.
+        _ACCOUNT_TO_STRATEGY = {
+            "wheel": "wheel",
+            "iron_condor": "iron_condor",
+            "spreads": "bull_put_spread",
+        }
+        total = 0.0
+        for acct_name in PORTFOLIO_ACCOUNTS:
+            strategy_key = _ACCOUNT_TO_STRATEGY[acct_name]
+            try:
+                broker = make_broker_fn(strategy_key)
+            except Exception as exc:
+                logger.error(
+                    "calculate_portfolio_equity: failed to create broker for %s account: %s",
+                    acct_name, exc,
+                )
+                return None
+            try:
+                acct = broker.get_account()
+            except Exception as exc:
+                logger.error(
+                    "calculate_portfolio_equity: get_account() failed for %s account: %s",
+                    acct_name, exc,
+                )
+                return None
+            if "portfolio_value" not in acct:
+                logger.error(
+                    "calculate_portfolio_equity: portfolio_value missing from %s account response",
+                    acct_name,
+                )
+                return None
+            # portfolio_value == 0 is valid; do NOT treat as failure
+            total += float(acct["portfolio_value"])
+        return total
+
     # ── private helpers ─────────────────────────────────────
 
     def _write_halt_lock(self, reason: str) -> None:
@@ -335,3 +412,13 @@ class CircuitBreaker:
             "TRADING HALTED — lock file written: %s. Reason: %s",
             self._lock_path, reason,
         )
+        try:
+            from notifications import notify
+            notify(
+                "critical",
+                "Trading HALTED",
+                f"Reason: {reason}. Manual deletion of HALTED.lock required to resume.",
+                tags=["halt"],
+            )
+        except Exception:
+            pass

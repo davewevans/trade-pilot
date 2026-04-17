@@ -230,13 +230,13 @@ def _make_snapshot(bid=1.50, ask=1.60, delta=-0.30, theta=-0.05,
     """Build a mock snapshot object with nested attributes."""
     quote = SimpleNamespace(bid_price=bid, ask_price=ask, bid_size=10, ask_size=10)
     greeks = SimpleNamespace(delta=delta, theta=theta, vega=vega, gamma=gamma, rho=0.01)
-    daily_bar = SimpleNamespace(volume=vol)
+    latest_trade = SimpleNamespace(size=vol)
     return SimpleNamespace(
         latest_quote=quote,
         greeks=greeks,
         implied_volatility=iv,
         open_interest=oi,
-        daily_bar=daily_bar,
+        latest_trade=latest_trade,
     )
 
 
@@ -264,7 +264,7 @@ class TestGetOptionSnapshots:
             greeks=None,
             implied_volatility=None,
             open_interest=None,
-            daily_bar=None,
+            latest_trade=None,
         )
         broker.data_client.get_option_snapshot.return_value = {
             "AAPL250509C00185000": snap,
@@ -275,7 +275,7 @@ class TestGetOptionSnapshots:
         assert data["delta"] is None
         assert data["theta"] is None
         assert data["iv"] is None
-        assert data["volume"] is None
+        assert data["last_trade_size"] is None
         assert data["bid"] == 1.0
 
     def test_empty_symbols_returns_empty(self, broker):

@@ -37,7 +37,7 @@ def _make_snapshot(bid, ask, delta, oi=500, theta=-0.05):
         "gamma": 0.02,
         "iv": 0.30,
         "open_interest": oi,
-        "volume": 100,
+        "last_trade_size": 100,
     }
 
 
@@ -295,6 +295,30 @@ class TestLiquidityFilter:
         assert len(result["candidates"]) == 1
         assert result["candidates"][0]["liquidity_ok"] is False
         assert result["best_candidate"] is None
+
+    def test_none_oi_sets_liquidity_ok_false_and_passes_through(self, builder):
+        """open_interest=None (cache miss) must not be rendered as 0 in the leg
+        dict and must set liquidity_ok=False rather than crashing."""
+        builder.broker.get_option_chain_with_greeks.return_value = [
+            _make_contract("P530", 530, "2025-05-02"),
+            _make_contract("P525", 525, "2025-05-02"),
+        ]
+        builder.broker.get_option_snapshots.return_value = {
+            "P530": _make_snapshot(bid=3.00, ask=3.20, delta=-0.25, oi=None),
+            "P525": _make_snapshot(bid=1.80, ask=2.00, delta=-0.15, oi=500),
+        }
+
+        result = builder.build_spread_candidates(
+            "SPY", "bull_put_spread",
+            dte_min=1, dte_max=60, wing_width_strikes=5,
+            underlying_price=540.0,
+        )
+
+        assert len(result["candidates"]) == 1
+        c = result["candidates"][0]
+        assert c["liquidity_ok"] is False
+        assert c["short_leg"]["open_interest"] is None  # None passes through, not 0
+        assert result["best_candidate"] is None  # no liquid candidates
 
 
 # ── Empty candidates ────────────────────────────────────────

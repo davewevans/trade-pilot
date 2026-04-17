@@ -338,3 +338,122 @@ class TestPersist:
         assert "wheel" in data
 
         db.close()
+
+
+# ── R1 — Live performance penalty tests ──────────────────────────────────────
+
+class FakeTradeRepo:
+    """Test double for TradeRepository."""
+    def __init__(self, trades: list[dict]):
+        self._trades = trades
+
+    def get_closed_trades_for_symbol(self, symbol, strategy_type, since_date):
+        return [
+            t for t in self._trades
+            if t.get("underlying", "").upper() == symbol.upper()
+            and t.get("strategy_type") == strategy_type
+        ]
+
+
+def _make_trade(pnl_sign: float) -> dict:
+    """Make a fake trade dict for P&L testing."""
+    fill_price = abs(pnl_sign) / 100.0  # contracts=1, sign via trade_type
+    trade_type = "SELL_PUT" if pnl_sign > 0 else "BUY_PUT"
+    return {
+        "underlying": "AAPL",
+        "strategy_type": "wheel_csp",
+        "fill_price": fill_price,
+        "contracts": 1,
+        "trade_type": trade_type,
+        "fill_status": "filled",
+        "closed_at": "2026-04-01",
+    }
+
+
+def _make_recommender_with_trades(trade_repo=None):
+    liq_repo = _make_liq_repo()
+    bt_repo = _make_bt_repo()
+    universe = _make_universe(["AAPL", "MSFT"])
+    settings = FakeSettings()
+    return WatchlistRecommender(
+        liquidity_repo=liq_repo,
+        backtest_stats_repo=bt_repo,
+        universe=universe,
+        candidate_universe=universe,
+        settings_obj=settings,
+        trade_repo=trade_repo,
+    )
+
+
+def test_live_penalty_no_trade_repo():
+    """No trade_repo → penalty = 0."""
+    r = _make_recommender_with_trades(trade_repo=None)
+    penalty, sub = r._get_live_performance_penalty("AAPL", "wheel_csp")
+    assert penalty == 0.0
+    assert sub["live_trade_count"] == 0
+
+
+def test_live_penalty_zero_trades():
+    """0 live trades → penalty = 0 (below sample threshold)."""
+    trade_repo = FakeTradeRepo([])
+    r = _make_recommender_with_trades(trade_repo=trade_repo)
+    penalty, sub = r._get_live_performance_penalty("AAPL", "wheel_csp")
+    assert penalty == 0.0
+    assert sub["live_trade_count"] == 0
+
+
+def test_live_penalty_below_minimum_sample():
+    """9 live trades → penalty = 0 (below 10-trade minimum)."""
+    trades = [_make_trade(+50.0) for _ in range(9)]
+    r = _make_recommender_with_trades(trade_repo=FakeTradeRepo(trades))
+    penalty, sub = r._get_live_performance_penalty("AAPL", "wheel_csp")
+    assert penalty == 0.0
+    assert sub["live_trade_count"] == 9
+
+
+def test_live_penalty_win_rate_25pct():
+    """15 trades, win_rate = 0.20 → penalty = -25."""
+    wins_3 = [_make_trade(+50.0) for _ in range(3)]
+    losses_12 = [_make_trade(-50.0) for _ in range(12)]
+    trades = wins_3 + losses_12  # 3/15 = 0.2
+    r = _make_recommender_with_trades(trade_repo=FakeTradeRepo(trades))
+    penalty, sub = r._get_live_performance_penalty("AAPL", "wheel_csp")
+    assert penalty == pytest.approx(-25.0)
+    assert sub["live_penalty_applied"] == pytest.approx(-25.0)
+
+
+def test_live_penalty_win_rate_55pct_negative_avg_pnl():
+    """15 trades, win_rate = 0.55, avg_pnl < 0 → penalty = -10."""
+    # 8 wins of +10, 7 losses of -100 → 8/15 = 0.533, avg = (80 - 700)/15 = -41.3
+    wins_8 = [{"underlying": "AAPL", "strategy_type": "wheel_csp", "fill_price": 0.10,
+               "contracts": 1, "trade_type": "SELL_PUT", "fill_status": "filled",
+               "closed_at": "2026-04-01"} for _ in range(8)]
+    losses_7 = [{"underlying": "AAPL", "strategy_type": "wheel_csp", "fill_price": 1.00,
+                "contracts": 1, "trade_type": "BUY_PUT", "fill_status": "filled",
+                "closed_at": "2026-04-01"} for _ in range(7)]
+    r = _make_recommender_with_trades(trade_repo=FakeTradeRepo(wins_8 + losses_7))
+    penalty, sub = r._get_live_performance_penalty("AAPL", "wheel_csp")
+    assert penalty == pytest.approx(-10.0)
+
+
+def test_live_penalty_win_rate_70pct_positive_pnl():
+    """15 trades, win_rate = 0.70, avg_pnl > 0 → penalty = 0."""
+    wins_10 = [{"underlying": "AAPL", "strategy_type": "wheel_csp", "fill_price": 1.00,
+                "contracts": 1, "trade_type": "SELL_PUT", "fill_status": "filled",
+                "closed_at": "2026-04-01"} for _ in range(10)]
+    losses_5 = [{"underlying": "AAPL", "strategy_type": "wheel_csp", "fill_price": 0.50,
+                 "contracts": 1, "trade_type": "BUY_PUT", "fill_status": "filled",
+                 "closed_at": "2026-04-01"} for _ in range(5)]
+    r = _make_recommender_with_trades(trade_repo=FakeTradeRepo(wins_10 + losses_5))
+    penalty, sub = r._get_live_performance_penalty("AAPL", "wheel_csp")
+    assert penalty == pytest.approx(0.0)
+
+
+def test_non_incumbent_does_not_get_penalty():
+    """Non-incumbent candidate → _score_candidate called with is_incumbent=False → no penalty."""
+    trade_repo = FakeTradeRepo([_make_trade(-50.0) for _ in range(20)])  # lots of bad trades
+    r = _make_recommender_with_trades(trade_repo=trade_repo)
+    # Score as non-incumbent (default)
+    composite, sub, _ = r._score_candidate("AAPL", "wheel_csp", set(), is_incumbent=False)
+    # No live penalty fields in sub_scores for non-incumbent
+    assert sub.get("live_penalty_applied", 0.0) == 0.0

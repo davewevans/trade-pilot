@@ -25,6 +25,32 @@ _MONIES_TTL = 30 * 60
 
 _cache = ORATSCache()
 
+# Module-level consecutive failure counters per endpoint.
+# Reset to 0 on success; fire a warning notification when threshold is hit.
+_consecutive_failures: dict[str, int] = {}
+_FAILURE_ALERT_THRESHOLD = 3
+
+
+def _record_failure(endpoint: str) -> None:
+    """Increment consecutive failure counter and fire alert at threshold."""
+    _consecutive_failures[endpoint] = _consecutive_failures.get(endpoint, 0) + 1
+    if _consecutive_failures[endpoint] == _FAILURE_ALERT_THRESHOLD:
+        try:
+            from notifications import notify
+            notify(
+                "warning",
+                f"ORATS {endpoint} failing",
+                f"{_FAILURE_ALERT_THRESHOLD} consecutive failures on {endpoint}",
+                tags=["data_source", "orats"],
+            )
+        except Exception:
+            pass
+
+
+def _record_success(endpoint: str) -> None:
+    """Reset consecutive failure counter on success."""
+    _consecutive_failures[endpoint] = 0
+
 
 class ORATSClient:
     """Client for the ORATS Datav2 API."""
@@ -33,7 +59,33 @@ class ORATSClient:
     TIMEOUT = 10
 
     def __init__(self, api_key: str | None = None):
+        from datetime import datetime as _datetime
         self.api_key = api_key or settings.ORATS_API_KEY
+        self._call_count: int = 0
+        self._calls_by_endpoint: dict[str, int] = {}
+        self._session_start: _datetime = _datetime.utcnow()
+
+    def _track_call(self, endpoint: str) -> None:
+        """Increment the per-endpoint and total call counters."""
+        self._call_count += 1
+        self._calls_by_endpoint[endpoint] = self._calls_by_endpoint.get(endpoint, 0) + 1
+
+    def get_usage(self) -> dict:
+        """Return current session call counts and timing."""
+        from datetime import datetime as _datetime
+        return {
+            "total_calls": self._call_count,
+            "by_endpoint": dict(self._calls_by_endpoint),
+            "session_start": self._session_start.isoformat(),
+            "window_seconds": (_datetime.utcnow() - self._session_start).total_seconds(),
+        }
+
+    def reset_usage(self) -> None:
+        """Reset counters and start a new session window."""
+        from datetime import datetime as _datetime
+        self._call_count = 0
+        self._calls_by_endpoint = {}
+        self._session_start = _datetime.utcnow()
 
     def get_summary(self, symbol: str) -> Optional[dict]:
         """Fetch the ORATS summary for a symbol.
@@ -46,6 +98,7 @@ class ORATSClient:
         if cached is not None:
             return cached
 
+        self._track_call("summaries")
         try:
             resp = requests.get(
                 f"{self.BASE_URL}/summaries",
@@ -103,6 +156,7 @@ class ORATSClient:
                 result["skew_m1"] or 0,
                 result["implied_move_pct"] or 0,
             )
+            _record_success("summaries")
             return result
 
         except requests.HTTPError as e:
@@ -112,6 +166,7 @@ class ORATSClient:
                 logger.warning("ORATS /summaries HTTP error for %s: %s", symbol, e)
         except Exception:
             logger.warning("ORATS /summaries failed for %s", symbol, exc_info=True)
+        _record_failure("summaries")
         return None
 
     def get_earnings(self, symbol: str) -> Optional[dict]:
@@ -124,6 +179,7 @@ class ORATSClient:
         if cached is not None:
             return cached
 
+        self._track_call("earnings")
         try:
             resp = requests.get(
                 f"{self.BASE_URL}/earnings",
@@ -166,10 +222,12 @@ class ORATSClient:
                 "ORATS earnings for %s: date=%s days=%s",
                 symbol, result["next_earnings_date"], result["days_to_earnings"],
             )
+            _record_success("earnings")
             return result
 
         except Exception:
             logger.warning("ORATS /earnings failed for %s", symbol, exc_info=True)
+            _record_failure("earnings")
             return None
 
     def get_iv_rank_batch(self, symbols: list[str]) -> dict[str, dict]:
@@ -197,6 +255,7 @@ class ORATSClient:
         # ORATS limits batch ticker queries; chunk to 10 at a time.
         for i in range(0, len(misses), 10):
             chunk = misses[i:i + 10]
+            self._track_call("ivrank")
             try:
                 resp = requests.get(
                     f"{self.BASE_URL}/ivrank",
@@ -209,8 +268,10 @@ class ORATSClient:
                 logger.warning(
                     "ORATS /ivrank failed for chunk %s", chunk, exc_info=True,
                 )
+                _record_failure("ivrank")
                 continue
 
+            _record_success("ivrank")
             for row in rows:
                 ticker = str(row.get("ticker", "")).upper()
                 if not ticker:
@@ -237,6 +298,7 @@ class ORATSClient:
         if cached is not None:
             return cached
 
+        self._track_call("cores")
         try:
             resp = requests.get(
                 f"{self.BASE_URL}/cores",
@@ -289,10 +351,12 @@ class ORATSClient:
                 "r_squared": self._safe_float(row.get("rSquared")),
             }
             _cache.set("cores", key, result, _CORES_TTL)
+            _record_success("cores")
             return result
 
         except Exception:
             logger.warning("ORATS /cores failed for %s", key, exc_info=True)
+            _record_failure("cores")
             return None
 
     def get_monies(self, symbol: str) -> list[dict]:
@@ -314,6 +378,7 @@ class ORATSClient:
         if cached is not None:
             return cached
 
+        self._track_call("monies")
         try:
             resp = requests.get(
                 f"{self.BASE_URL}/monies/implied",
@@ -327,9 +392,11 @@ class ORATSClient:
                 logger.error("ORATS API key is invalid or expired (monies)")
             else:
                 logger.warning("ORATS /monies/implied HTTP error for %s: %s", key, e)
+            _record_failure("monies")
             return []
         except Exception:
             logger.warning("ORATS /monies/implied failed for %s", key, exc_info=True)
+            _record_failure("monies")
             return []
 
         # Normalize: pull all vol{N} fields plus metadata
@@ -350,6 +417,7 @@ class ORATSClient:
         logger.info(
             "ORATS monies for %s: %d expiration rows fetched", key, len(normalized),
         )
+        _record_success("monies")
         return normalized
 
     def get_strikes_by_delta(
@@ -387,6 +455,7 @@ class ORATSClient:
         else:
             d_lo, d_hi = abs(delta_min), abs(delta_max)
 
+        self._track_call("strikes")
         try:
             resp = requests.get(
                 f"{self.BASE_URL}/strikes",
@@ -405,8 +474,10 @@ class ORATSClient:
                 "ORATS /strikes failed for %s %s d=%s,%s dte=%s,%s",
                 symbol, side, d_lo, d_hi, dte_min, dte_max, exc_info=True,
             )
+            _record_failure("strikes")
             return []
 
+        _record_success("strikes")
         contracts: list[dict] = []
         for row in rows:
             if side == "put":
@@ -478,7 +549,7 @@ class ORATSClient:
                 "gamma": float | None,
                 "iv": float | None,      # mapped from smvVol
                 "open_interest": int | None,
-                "volume": None,          # ORATS /strikes does not return volume
+                "last_trade_size": None,  # ORATS /strikes does not return trade size
             }
 
         Never raises — returns an empty dict on failure.
@@ -515,7 +586,7 @@ class ORATSClient:
                 "gamma": row.get("gamma"),
                 "iv": row.get("smv_vol"),
                 "open_interest": row.get("open_interest"),
-                "volume": None,
+                "last_trade_size": None,
             }
 
         logger.info(

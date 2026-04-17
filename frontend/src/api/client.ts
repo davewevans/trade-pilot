@@ -143,6 +143,61 @@ export interface DecisionsParams {
   confidence?: number
 }
 
+export interface SkipBreakdownResponse {
+  window_days: number;
+  total_skips: number;
+  by_gate: Array<{ gate: string; count: number; pct: number }>;
+  by_reason_within_gate: Record<string, Array<{ reason: string; count: number; pct_of_gate: number }>>;
+  unclassified_count: number;
+}
+
+export interface ScorecardCellResponse {
+  outcome_type: string;
+  count: number;
+  recommender_correct_pct: number | null;
+  avg_pnl_per_trade: number | null;
+  symbols: string[];
+}
+
+export interface ScorecardResponse {
+  window_days: number;
+  since_days: number;
+  cells: {
+    accepted_add: ScorecardCellResponse;
+    rejected_add: ScorecardCellResponse;
+    accepted_remove: ScorecardCellResponse;
+    rejected_remove: ScorecardCellResponse;
+  };
+  summary: {
+    ground_truth_cells: string[];
+    proxy_cells: string[];
+    caveat: string;
+  };
+}
+
+export interface ResearchLastRunResponse {
+  last_run_at: string | null;
+  last_scan_stats: Record<string, unknown> | null;
+  most_recent_scores: string | null;
+  most_recent_backtest_stats: string | null;
+  most_recent_recommendation: string | null;
+  most_recent_outcome: string | null;
+}
+
+export interface ORATSUsageResponse {
+  recent_runs: Array<{
+    run_type: string;
+    started_at: string;
+    completed_at: string;
+    duration_seconds: number;
+    call_count: number;
+    by_endpoint: Record<string, number>;
+  }>;
+  daily_totals: Array<{ date: string; total_calls: number }>;
+  this_week_total: number;
+  this_month_total: number;
+}
+
 export const api = {
   health: () => get<HealthStatus>('/api/health'),
 
@@ -306,6 +361,28 @@ export const api = {
   tokenUsageSummary: () => get<TokenUsageSummary>('/api/token-usage/summary'),
   tokenUsageDaily: (days: number = 30) =>
     get<{ daily: TokenUsageDaily[] }>(`/api/token-usage?days=${days}`),
+
+  skipBreakdown: (account?: string, sinceDays?: number): Promise<SkipBreakdownResponse> => {
+    const q = new URLSearchParams()
+    if (account) q.set('account', account)
+    if (sinceDays != null) q.set('since_days', String(sinceDays))
+    const qs = q.toString()
+    return get<SkipBreakdownResponse>(`/api/decisions/skip-breakdown${qs ? `?${qs}` : ''}`)
+  },
+
+  recommendationScorecard: (windowDays?: number, sinceDays?: number): Promise<ScorecardResponse> => {
+    const q = new URLSearchParams()
+    if (windowDays != null) q.set('window_days', String(windowDays))
+    if (sinceDays != null) q.set('since_days', String(sinceDays))
+    const qs = q.toString()
+    return get<ScorecardResponse>(`/api/research/recommendations/scorecard${qs ? `?${qs}` : ''}`)
+  },
+
+  researchLastRun: (): Promise<ResearchLastRunResponse> =>
+    get<ResearchLastRunResponse>('/api/research/last-run'),
+
+  oratsUsage: (): Promise<ORATSUsageResponse> =>
+    get<ORATSUsageResponse>('/api/orats/usage'),
 
   watchlist: () =>
     get<{ wheel: string[]; iron_condor: string[]; spreads: string[]; updated_at: string | null }>('/api/watchlist'),

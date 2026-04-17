@@ -3,6 +3,34 @@
 import sqlite3
 
 
+_SELL_TYPES = {"SELL_PUT", "SELL_CALL", "SELL_BULL_PUT_SPREAD", "SELL_BEAR_CALL_SPREAD",
+               "SELL_IRON_CONDOR", "SELL_LONG_CALL_VERTICAL"}
+_BUY_TYPES = {"BUY_PUT", "BUY_CALL", "BUY_BULL_PUT_SPREAD", "BUY_BEAR_CALL_SPREAD",
+              "BUY_IRON_CONDOR", "BUY_LONG_CALL_VERTICAL"}
+
+
+def trade_pnl(trade: dict) -> float | None:
+    """Cash-flow P&L for one filled trade row.
+
+    Returns fill_price * contracts * 100 * sign, or None if fill_price is NULL.
+    SELL trades are +1 sign (cash in); BUY trades are -1 (cash out).
+    """
+    fp = trade.get("fill_price")
+    if fp is None:
+        return None
+    tt = (trade.get("trade_type") or "").upper()
+    if tt in _SELL_TYPES:
+        sign = 1
+    elif tt in _BUY_TYPES:
+        sign = -1
+    else:
+        return None
+    try:
+        return float(fp) * int(trade.get("contracts") or 1) * 100 * sign
+    except (TypeError, ValueError):
+        return None
+
+
 class TradeRepository:
     """Persistence for Alpaca orders submitted by the bot."""
 
@@ -88,6 +116,57 @@ class TradeRepository:
         rows = self._conn.execute(
             "SELECT * FROM trades WHERE cycle_id = ? ORDER BY submitted_at ASC",
             (cycle_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_closed_trades_for_symbol(
+        self,
+        symbol: str,
+        strategy_type: str,
+        since_date: str,
+    ) -> list[dict]:
+        """Return filled, closed live trades for (symbol, strategy_type) since a date.
+
+        'Closed' means fill_status = 'filled' AND closed_at IS NOT NULL.
+        'symbol' matches the `underlying` column (the ticker, not the OCC symbol).
+        """
+        rows = self._conn.execute(
+            """
+            SELECT * FROM trades
+             WHERE UPPER(underlying) = UPPER(?)
+               AND strategy_type = ?
+               AND fill_status = 'filled'
+               AND closed_at IS NOT NULL
+               AND closed_at >= ?
+             ORDER BY closed_at ASC
+            """,
+            (symbol, strategy_type, since_date),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_closed_trades_in_window(
+        self,
+        symbol: str,
+        strategy_type: str,
+        start_date: str,
+        end_date: str,
+    ) -> list[dict]:
+        """Return filled, closed live trades in a date window.
+
+        Used by R2 OutcomeComputer for ground-truth outcome computation.
+        """
+        rows = self._conn.execute(
+            """
+            SELECT * FROM trades
+             WHERE UPPER(underlying) = UPPER(?)
+               AND strategy_type = ?
+               AND fill_status = 'filled'
+               AND closed_at IS NOT NULL
+               AND closed_at >= ?
+               AND closed_at < ?
+             ORDER BY closed_at ASC
+            """,
+            (symbol, strategy_type, start_date, end_date),
         ).fetchall()
         return [dict(r) for r in rows]
 

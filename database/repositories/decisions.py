@@ -47,8 +47,9 @@ class DecisionRepository:
             INSERT INTO decisions (
                 timestamp, strategy_type, underlying, cycle_id, wheel_state,
                 action, reasoning, confidence, alpaca_order_id,
-                prompt_version, context_json, research_metadata_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                prompt_version, context_json, research_metadata_json,
+                skip_gate, skip_reason_code
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 decision["timestamp"],
@@ -63,6 +64,8 @@ class DecisionRepository:
                 decision.get("prompt_version"),
                 ctx_json,
                 research_json,
+                decision.get("skip_gate"),
+                decision.get("skip_reason_code"),
             ),
         )
         self._conn.commit()
@@ -86,6 +89,95 @@ class DecisionRepository:
             (underlying, limit),
         ).fetchall()
         return [_row_to_dict(r) for r in rows]
+
+    def get_skip_breakdown(self, account: str | None, since_days: int) -> dict:
+        """Return skip counts broken down by gate and reason within gate.
+
+        Returns:
+            {
+              "total_skips": int,
+              "by_gate": [{"gate": str, "count": int, "pct": float}, ...],
+              "by_reason_within_gate": {gate: [{"reason": str, "count": int, "pct_of_gate": float}]},
+              "unclassified_count": int  # rows where skip_gate IS NULL
+            }
+        """
+        from datetime import datetime, timedelta
+
+        cutoff = (datetime.utcnow() - timedelta(days=since_days)).isoformat()
+
+        where: list[str] = ["UPPER(action) = 'SKIP'", "timestamp >= ?"]
+        params: list = [cutoff]
+
+        _ACCOUNT_STRATEGY_MAP: dict[str, list[str]] = {
+            "wheel": ["wheel"],
+            "iron_condor": ["iron_condor"],
+            "spreads": ["bull_put_spread", "bear_call_spread", "long_call_vertical"],
+        }
+        if account:
+            strategy_types = _ACCOUNT_STRATEGY_MAP.get(account.lower())
+            if strategy_types:
+                placeholders = ",".join(["?"] * len(strategy_types))
+                where.append(f"strategy_type IN ({placeholders})")
+                params.extend(strategy_types)
+
+        clause = " WHERE " + " AND ".join(where)
+
+        total_row = self._conn.execute(
+            f"SELECT COUNT(*) FROM decisions{clause}", params
+        ).fetchone()
+        total_skips = int(total_row[0]) if total_row else 0
+
+        # Count unclassified (skip_gate IS NULL)
+        unclassified_row = self._conn.execute(
+            f"SELECT COUNT(*) FROM decisions{clause} AND skip_gate IS NULL", params
+        ).fetchone()
+        unclassified_count = int(unclassified_row[0]) if unclassified_row else 0
+
+        # Group by gate
+        gate_rows = self._conn.execute(
+            f"SELECT skip_gate, COUNT(*) AS n FROM decisions{clause} AND skip_gate IS NOT NULL "
+            f"GROUP BY skip_gate ORDER BY n DESC",
+            params,
+        ).fetchall()
+
+        by_gate = []
+        for row in gate_rows:
+            gate = row[0] or "unknown"
+            count = int(row[1])
+            pct = round(count / total_skips * 100, 1) if total_skips > 0 else 0.0
+            by_gate.append({"gate": gate, "count": count, "pct": pct})
+
+        # Group by reason within each gate
+        reason_rows = self._conn.execute(
+            f"SELECT skip_gate, skip_reason_code, COUNT(*) AS n FROM decisions{clause} "
+            f"AND skip_gate IS NOT NULL AND skip_reason_code IS NOT NULL "
+            f"GROUP BY skip_gate, skip_reason_code ORDER BY skip_gate, n DESC",
+            params,
+        ).fetchall()
+
+        # Build gate→count lookup for pct_of_gate calculation
+        gate_totals = {row["gate"]: row["count"] for row in by_gate}
+        by_reason_within_gate: dict[str, list] = {}
+        for row in reason_rows:
+            gate = row[0]
+            reason = row[1]
+            count = int(row[2])
+            gate_total = gate_totals.get(gate, 1)
+            pct_of_gate = round(count / gate_total * 100, 1) if gate_total > 0 else 0.0
+            if gate not in by_reason_within_gate:
+                by_reason_within_gate[gate] = []
+            by_reason_within_gate[gate].append({
+                "reason": reason,
+                "count": count,
+                "pct_of_gate": pct_of_gate,
+            })
+
+        return {
+            "total_skips": total_skips,
+            "by_gate": by_gate,
+            "by_reason_within_gate": by_reason_within_gate,
+            "unclassified_count": unclassified_count,
+        }
 
     def query(
         self,

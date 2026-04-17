@@ -1,6 +1,7 @@
 """Tests for strategies.circuit_breaker.CircuitBreaker."""
 
 import json
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -320,3 +321,83 @@ class TestCircuitBreakerStatus:
         assert "daily_loss_halt" in status.active_rules
         assert "weekly_loss_halt" in status.active_rules
         assert status.status == "RED"
+
+
+# ================================================================
+# calculate_portfolio_equity
+# ================================================================
+
+
+def _make_broker_fn(account_values: dict):
+    """Return a make_broker-like function mapping strategy key → mock broker."""
+    def make_broker(strategy_name: str):
+        # Map strategy keys used by calculate_portfolio_equity back to acct names
+        strategy_to_acct = {
+            "wheel": "wheel",
+            "iron_condor": "iron_condor",
+            "bull_put_spread": "spreads",
+        }
+        acct_name = strategy_to_acct.get(strategy_name, strategy_name)
+        if acct_name not in account_values:
+            raise ValueError(f"Unknown account: {acct_name}")
+        val = account_values[acct_name]
+        if isinstance(val, Exception):
+            raise val
+        broker = MagicMock()
+        if val is None:
+            # Simulate missing portfolio_value field
+            broker.get_account.return_value = {}
+        else:
+            broker.get_account.return_value = {"portfolio_value": val}
+        return broker
+    return make_broker
+
+
+class TestCalculatePortfolioEquity:
+    def test_sums_all_accounts(self):
+        make_broker = _make_broker_fn({
+            "wheel": 10_000,
+            "iron_condor": 5_000,
+            "spreads": 3_000,
+        })
+        result = CircuitBreaker.calculate_portfolio_equity(make_broker)
+        assert result == 18_000.0
+
+    def test_returns_none_on_account_failure(self):
+        make_broker = _make_broker_fn({
+            "wheel": RuntimeError("connection refused"),
+            "iron_condor": 5_000,
+            "spreads": 3_000,
+        })
+        result = CircuitBreaker.calculate_portfolio_equity(make_broker)
+        assert result is None
+
+    def test_returns_none_on_missing_field(self):
+        make_broker = _make_broker_fn({
+            "wheel": None,  # will return {} from get_account()
+            "iron_condor": 5_000,
+            "spreads": 3_000,
+        })
+        result = CircuitBreaker.calculate_portfolio_equity(make_broker)
+        assert result is None
+
+    def test_zero_equity_is_valid(self):
+        make_broker = _make_broker_fn({
+            "wheel": 0,
+            "iron_condor": 5_000,
+            "spreads": 3_000,
+        })
+        result = CircuitBreaker.calculate_portfolio_equity(make_broker)
+        # 0 is valid — should return sum, not None
+        assert result == 8_000.0
+        assert result is not None
+
+    def test_get_account_raises_returns_none(self):
+        """broker.get_account() raising should return None."""
+        def make_broker(strategy_name):
+            broker = MagicMock()
+            broker.get_account.side_effect = ConnectionError("timeout")
+            return broker
+
+        result = CircuitBreaker.calculate_portfolio_equity(make_broker)
+        assert result is None

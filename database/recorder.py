@@ -110,6 +110,8 @@ class TradeRecorder:
         context: dict | None = None,
         timestamp: str | None = None,
         research_metadata: dict | None = None,
+        skip_gate: str | None = None,
+        skip_reason_code: str | None = None,
     ) -> tuple[int | None, str | None]:
         """Insert a decision row, auto-creating a cycle if appropriate.
 
@@ -156,6 +158,8 @@ class TradeRecorder:
                 "prompt_version": prompt_version,
                 "context": context,
                 "research_metadata": research_metadata,
+                "skip_gate": skip_gate,
+                "skip_reason_code": skip_reason_code,
             })
             return decision_id, cycle_id
         except Exception:

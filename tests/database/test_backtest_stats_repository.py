@@ -201,9 +201,10 @@ def test_get_winrate_multiplier_high_conf_strong(repo, monkeypatch):
 
 
 def test_get_winrate_multiplier_high_conf_reject(repo, monkeypatch):
+    """win_rate=0.25 with negative avg_pnl → reject (0.0)."""
     from config import settings
     monkeypatch.setattr(settings, "RESEARCH_WINRATE_MULTIPLIER_ENABLED", True)
-    repo.upsert_symbol_stat(_sym_stat({"win_rate": 0.25, "confidence": "high"}))
+    repo.upsert_symbol_stat(_sym_stat({"win_rate": 0.25, "avg_pnl_per_trade": -50.0, "confidence": "high"}))
     mult, tier, conf = repo.get_winrate_multiplier("AAPL", "bull_put_spread")
     assert mult == pytest.approx(0.0)
     assert tier == "reject"
@@ -242,19 +243,72 @@ def test_get_winrate_multiplier_bounds(repo, monkeypatch):
     from config import settings
     monkeypatch.setattr(settings, "RESEARCH_WINRATE_MULTIPLIER_ENABLED", True)
 
-    # All non-reject high-confidence multipliers
     cases = [
-        (0.75, 1.3),   # strong
-        (0.65, 1.15),  # good
-        (0.55, 1.0),   # neutral
-        (0.45, 0.85),  # weak
-        (0.35, 0.7),   # poor
-        (0.25, 0.0),   # reject — allowed to be 0
+        (0.75, 65.0, 1.3),
+        (0.65, 65.0, 1.15),
+        (0.55, 65.0, 1.0),
+        (0.45, 65.0, 0.85),
+        (0.35, 65.0, 0.7),
+        (0.25, -50.0, 0.0),   # reject — allowed to be 0 (negative avg_pnl)
+        (0.25, 65.0, 0.7),    # poor — positive avg_pnl, no longer rejected
     ]
-    for win_rate, expected in cases:
-        repo.upsert_symbol_stat(_sym_stat({"win_rate": win_rate, "confidence": "high"}))
+    for win_rate, avg_pnl, expected in cases:
+        repo.upsert_symbol_stat(_sym_stat({"win_rate": win_rate, "avg_pnl_per_trade": avg_pnl, "confidence": "high"}))
         mult, _, _ = repo.get_winrate_multiplier("AAPL", "bull_put_spread")
-        assert mult == pytest.approx(expected), f"win_rate={win_rate}"
+        assert mult == pytest.approx(expected), f"win_rate={win_rate}, avg_pnl={avg_pnl}"
         if mult != 0.0:
-            assert mult >= 0.7, f"mult {mult} below 0.7 for win_rate={win_rate}"
-        assert mult <= 1.3, f"mult {mult} above 1.3 for win_rate={win_rate}"
+            assert mult >= 0.7
+        assert mult <= 1.3
+
+
+# ── R8 — EV-based win-rate gate tests ─────────────────────────────────────────
+
+def test_r8_low_winrate_negative_avg_pnl_is_reject(repo, monkeypatch):
+    """win_rate=0.25, avg_pnl=-50 → (0.0, 'reject', 'high') — still hard reject."""
+    from config import settings
+    monkeypatch.setattr(settings, "RESEARCH_WINRATE_MULTIPLIER_ENABLED", True)
+    repo.upsert_symbol_stat(_sym_stat({"win_rate": 0.25, "avg_pnl_per_trade": -50.0, "confidence": "high"}))
+    mult, tier, conf = repo.get_winrate_multiplier("AAPL", "bull_put_spread")
+    assert mult == pytest.approx(0.0)
+    assert tier == "reject"
+    assert conf == "high"
+
+
+def test_r8_low_winrate_positive_avg_pnl_is_poor(repo, monkeypatch):
+    """win_rate=0.25, avg_pnl=+200 → (0.7, 'poor', 'high') — downgraded not blocked."""
+    from config import settings
+    monkeypatch.setattr(settings, "RESEARCH_WINRATE_MULTIPLIER_ENABLED", True)
+    repo.upsert_symbol_stat(_sym_stat({"win_rate": 0.25, "avg_pnl_per_trade": 200.0, "confidence": "high"}))
+    mult, tier, conf = repo.get_winrate_multiplier("AAPL", "bull_put_spread")
+    assert mult == pytest.approx(0.7)
+    assert tier == "poor"
+    assert conf == "high"
+
+
+def test_r8_low_winrate_zero_avg_pnl_is_poor(repo, monkeypatch):
+    """win_rate=0.25, avg_pnl=0 → (0.7, 'poor', 'high') — zero counts as non-negative."""
+    from config import settings
+    monkeypatch.setattr(settings, "RESEARCH_WINRATE_MULTIPLIER_ENABLED", True)
+    repo.upsert_symbol_stat(_sym_stat({"win_rate": 0.25, "avg_pnl_per_trade": 0.0, "confidence": "high"}))
+    mult, tier, conf = repo.get_winrate_multiplier("AAPL", "bull_put_spread")
+    assert mult == pytest.approx(0.7)
+    assert tier == "poor"
+    assert conf == "high"
+
+
+def test_r8_all_other_high_conf_branches_unchanged(repo, monkeypatch):
+    """Verify all non-reject high-confidence tiers unchanged by R8."""
+    from config import settings
+    monkeypatch.setattr(settings, "RESEARCH_WINRATE_MULTIPLIER_ENABLED", True)
+    cases = [
+        (0.75, 65.0, 1.3, "strong"),
+        (0.65, 65.0, 1.15, "good"),
+        (0.55, 65.0, 1.0, "neutral"),
+        (0.45, 65.0, 0.85, "weak"),
+        (0.35, 65.0, 0.7, "poor"),
+    ]
+    for win_rate, avg_pnl, expected_mult, expected_tier in cases:
+        repo.upsert_symbol_stat(_sym_stat({"win_rate": win_rate, "avg_pnl_per_trade": avg_pnl, "confidence": "high"}))
+        mult, tier, conf = repo.get_winrate_multiplier("AAPL", "bull_put_spread")
+        assert mult == pytest.approx(expected_mult), f"win_rate={win_rate}"
+        assert tier == expected_tier, f"win_rate={win_rate}"

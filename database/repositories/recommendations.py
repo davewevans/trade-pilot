@@ -7,6 +7,8 @@ import sqlite3
 from datetime import datetime, timezone
 from typing import Optional
 
+from database.db import db_retry
+
 
 class RecommendationRepository:
     """Read/write access to watchlist_recommendations."""
@@ -16,6 +18,7 @@ class RecommendationRepository:
 
     # ── Write ─────────────────────────────────────────────────────────────────
 
+    @db_retry()
     def insert_batch(self, recommendations: list[dict]) -> int:
         """Insert multiple recommendations in a single transaction.
 
@@ -58,6 +61,7 @@ class RecommendationRepository:
         self._conn.commit()
         return len(rows)
 
+    @db_retry()
     def record_decision(
         self,
         recommendation_id: int,
