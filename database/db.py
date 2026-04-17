@@ -1,12 +1,50 @@
 """SQLite connection management and schema initialization for trade-pilot."""
 
+import functools
 import logging
 import sqlite3
+import time
 from pathlib import Path
+from typing import Any, Callable, TypeVar
 
 from config import settings
 
 logger = logging.getLogger(__name__)
+
+_F = TypeVar("_F", bound=Callable[..., Any])
+
+
+def db_retry(max_attempts: int = 5, base_delay: float = 0.05) -> Callable[[_F], _F]:
+    """Retry a function on SQLite 'database is locked' with exponential backoff.
+
+    Suitable for wrapping repository write methods that may contend when the
+    scheduler and API server write to the same database simultaneously.
+
+    Args:
+        max_attempts: Total attempts before re-raising (default 5).
+        base_delay: Initial sleep in seconds; doubles each retry (default 0.05).
+    """
+    def decorator(fn: _F) -> _F:
+        @functools.wraps(fn)
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
+            delay = base_delay
+            for attempt in range(max_attempts):
+                try:
+                    return fn(*args, **kwargs)
+                except sqlite3.OperationalError as exc:
+                    if "database is locked" not in str(exc).lower() or attempt == max_attempts - 1:
+                        raise
+                    logger.warning(
+                        "SQLite locked, retrying in %.3fs (attempt %d/%d): %s",
+                        delay,
+                        attempt + 1,
+                        max_attempts,
+                        exc,
+                    )
+                    time.sleep(delay)
+                    delay *= 2
+        return wrapper  # type: ignore[return-value]
+    return decorator
 
 
 # ── Schema ─────────────────────────────────────────────────────────
