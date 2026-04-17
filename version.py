@@ -5,10 +5,10 @@ section to CHANGELOG.md. Other modules read this via ``settings.VERSION``
 rather than importing this file directly.
 """
 
-VERSION = "1.4.0"
-VERSION_DATE = "2026-04-16"
+VERSION = "1.5.0"
+VERSION_DATE = "2026-04-17"
 VERSION_NOTES = (
-    "Conservative Wheel strategy (shorter-DTE variant running in its own paper account); "
-    "research layer with liquidity scoring, win-rate gating, recommendation engine, and weekly sweep; "
-    "Claude API improvements — prompt caching instrumentation, structured outputs, adaptive thinking, A/B harness."
+    "Notification backends (ntfy/email) with severity routing; recommendation accuracy scorecard with "
+    "live-outcome feedback loop; skip-reason telemetry with gate-breakdown dashboard; ORATS usage "
+    "tracking; SQLite db_retry for write contention; EV-gated win-rate multiplier."
 )

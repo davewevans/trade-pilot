@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-04-17
+
 ### Added
 - **Prompt 3-alt — Notification layer** (`notifications/`) — Severity-routed push notification
   system with ntfy primary backend and JSONL digest accumulator. `notify(severity, title, message)`
