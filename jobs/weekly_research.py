@@ -37,7 +37,11 @@ def run() -> None:
     scan_stats: dict = {}
     rescore_stats: dict = {}
 
+    from data.orats_usage_tracker import ORATSUsageTracker
+    _usage_tracker = ORATSUsageTracker()
+
     # ── Phase 1: liquidity scan ───────────────────────────────────────────
+    phase1_start = datetime.now(timezone.utc)
     try:
         from research.liquidity.scanner import LiquidityScanner
         from database.repositories import LiquidityRepository
@@ -52,6 +56,30 @@ def run() -> None:
     except Exception:
         logger.exception("Liquidity scan failed — continuing")
         scan_stats = {"error": True}
+
+    # Record phase 1 ORATS usage if client is accessible
+    try:
+        _orats_client_ref = None
+        try:
+            from data.orats_client import ORATSClient as _OC
+            # The scanner may have used a module-level or instance-level client;
+            # record what we can from scanner's internal client if accessible.
+            if hasattr(scanner, '_orats') and hasattr(scanner._orats, 'get_usage'):
+                _orats_client_ref = scanner._orats
+        except Exception:
+            pass
+        if _orats_client_ref:
+            _u = _orats_client_ref.get_usage()
+            _usage_tracker.record_run(
+                run_type="liquidity_scan",
+                call_count=_u["total_calls"],
+                by_endpoint=_u["by_endpoint"],
+                started_at=phase1_start.replace(tzinfo=None),
+                completed_at=datetime.utcnow(),
+            )
+            _orats_client_ref.reset_usage()
+    except Exception:
+        logger.debug("Could not record phase 1 ORATS usage", exc_info=True)
 
     # ── Phase 1: liquidity rescore ────────────────────────────────────────
     try:
@@ -72,14 +100,16 @@ def run() -> None:
     # ── Phase 2: backtest sweep chunk ─────────────────────────────────────
     logger.info("Phase 2: running backtest sweep chunk")
     sweep_stats: dict = {}
+    phase2_start = datetime.now(timezone.utc)
     try:
         from research.backtesting.sweep import BacktestSweep
         from backtesting.engine import BacktestEngine
         from database.repositories import BacktestStatsRepository
 
         bt_repo = BacktestStatsRepository(db.get_connection())
+        _bt_engine = BacktestEngine()
         sweep = BacktestSweep(
-            engine=BacktestEngine(),
+            engine=_bt_engine,
             repo=bt_repo,
             universe=universe,
         )
@@ -88,6 +118,25 @@ def run() -> None:
             progress_cb=lambda msg: logger.info("bt_sweep: %s", msg),
         )
         logger.info("Backtest sweep complete: %s", sweep_stats)
+        # Record phase 2 ORATS usage if engine exposes an orats client
+        try:
+            _eng_orats = None
+            for attr in ('orats_client', '_orats', 'orats'):
+                if hasattr(_bt_engine, attr):
+                    _eng_orats = getattr(_bt_engine, attr)
+                    break
+            if _eng_orats and hasattr(_eng_orats, 'get_usage'):
+                _u2 = _eng_orats.get_usage()
+                _usage_tracker.record_run(
+                    run_type="backtest_sweep",
+                    call_count=_u2["total_calls"],
+                    by_endpoint=_u2["by_endpoint"],
+                    started_at=phase2_start.replace(tzinfo=None),
+                    completed_at=datetime.utcnow(),
+                )
+                _eng_orats.reset_usage()
+        except Exception:
+            logger.debug("Could not record phase 2 ORATS usage", exc_info=True)
     except Exception:
         logger.exception("Backtest sweep failed — continuing")
         sweep_stats = {"error": True}
@@ -136,6 +185,7 @@ def run() -> None:
     # ── Phase 4: compute recommendation outcomes ──────────────────────────
     logger.info("Phase 4: computing recommendation outcomes")
     outcome_summary: dict = {}
+    phase4_start = datetime.now(timezone.utc)
     try:
         from research.recommendations.outcomes import OutcomeComputer
         from database.repositories import (
@@ -164,6 +214,25 @@ def run() -> None:
         )
         outcome_summary = computer.compute_pending_outcomes(as_of_date=_date.today())
         logger.info("Outcome computation complete: %s", outcome_summary)
+        # Record phase 4 ORATS usage if computer exposes an orats client
+        try:
+            _comp_orats = None
+            for attr in ('orats_client', '_orats', 'orats'):
+                if hasattr(computer, attr):
+                    _comp_orats = getattr(computer, attr)
+                    break
+            if _comp_orats and hasattr(_comp_orats, 'get_usage'):
+                _u4 = _comp_orats.get_usage()
+                _usage_tracker.record_run(
+                    run_type="outcome_computation",
+                    call_count=_u4["total_calls"],
+                    by_endpoint=_u4["by_endpoint"],
+                    started_at=phase4_start.replace(tzinfo=None),
+                    completed_at=datetime.utcnow(),
+                )
+                _comp_orats.reset_usage()
+        except Exception:
+            logger.debug("Could not record phase 4 ORATS usage", exc_info=True)
     except Exception:
         logger.exception("Phase 4 outcome computation failed — continuing")
         outcome_summary = {"error": True}

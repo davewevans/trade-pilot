@@ -33,7 +33,33 @@ class ORATSClient:
     TIMEOUT = 10
 
     def __init__(self, api_key: str | None = None):
+        from datetime import datetime as _datetime
         self.api_key = api_key or settings.ORATS_API_KEY
+        self._call_count: int = 0
+        self._calls_by_endpoint: dict[str, int] = {}
+        self._session_start: _datetime = _datetime.utcnow()
+
+    def _track_call(self, endpoint: str) -> None:
+        """Increment the per-endpoint and total call counters."""
+        self._call_count += 1
+        self._calls_by_endpoint[endpoint] = self._calls_by_endpoint.get(endpoint, 0) + 1
+
+    def get_usage(self) -> dict:
+        """Return current session call counts and timing."""
+        from datetime import datetime as _datetime
+        return {
+            "total_calls": self._call_count,
+            "by_endpoint": dict(self._calls_by_endpoint),
+            "session_start": self._session_start.isoformat(),
+            "window_seconds": (_datetime.utcnow() - self._session_start).total_seconds(),
+        }
+
+    def reset_usage(self) -> None:
+        """Reset counters and start a new session window."""
+        from datetime import datetime as _datetime
+        self._call_count = 0
+        self._calls_by_endpoint = {}
+        self._session_start = _datetime.utcnow()
 
     def get_summary(self, symbol: str) -> Optional[dict]:
         """Fetch the ORATS summary for a symbol.
@@ -46,6 +72,7 @@ class ORATSClient:
         if cached is not None:
             return cached
 
+        self._track_call("summaries")
         try:
             resp = requests.get(
                 f"{self.BASE_URL}/summaries",
@@ -124,6 +151,7 @@ class ORATSClient:
         if cached is not None:
             return cached
 
+        self._track_call("earnings")
         try:
             resp = requests.get(
                 f"{self.BASE_URL}/earnings",
@@ -197,6 +225,7 @@ class ORATSClient:
         # ORATS limits batch ticker queries; chunk to 10 at a time.
         for i in range(0, len(misses), 10):
             chunk = misses[i:i + 10]
+            self._track_call("ivrank")
             try:
                 resp = requests.get(
                     f"{self.BASE_URL}/ivrank",
@@ -237,6 +266,7 @@ class ORATSClient:
         if cached is not None:
             return cached
 
+        self._track_call("cores")
         try:
             resp = requests.get(
                 f"{self.BASE_URL}/cores",
@@ -314,6 +344,7 @@ class ORATSClient:
         if cached is not None:
             return cached
 
+        self._track_call("monies")
         try:
             resp = requests.get(
                 f"{self.BASE_URL}/monies/implied",
@@ -387,6 +418,7 @@ class ORATSClient:
         else:
             d_lo, d_hi = abs(delta_min), abs(delta_max)
 
+        self._track_call("strikes")
         try:
             resp = requests.get(
                 f"{self.BASE_URL}/strikes",

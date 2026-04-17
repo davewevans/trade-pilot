@@ -1,5 +1,17 @@
-import { useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import {
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  Tooltip,
+  ResponsiveContainer,
+  Cell,
+} from 'recharts'
 import { PageAudioPlayer } from '../components/shared/PageAudioPlayer'
+import { api, type SkipBreakdownResponse } from '../api/client'
+
+// ── Static reference data ─────────────────────────────────────────────────────
 
 type Reason = {
   reason: string
@@ -241,6 +253,8 @@ const CATEGORIES: Category[] = [
   },
 ]
 
+// ── Static reference block ────────────────────────────────────────────────────
+
 function CategoryBlock({ cat }: { cat: Category }) {
   return (
     <section className="mb-8">
@@ -251,7 +265,6 @@ function CategoryBlock({ cat }: { cat: Category }) {
         {cat.title}
       </h2>
 
-      {/* Desktop table */}
       <div
         className="hidden md:block rounded-lg border overflow-x-auto"
         style={{ backgroundColor: 'var(--bg-card)', borderColor: 'var(--border)' }}
@@ -278,7 +291,6 @@ function CategoryBlock({ cat }: { cat: Category }) {
         </table>
       </div>
 
-      {/* Mobile cards */}
       <div className="md:hidden space-y-2">
         {cat.rows.map((r) => (
           <div
@@ -300,10 +312,58 @@ function CategoryBlock({ cat }: { cat: Category }) {
   )
 }
 
+// ── Account + window filter ───────────────────────────────────────────────────
+
+const ACCOUNTS = [
+  { value: '', label: 'All accounts' },
+  { value: 'wheel', label: 'Wheel' },
+  { value: 'iron_condor', label: 'Iron Condor' },
+  { value: 'spreads', label: 'Spreads' },
+]
+
+const WINDOWS = [
+  { value: 7, label: '7d' },
+  { value: 30, label: '30d' },
+  { value: 90, label: '90d' },
+]
+
+// ── Main component ────────────────────────────────────────────────────────────
+
 export function SkipReasons() {
   const contentRef = useRef<HTMLDivElement>(null)
+  const [account, setAccount] = useState<string>('')
+  const [windowDays, setWindowDays] = useState<number>(30)
+  const [data, setData] = useState<SkipBreakdownResponse | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [selectedGate, setSelectedGate] = useState<string | null>(null)
+
+  useEffect(() => {
+    setLoading(true)
+    api.skipBreakdown(account || undefined, windowDays)
+      .then((d) => { setData(d); setLoading(false) })
+      .catch(() => setLoading(false))
+  }, [account, windowDays])
+
+  // Build table rows: filtered by selectedGate or show all
+  const tableRows: Array<{ gate: string; reason: string; count: number; pct_of_gate: number; pct_total: number }> = []
+  if (data) {
+    const gates = selectedGate
+      ? [selectedGate]
+      : Object.keys(data.by_reason_within_gate)
+
+    for (const gate of gates) {
+      const reasons = data.by_reason_within_gate[gate] || []
+      for (const r of reasons) {
+        const pct_total = data.total_skips > 0 ? Math.round(r.count / data.total_skips * 1000) / 10 : 0
+        tableRows.push({ gate, reason: r.reason, count: r.count, pct_of_gate: r.pct_of_gate, pct_total })
+      }
+    }
+    tableRows.sort((a, b) => b.count - a.count)
+  }
+
   return (
     <div ref={contentRef} className="max-w-5xl">
+      {/* Header */}
       <div className="mb-6">
         <h1 className="text-2xl font-semibold" style={{ color: 'var(--text-primary)' }}>
           Why Trades Get Skipped
@@ -313,34 +373,239 @@ export function SkipReasons() {
         </p>
       </div>
 
-      {CATEGORIES.map((c) => (
-        <CategoryBlock key={c.title} cat={c} />
-      ))}
+      {/* Filters */}
+      <div className="flex flex-wrap gap-3 mb-5 items-center">
+        <div className="flex gap-1">
+          {ACCOUNTS.map((a) => (
+            <button
+              key={a.value}
+              onClick={() => setAccount(a.value)}
+              className="px-3 py-1 rounded text-xs font-medium"
+              style={{
+                backgroundColor: account === a.value ? 'var(--accent)' : 'var(--bg-card)',
+                color: account === a.value ? 'white' : 'var(--text-secondary)',
+                border: '1px solid var(--border)',
+                cursor: 'pointer',
+              }}
+            >
+              {a.label}
+            </button>
+          ))}
+        </div>
+        <div className="flex gap-1">
+          {WINDOWS.map((w) => (
+            <button
+              key={w.value}
+              onClick={() => setWindowDays(w.value)}
+              className="px-3 py-1 rounded text-xs font-medium"
+              style={{
+                backgroundColor: windowDays === w.value ? 'var(--accent)' : 'var(--bg-card)',
+                color: windowDays === w.value ? 'white' : 'var(--text-secondary)',
+                border: '1px solid var(--border)',
+                cursor: 'pointer',
+              }}
+            >
+              {w.label}
+            </button>
+          ))}
+        </div>
+        {selectedGate && (
+          <button
+            onClick={() => setSelectedGate(null)}
+            className="px-3 py-1 rounded text-xs font-medium"
+            style={{
+              backgroundColor: 'color-mix(in srgb, var(--accent) 12%, transparent)',
+              color: 'var(--accent)',
+              border: '1px solid color-mix(in srgb, var(--accent) 30%, transparent)',
+              cursor: 'pointer',
+            }}
+          >
+            Clear filter: {selectedGate} ×
+          </button>
+        )}
+      </div>
 
-      <section className="mb-8">
-        <h2
-          className="text-xs uppercase tracking-wider font-semibold mb-3"
-          style={{ color: 'var(--text-muted)' }}
-        >
-          Claude's Own Judgment
-        </h2>
+      {loading ? (
+        <div className="py-8 text-center text-sm" style={{ color: 'var(--text-muted)' }}>Loading skip data…</div>
+      ) : !data || data.total_skips === 0 ? (
         <div
-          className="p-4 rounded-lg border"
+          className="py-12 text-center rounded-lg border mb-6"
           style={{
-            backgroundColor: 'color-mix(in srgb, var(--accent) 6%, var(--bg-card))',
+            backgroundColor: 'var(--bg-card)',
             borderColor: 'var(--border)',
-            borderLeft: '3px solid var(--accent)',
+            color: 'var(--text-muted)',
           }}
         >
-          <p className="text-sm leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
-            Even when all pre-conditions pass and guardrails don't block the trade, Claude can still
-            choose to SKIP based on its assessment of the full context — for example, conflicting
-            technical signals, a stock it considers too risky given current macro conditions, or a
-            premium it considers insufficient for the risk. These skips are logged with Claude's
-            reasoning, which you can read in the Decisions log.
-          </p>
+          <div className="text-sm">No skips recorded in the last {windowDays} days.</div>
+          <div className="text-xs mt-1 opacity-75">Either no cycles ran or everything resulted in a trade.</div>
         </div>
-      </section>
+      ) : (
+        <>
+          {/* Summary stat */}
+          <div className="mb-4 text-sm" style={{ color: 'var(--text-muted)' }}>
+            <span style={{ color: 'var(--text-primary)', fontWeight: 600 }}>{data.total_skips}</span> total skips in the last {windowDays} days
+            {selectedGate && <span> · filtered to gate: <strong style={{ color: 'var(--accent)' }}>{selectedGate}</strong></span>}
+          </div>
+
+          {/* Bar chart by gate */}
+          <div
+            className="mb-5 p-4 rounded-lg"
+            style={{ backgroundColor: 'var(--bg-card)', border: '1px solid var(--border)' }}
+          >
+            <div className="text-xs uppercase tracking-wider font-semibold mb-3" style={{ color: 'var(--text-muted)' }}>
+              Skips by gate — click to filter
+            </div>
+            <ResponsiveContainer width="100%" height={Math.max(120, data.by_gate.length * 36)}>
+              <BarChart
+                layout="vertical"
+                data={data.by_gate}
+                margin={{ top: 0, right: 40, bottom: 0, left: 20 }}
+              >
+                <XAxis type="number" tick={{ fontSize: 11, fill: 'var(--text-muted)' }} />
+                <YAxis
+                  type="category"
+                  dataKey="gate"
+                  tick={{ fontSize: 11, fill: 'var(--text-secondary)' }}
+                  width={120}
+                />
+                <Tooltip
+                  contentStyle={{
+                    backgroundColor: 'var(--bg-card)',
+                    border: '1px solid var(--border)',
+                    borderRadius: 6,
+                    fontSize: 12,
+                    color: 'var(--text-primary)',
+                  }}
+                  formatter={(value: number, _name: string, props: { payload?: { pct?: number } }) => [
+                    `${value} (${props.payload?.pct ?? 0}%)`,
+                    'Count',
+                  ]}
+                />
+                <Bar
+                  dataKey="count"
+                  radius={[0, 4, 4, 0]}
+                  cursor="pointer"
+                  onClick={(entry: { gate: string }) => setSelectedGate(
+                    selectedGate === entry.gate ? null : entry.gate
+                  )}
+                >
+                  {data.by_gate.map((entry) => (
+                    <Cell
+                      key={entry.gate}
+                      fill={selectedGate === entry.gate ? 'var(--accent)' : 'color-mix(in srgb, var(--accent) 60%, transparent)'}
+                    />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+
+          {/* Unclassified callout */}
+          {data.unclassified_count > 0 && (
+            <div
+              className="mb-4 p-3 rounded-lg text-sm"
+              style={{
+                backgroundColor: 'color-mix(in srgb, var(--yellow) 8%, var(--bg-card))',
+                borderLeft: '3px solid var(--yellow)',
+                color: 'var(--text-secondary)',
+              }}
+            >
+              <strong style={{ color: 'var(--text-primary)' }}>{data.unclassified_count} skips</strong> have no gate
+              classification. This means either legacy data (before skip-gate tracking shipped) or a code path that
+              isn't calling the enum. Investigate if this number is growing.
+            </div>
+          )}
+
+          {/* Reason table */}
+          {tableRows.length > 0 && (
+            <div
+              className="rounded-lg border overflow-x-auto mb-6"
+              style={{ backgroundColor: 'var(--bg-card)', borderColor: 'var(--border)' }}
+            >
+              <table className="w-full text-sm">
+                <thead>
+                  <tr
+                    className="text-left text-xs uppercase tracking-wider"
+                    style={{ color: 'var(--text-muted)', borderBottom: '1px solid var(--border)' }}
+                  >
+                    <th className="px-4 py-3 font-medium">Reason Code</th>
+                    <th className="px-4 py-3 font-medium">Gate</th>
+                    <th className="px-4 py-3 font-medium text-right">Count</th>
+                    <th className="px-4 py-3 font-medium text-right">% of Gate</th>
+                    <th className="px-4 py-3 font-medium text-right">% of Total</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {tableRows.map((row, i) => (
+                    <tr
+                      key={i}
+                      style={{ borderTop: '1px solid var(--border)', color: 'var(--text-secondary)' }}
+                    >
+                      <td className="px-4 py-2 font-mono text-xs" style={{ color: 'var(--text-primary)' }}>
+                        {row.reason}
+                      </td>
+                      <td className="px-4 py-2 text-xs">
+                        <span
+                          className="px-2 py-0.5 rounded font-mono"
+                          style={{
+                            backgroundColor: 'color-mix(in srgb, var(--accent) 12%, transparent)',
+                            color: 'var(--accent)',
+                          }}
+                        >
+                          {row.gate}
+                        </span>
+                      </td>
+                      <td className="px-4 py-2 text-right tabular-nums">{row.count}</td>
+                      <td className="px-4 py-2 text-right tabular-nums">{row.pct_of_gate.toFixed(1)}%</td>
+                      <td className="px-4 py-2 text-right tabular-nums">{row.pct_total.toFixed(1)}%</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </>
+      )}
+
+      {/* Reference: All Skip Reasons (collapsible) */}
+      <details className="mb-8">
+        <summary
+          className="cursor-pointer text-sm font-semibold py-2 select-none"
+          style={{ color: 'var(--text-primary)' }}
+        >
+          Reference: All Skip Reasons
+        </summary>
+        <div className="mt-4">
+          {CATEGORIES.map((c) => (
+            <CategoryBlock key={c.title} cat={c} />
+          ))}
+
+          <section className="mb-8">
+            <h2
+              className="text-xs uppercase tracking-wider font-semibold mb-3"
+              style={{ color: 'var(--text-muted)' }}
+            >
+              Claude's Own Judgment
+            </h2>
+            <div
+              className="p-4 rounded-lg border"
+              style={{
+                backgroundColor: 'color-mix(in srgb, var(--accent) 6%, var(--bg-card))',
+                borderColor: 'var(--border)',
+                borderLeft: '3px solid var(--accent)',
+              }}
+            >
+              <p className="text-sm leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
+                Even when all pre-conditions pass and guardrails don't block the trade, Claude can still
+                choose to SKIP based on its assessment of the full context — for example, conflicting
+                technical signals, a stock it considers too risky given current macro conditions, or a
+                premium it considers insufficient for the risk. These skips are logged with Claude's
+                reasoning, which you can read in the Decisions log.
+              </p>
+            </div>
+          </section>
+        </div>
+      </details>
 
       <PageAudioPlayer contentRef={contentRef} />
     </div>

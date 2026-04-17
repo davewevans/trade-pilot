@@ -8,6 +8,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **R4 UI — Skip-reason-by-gate dashboard** — `DecisionRepository.get_skip_breakdown()` aggregates
+  SKIP decisions by gate and reason code for a configurable time window. New `GET /api/decisions/skip-breakdown`
+  endpoint. `SkipReasons.tsx` rewritten: account/window filters, horizontal Recharts BarChart clickable by gate,
+  unclassified callout, reason-code table. Static reference content collapsed into a `<details>` block.
+- **R2 UI — Recommendation accuracy scorecard** — `ScorecardRepository.get_scorecard()` computes the
+  4-cell accepted/rejected × add/remove matrix, joining `watchlist_recommendations` and `recommendation_outcomes`.
+  New `GET /api/research/recommendations/scorecard` endpoint. `RecommendationScorecard.tsx` component renders
+  a 2×2 grid with LIVE DATA (solid border) vs PROXY EST. (dashed border) visual distinction. Added as new
+  "Scorecard" tab in `Research.tsx`.
+- **R3 — Staleness badges** — `StalenessBadge.tsx` shared component shows "Updated today / Nd ago / Stale — Nd old"
+  with red highlight past a configurable threshold. New `GET /api/research/last-run` endpoint reads
+  `research_last_run.json` and queries MAX timestamps from all four research tables. Applied to Research.tsx
+  (scan staleness) and Recommendations.tsx header.
+- **R6 — ORATS cost telemetry** — `ORATSClient` gains `_track_call()`, `get_usage()`, and `reset_usage()`
+  methods; all six HTTP-making methods now call `_track_call` with the endpoint name. `ORATSUsageTracker`
+  (`data/orats_usage_tracker.py`) appends per-run records to a JSONL file and supports daily aggregation.
+  `jobs/weekly_research.py` attempts to record usage after phases 1, 2, and 4. New `GET /api/orats/usage`
+  endpoint. `DataSources.tsx` gains an "ORATS API Usage" section with StatCards, a Recharts LineChart,
+  and a recent-runs table.
+
+### Changed
 - **R8 — EV-based win-rate gate** — `_winrate_to_multiplier` and `_winrate_to_tier_label` now
   accept `avg_pnl` as a second parameter. Win rate < 30% with positive average P&L is downgraded
   to `(0.7, 'poor')` instead of hard-rejected `(0.0, 'reject')`, allowing profitable low-win-rate

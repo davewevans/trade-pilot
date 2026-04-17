@@ -8,6 +8,7 @@ from database.repositories.daily_summaries import DailySummaryRepository
 from database.repositories.decisions import DecisionRepository
 from database.repositories.liquidity import LiquidityRepository
 from database.repositories.outcome_repository import OutcomeRepository
+from database.repositories.scorecard_repository import ScorecardRepository
 from database.repositories.strategy_states import StrategyStateRepository
 from database.repositories.token_usage_repository import TokenUsageRepository
 from database.repositories.trades import TradeRepository
@@ -21,6 +22,7 @@ __all__ = [
     "DecisionRepository",
     "LiquidityRepository",
     "OutcomeRepository",
+    "ScorecardRepository",
     "StrategyStateRepository",
     "TokenUsageRepository",
     "TradeRepository",

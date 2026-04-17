@@ -26,7 +26,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTex
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from config import settings
-from database.repositories import BacktestStatsRepository, DecisionRepository, LiquidityRepository, RecommendationRepository, TradeRepository, TokenUsageRepository
+from database.repositories import BacktestStatsRepository, DecisionRepository, LiquidityRepository, RecommendationRepository, ScorecardRepository, TradeRepository, TokenUsageRepository
 
 logger = logging.getLogger(__name__)
 
@@ -2144,6 +2144,150 @@ def research_recommendation_outcomes():
     except Exception:
         logger.exception("research/recommendations/outcomes query failed")
         return JSONResponse(status_code=500, content={"error": "query failed"})
+
+
+# ── Skip breakdown endpoint ──────────────────────────────────────────────────
+
+
+@app.get("/api/decisions/skip-breakdown")
+async def decisions_skip_breakdown(
+    account: str | None = None,
+    since_days: int = 30,
+    group_by: str = "gate",
+):
+    """Return skip counts broken down by gate and reason within gate."""
+    conn = _open_db()
+    if conn is None:
+        return {
+            "window_days": since_days,
+            "total_skips": 0,
+            "by_gate": [],
+            "by_reason_within_gate": {},
+            "unclassified_count": 0,
+        }
+    try:
+        repo = DecisionRepository(conn)
+        data = repo.get_skip_breakdown(account=account, since_days=since_days)
+        return {**data, "window_days": since_days}
+    except Exception:
+        logger.exception("decisions/skip-breakdown query failed")
+        return JSONResponse(status_code=500, content={"error": "query failed"})
+    finally:
+        conn.close()
+
+
+# ── Recommendation scorecard endpoint ─────────────────────────────────────────
+
+
+@app.get("/api/research/recommendations/scorecard")
+async def research_recommendations_scorecard(
+    window_days: int = 90,
+    since_days: int = 180,
+):
+    """Return the 4-cell recommendation accuracy scorecard."""
+    conn = _open_db()
+    if conn is None:
+        return JSONResponse(status_code=503, content={"error": "database unavailable"})
+    try:
+        repo = ScorecardRepository(conn)
+        cells = repo.get_scorecard(window_days=window_days, since_days=since_days)
+        return {
+            "window_days": window_days,
+            "since_days": since_days,
+            "cells": cells,
+            "summary": {
+                "ground_truth_cells": ["accepted_add", "rejected_remove"],
+                "proxy_cells": ["rejected_add", "accepted_remove"],
+                "caveat": (
+                    "Cells labeled 'proxy_backtest' are not comparable to 'ground_truth_live' cells. "
+                    "Proxy cells estimate what would have happened; live cells measure what did happen."
+                ),
+            },
+        }
+    except Exception:
+        logger.exception("research/recommendations/scorecard query failed")
+        return JSONResponse(status_code=500, content={"error": "query failed"})
+    finally:
+        conn.close()
+
+
+# ── Research last-run staleness endpoint ──────────────────────────────────────
+
+
+@app.get("/api/research/last-run")
+async def research_last_run():
+    """Return staleness metadata for the research pipeline components."""
+    # Try to read last_run.json for scan stats
+    last_run_path = DATA_DIR / "research_last_run.json"
+    file_data: dict = {}
+    if last_run_path.exists():
+        try:
+            file_data = json.loads(last_run_path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+
+    last_run_at = file_data.get("last_run_at")
+    last_scan_stats = file_data.get("last_scan_stats")
+
+    most_recent_scores = None
+    most_recent_backtest_stats = None
+    most_recent_recommendation = None
+    most_recent_outcome = None
+
+    conn = _open_db()
+    if conn is not None:
+        try:
+            try:
+                row = conn.execute("SELECT MAX(last_updated) FROM symbol_liquidity_scores").fetchone()
+                most_recent_scores = row[0] if row and row[0] else None
+            except Exception:
+                pass
+            try:
+                row = conn.execute("SELECT MAX(last_updated) FROM symbol_strategy_stats").fetchone()
+                most_recent_backtest_stats = row[0] if row and row[0] else None
+            except Exception:
+                pass
+            try:
+                row = conn.execute("SELECT MAX(generated_at) FROM watchlist_recommendations").fetchone()
+                most_recent_recommendation = row[0] if row and row[0] else None
+            except Exception:
+                pass
+            try:
+                row = conn.execute("SELECT MAX(computed_at) FROM recommendation_outcomes").fetchone()
+                most_recent_outcome = row[0] if row and row[0] else None
+            except Exception:
+                pass
+        finally:
+            conn.close()
+
+    return {
+        "last_run_at": last_run_at,
+        "last_scan_stats": last_scan_stats,
+        "most_recent_scores": most_recent_scores,
+        "most_recent_backtest_stats": most_recent_backtest_stats,
+        "most_recent_recommendation": most_recent_recommendation,
+        "most_recent_outcome": most_recent_outcome,
+    }
+
+
+# ── ORATS usage endpoint ──────────────────────────────────────────────────────
+
+
+@app.get("/api/orats/usage")
+async def orats_usage():
+    """Return ORATS API call telemetry from the usage tracker."""
+    from data.orats_usage_tracker import ORATSUsageTracker
+    tracker = ORATSUsageTracker(path=str(DATA_DIR / "orats_usage.jsonl"))
+    recent = tracker.get_recent_runs(since_days=30)
+    daily = tracker.get_daily_totals(since_days=30)
+    this_week = sum(r["call_count"] for r in tracker.get_recent_runs(since_days=7))
+    this_month = sum(r["call_count"] for r in recent)
+    return {
+        "recent_runs": recent,
+        "daily_totals": daily,
+        "this_week_total": this_week,
+        "this_month_total": this_month,
+    }
 
 
 # ── Token usage endpoints ────────────────────────────────────────────────────

@@ -1,6 +1,15 @@
 import { useEffect, useRef, useState } from 'react'
-import { api, type SourceHealthEntry } from '../api/client'
+import { api, type SourceHealthEntry, type ORATSUsageResponse } from '../api/client'
+import { StatCard } from '../components/shared/StatCard'
 import { PageAudioPlayer } from '../components/shared/PageAudioPlayer'
+import {
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  Tooltip,
+  ResponsiveContainer,
+} from 'recharts'
 
 type Source = {
   name: string
@@ -529,10 +538,12 @@ const FALLBACK_CHAIN = [
 
 export function DataSources() {
   const [healthSources, setHealthSources] = useState<Record<string, SourceHealthEntry>>({})
+  const [oratsUsage, setOratsUsage] = useState<ORATSUsageResponse | null>(null)
   const contentRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     api.sourceHealth().then((d) => setHealthSources(d.sources)).catch(() => {})
+    api.oratsUsage().then((d) => setOratsUsage(d)).catch(() => {})
   }, [])
 
   return (
@@ -591,6 +602,119 @@ export function DataSources() {
             </div>
           ))}
         </div>
+      </section>
+
+      {/* ORATS API Usage */}
+      <section className="mt-10">
+        <h2
+          className="text-xs uppercase tracking-wider font-semibold mb-3"
+          style={{ color: 'var(--text-muted)' }}
+        >
+          ORATS API Usage
+        </h2>
+
+        {!oratsUsage || (oratsUsage.recent_runs.length === 0) ? (
+          <div
+            className="p-5 rounded-lg border text-sm text-center"
+            style={{
+              backgroundColor: 'var(--bg-card)',
+              borderColor: 'var(--border)',
+              color: 'var(--text-muted)',
+            }}
+          >
+            No ORATS usage tracked yet — run the weekly research job or start a backtest to begin tracking.
+          </div>
+        ) : (
+          <>
+            {/* Stat cards */}
+            <div className="grid grid-cols-3 gap-3 mb-4">
+              <StatCard label="This Week" value={oratsUsage.this_week_total.toLocaleString()} />
+              <StatCard label="This Month" value={oratsUsage.this_month_total.toLocaleString()} />
+              <StatCard label="Total Runs (30d)" value={oratsUsage.recent_runs.length} />
+            </div>
+
+            {/* Daily totals chart */}
+            {oratsUsage.daily_totals.length > 0 && (
+              <div
+                className="p-4 rounded-lg mb-4"
+                style={{ backgroundColor: 'var(--bg-card)', border: '1px solid var(--border)' }}
+              >
+                <div className="text-xs uppercase tracking-wider font-semibold mb-3" style={{ color: 'var(--text-muted)' }}>
+                  Daily call volume (30d)
+                </div>
+                <ResponsiveContainer width="100%" height={160}>
+                  <LineChart data={oratsUsage.daily_totals}>
+                    <XAxis
+                      dataKey="date"
+                      tick={{ fontSize: 10, fill: 'var(--text-muted)' }}
+                      tickFormatter={(d: string) => d.slice(5)}
+                    />
+                    <YAxis tick={{ fontSize: 10, fill: 'var(--text-muted)' }} />
+                    <Tooltip
+                      contentStyle={{
+                        backgroundColor: 'var(--bg-card)',
+                        border: '1px solid var(--border)',
+                        borderRadius: 6,
+                        fontSize: 12,
+                        color: 'var(--text-primary)',
+                      }}
+                    />
+                    <Line
+                      type="monotone"
+                      dataKey="total_calls"
+                      stroke="var(--accent)"
+                      strokeWidth={2}
+                      dot={false}
+                    />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+
+            {/* Recent runs table */}
+            <div
+              className="rounded-lg border overflow-x-auto"
+              style={{ backgroundColor: 'var(--bg-card)', borderColor: 'var(--border)' }}
+            >
+              <table className="w-full text-sm">
+                <thead>
+                  <tr
+                    className="text-left text-xs uppercase tracking-wider"
+                    style={{ color: 'var(--text-muted)', borderBottom: '1px solid var(--border)' }}
+                  >
+                    <th className="px-4 py-3 font-medium">Type</th>
+                    <th className="px-4 py-3 font-medium">Started</th>
+                    <th className="px-4 py-3 font-medium text-right">Duration</th>
+                    <th className="px-4 py-3 font-medium text-right">API Calls</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {oratsUsage.recent_runs.slice(0, 20).map((run, i) => (
+                    <tr
+                      key={i}
+                      style={{ borderTop: '1px solid var(--border)', color: 'var(--text-secondary)' }}
+                    >
+                      <td className="px-4 py-2 font-mono text-xs" style={{ color: 'var(--text-primary)' }}>
+                        {run.run_type}
+                      </td>
+                      <td className="px-4 py-2 text-xs">
+                        {run.started_at.slice(0, 16).replace('T', ' ')}
+                      </td>
+                      <td className="px-4 py-2 text-right text-xs">
+                        {run.duration_seconds < 60
+                          ? `${Math.round(run.duration_seconds)}s`
+                          : `${(run.duration_seconds / 60).toFixed(1)}m`}
+                      </td>
+                      <td className="px-4 py-2 text-right tabular-nums font-mono text-xs">
+                        {run.call_count}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )}
       </section>
 
       <PageAudioPlayer contentRef={contentRef} />
