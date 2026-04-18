@@ -184,6 +184,27 @@ export interface CircuitBreaker {
   dry_run?: boolean
 }
 
+export interface ClaudeCostOutcomeBucket {
+  count: number
+  cost_usd: number
+}
+
+export interface ClaudeCostsResponse {
+  window: string
+  total_cost_usd: number
+  prior_window_cost_usd: number
+  decisions_count: number
+  filled_trades_count: number
+  cost_per_filled_trade_usd: number | null
+  cost_by_outcome: {
+    open: ClaudeCostOutcomeBucket
+    close: ClaudeCostOutcomeBucket
+    skip: ClaudeCostOutcomeBucket
+  }
+  cache_hit_rate: number | null
+  by_model_version: Record<string, { count: number; cost_usd: number }>
+}
+
 export interface TokenUsageToday {
   date: string
   total_input: number

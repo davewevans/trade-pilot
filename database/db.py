@@ -369,6 +369,17 @@ _MIGRATIONS: tuple[str, ...] = (
     "ALTER TABLE decisions ADD COLUMN skip_gate TEXT",
     "ALTER TABLE decisions ADD COLUMN skip_reason_code TEXT",
     "ALTER TABLE trades ADD COLUMN is_recovery_order INTEGER NOT NULL DEFAULT 0",
+    # ── Cost tracking on decisions (added Phase A, 2026-04) ─────────────
+    # New columns record token counts and cost for every row where Claude
+    # was actually invoked.  Pre-check skips (no Claude call) leave these
+    # NULL.  estimated_cost_usd is frozen at write time using the rate in
+    # config.CLAUDE_PRICING; it is NEVER recomputed on read.
+    "ALTER TABLE decisions ADD COLUMN model_version TEXT",
+    "ALTER TABLE decisions ADD COLUMN input_tokens INTEGER",
+    "ALTER TABLE decisions ADD COLUMN output_tokens INTEGER",
+    "ALTER TABLE decisions ADD COLUMN cache_read_tokens INTEGER",
+    "ALTER TABLE decisions ADD COLUMN cache_creation_tokens INTEGER",
+    "ALTER TABLE decisions ADD COLUMN estimated_cost_usd REAL",
     """UPDATE watchlist_recommendations
    SET operator_decision = 'expired'
    WHERE operator_decision IS NULL

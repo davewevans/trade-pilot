@@ -13,6 +13,7 @@ import { LoadingSpinner } from '../components/shared/LoadingSpinner'
 import { StatCard } from '../components/shared/StatCard'
 import type {
   CircuitBreaker,
+  ClaudeCostsResponse,
   Decision,
   FillQualityResponse,
   Portfolio,
@@ -566,6 +567,168 @@ function AiUsagePanel() {
   )
 }
 
+// ── Claude Costs card ────────────────────────────────────────
+
+const CACHE_HIT_WARN_THRESHOLD = 0.85
+
+function ClaudeCostsCard() {
+  const [data, setData] = useState<ClaudeCostsResponse | null>(null)
+  const [window, setWindow] = useState<'7d' | '30d' | '90d' | 'all'>('7d')
+
+  useEffect(() => {
+    let cancelled = false
+    const load = () => {
+      api.claudeCosts(window).then((d) => { if (!cancelled) setData(d) }).catch(() => {})
+    }
+    load()
+    const id = setInterval(load, 60_000)
+    return () => { cancelled = true; clearInterval(id) }
+  }, [window])
+
+  const totalCost = data?.total_cost_usd ?? 0
+  const priorCost = data?.prior_window_cost_usd ?? 0
+  const delta = totalCost - priorCost
+  const deltaColor = delta < 0 ? 'var(--green)' : delta > 0 ? 'var(--red)' : 'var(--text-muted)'
+  const deltaSign = delta >= 0 ? '+' : ''
+
+  const cacheHit = data?.cache_hit_rate ?? null
+  const cacheHitPct = cacheHit != null ? cacheHit * 100 : null
+  const cacheHitLow = cacheHit != null && cacheHit < CACHE_HIT_WARN_THRESHOLD
+
+  const outcomes = data?.cost_by_outcome
+  const outcomeTotalCost =
+    outcomes
+      ? outcomes.open.cost_usd + outcomes.close.cost_usd + outcomes.skip.cost_usd
+      : 0
+
+  const WINDOW_LABELS: Record<string, string> = { '7d': '7 days', '30d': '30 days', '90d': '90 days', 'all': 'All time' }
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-0">
+        <h2 className="section-heading">Claude costs</h2>
+        <div className="flex gap-1 mb-1">
+          {(['7d', '30d', '90d', 'all'] as const).map((w) => (
+            <button
+              key={w}
+              onClick={() => setWindow(w)}
+              className="text-xs px-2 py-0.5 rounded transition-colors"
+              style={{
+                backgroundColor: window === w ? 'var(--accent)' : 'var(--bg-secondary)',
+                color: window === w ? '#fff' : 'var(--text-muted)',
+                border: '1px solid var(--border)',
+                cursor: 'pointer',
+              }}
+            >
+              {w}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div
+        className="rounded-md p-4 space-y-4"
+        style={{ backgroundColor: 'var(--bg-card)', border: '1px solid var(--border)' }}
+      >
+        {!data || data.decisions_count === 0 ? (
+          <div className="text-sm text-center py-2" style={{ color: 'var(--text-muted)' }}>
+            No cost data for {WINDOW_LABELS[window]}
+          </div>
+        ) : (
+          <>
+            {/* Row 1 — headline stats */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div>
+                <div className="text-xs mb-1" style={{ color: 'var(--text-muted)' }}>
+                  Total cost ({WINDOW_LABELS[window]})
+                </div>
+                <div className="text-2xl font-mono tabular" style={{ color: 'var(--text-primary)' }}>
+                  ${totalCost.toFixed(2)}
+                </div>
+                {priorCost > 0 && (
+                  <div className="text-xs mt-0.5 font-mono" style={{ color: deltaColor }}>
+                    {deltaSign}${Math.abs(delta).toFixed(2)} vs prior
+                  </div>
+                )}
+              </div>
+              <div>
+                <div className="text-xs mb-1" style={{ color: 'var(--text-muted)' }}>
+                  Cost / filled trade
+                </div>
+                <div className="text-2xl font-mono tabular" style={{ color: 'var(--text-primary)' }}>
+                  {data.cost_per_filled_trade_usd != null
+                    ? `$${data.cost_per_filled_trade_usd.toFixed(3)}`
+                    : '—'}
+                </div>
+                <div className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
+                  {data.filled_trades_count} trade{data.filled_trades_count !== 1 ? 's' : ''}
+                </div>
+              </div>
+              <div>
+                <div className="text-xs mb-1" style={{ color: 'var(--text-muted)' }}>
+                  Cache hit rate
+                </div>
+                <div
+                  className="text-2xl font-mono tabular"
+                  style={{ color: cacheHitLow ? 'var(--red)' : cacheHitPct != null && cacheHitPct >= 85 ? 'var(--green)' : 'var(--text-primary)' }}
+                >
+                  {cacheHitPct != null ? `${(cacheHitPct).toFixed(1)}%` : '—'}
+                  {cacheHitLow && <span className="text-sm ml-1" title="Cache hit rate below 85%">⚠</span>}
+                </div>
+              </div>
+              <div>
+                <div className="text-xs mb-1" style={{ color: 'var(--text-muted)' }}>
+                  Decisions
+                </div>
+                <div className="text-2xl font-mono tabular" style={{ color: 'var(--text-primary)' }}>
+                  {data.decisions_count}
+                </div>
+              </div>
+            </div>
+
+            {/* Row 2 — cost by outcome */}
+            {outcomes && outcomeTotalCost > 0 && (
+              <div>
+                <div className="text-xs uppercase tracking-wider mb-2 font-semibold" style={{ color: 'var(--text-secondary)' }}>
+                  Cost by outcome
+                </div>
+                <div className="space-y-1">
+                  {(['open', 'close', 'skip'] as const).map((bucket) => {
+                    const b = outcomes[bucket]
+                    const pct = outcomeTotalCost > 0 ? (b.cost_usd / outcomeTotalCost) * 100 : 0
+                    return (
+                      <div key={bucket} className="flex items-center gap-2 text-xs">
+                        <div className="w-12 text-right font-mono" style={{ color: 'var(--text-muted)' }}>
+                          {bucket}
+                        </div>
+                        <div className="flex-1 rounded overflow-hidden" style={{ backgroundColor: 'var(--bg-secondary)', height: 8 }}>
+                          <div
+                            style={{
+                              width: `${pct.toFixed(1)}%`,
+                              height: '100%',
+                              backgroundColor: 'var(--accent)',
+                              borderRadius: 2,
+                            }}
+                          />
+                        </div>
+                        <div className="w-20 text-right font-mono" style={{ color: 'var(--text-secondary)' }}>
+                          ${b.cost_usd.toFixed(4)}
+                        </div>
+                        <div className="w-8 text-right" style={{ color: 'var(--text-muted)' }}>
+                          {b.count}
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
 export function Dashboard() {
   const { data, loading } = useDecisions({ limit: 20 })
   const { accounts: accountList } = useAccounts()
@@ -663,6 +826,8 @@ export function Dashboard() {
       </div>
 
       <FillQualityCard />
+
+      <ClaudeCostsCard />
 
       <DataHealthPanel />
 

@@ -112,6 +112,7 @@ class TradeRecorder:
         research_metadata: dict | None = None,
         skip_gate: str | None = None,
         skip_reason_code: str | None = None,
+        usage_data: dict | None = None,
     ) -> tuple[int | None, str | None]:
         """Insert a decision row, auto-creating a cycle if appropriate.
 
@@ -160,6 +161,15 @@ class TradeRecorder:
                 "research_metadata": research_metadata,
                 "skip_gate": skip_gate,
                 "skip_reason_code": skip_reason_code,
+                # Token usage / cost — None for pre-check skips that never
+                # called Claude.  Populated by callers that have usage_data
+                # from ClaudeAdvisor._last_usage.
+                "model_version": (usage_data or {}).get("model_version"),
+                "input_tokens": (usage_data or {}).get("input_tokens"),
+                "output_tokens": (usage_data or {}).get("output_tokens"),
+                "cache_read_tokens": (usage_data or {}).get("cache_read_tokens"),
+                "cache_creation_tokens": (usage_data or {}).get("cache_creation_tokens"),
+                "estimated_cost_usd": (usage_data or {}).get("estimated_cost_usd"),
             })
             return decision_id, cycle_id
         except Exception:

@@ -19,6 +19,7 @@ from pathlib import Path
 
 import anthropic
 
+import config as _config
 from ai.schemas import get_schema
 from config import settings
 from strategies.wheel_strategy import WheelState
@@ -123,6 +124,53 @@ class ClaudeAdvisor:
         if self.thinking_mode == "off":
             return None
         return {"type": "adaptive", "display": "omitted"}
+
+    def _build_usage_dict(self, usage) -> dict | None:
+        """Build the structured usage dict stored in self._last_usage.
+
+        Merges the raw Anthropic UsageBlock fields with our own typed keys and
+        a cost estimate frozen at the current pricing.  Returns None when
+        ``usage`` is None.
+
+        If the current model version is not in CLAUDE_PRICING the cost is
+        recorded as None and a warning is logged — the advisor never crashes.
+        """
+        if usage is None:
+            return None
+
+        cache_read = getattr(usage, "cache_read_input_tokens", 0) or 0
+        cache_creation = getattr(usage, "cache_creation_input_tokens", 0) or 0
+        input_toks = getattr(usage, "input_tokens", 0) or 0
+        output_toks = getattr(usage, "output_tokens", 0) or 0
+
+        try:
+            pricing = _config.get_pricing(self.model)
+            cost: float | None = round(
+                (input_toks / 1_000_000) * pricing["input_per_mtok"]
+                + (output_toks / 1_000_000) * pricing["output_per_mtok"]
+                + (cache_read / 1_000_000) * pricing["cache_read_per_mtok"]
+                + (cache_creation / 1_000_000) * pricing["cache_write_per_mtok"],
+                6,
+            )
+        except KeyError:
+            logger.warning(
+                "Unknown model version %r — cannot estimate cost; storing NULL",
+                self.model,
+            )
+            cost = None
+
+        return {
+            # Raw Anthropic fields (kept for backward-compat with any reader
+            # that already uses prompt_cache_stats).
+            **usage.model_dump(),
+            # Structured fields consumed by DecisionRepository.
+            "model_version": self.model,
+            "input_tokens": input_toks,
+            "output_tokens": output_toks,
+            "cache_read_tokens": cache_read,
+            "cache_creation_tokens": cache_creation,
+            "estimated_cost_usd": cost,
+        }
 
     def _record_usage(
         self,
@@ -289,7 +337,7 @@ class ClaudeAdvisor:
             logger.exception("Anthropic API call failed")
             raise
 
-        self._last_usage = response.usage.model_dump() if response.usage else None
+        self._last_usage = self._build_usage_dict(response.usage)
         self._record_usage(
             response.usage,
             strategy="wheel",
@@ -378,7 +426,7 @@ class ClaudeAdvisor:
             logger.exception("Anthropic API call failed for spread %s", key)
             return _safe_skip_spread(strategy_type, phase, "Claude API error")
 
-        self._last_usage = response.usage.model_dump() if response.usage else None
+        self._last_usage = self._build_usage_dict(response.usage)
         self._record_usage(
             response.usage,
             strategy=strategy_type,

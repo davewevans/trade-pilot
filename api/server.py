@@ -2678,6 +2678,189 @@ async def orats_usage():
     }
 
 
+# ── Claude cost endpoints ────────────────────────────────────────────────────
+
+_WINDOW_DAYS: dict[str, int | None] = {
+    "7d": 7,
+    "30d": 30,
+    "90d": 90,
+    "all": None,
+}
+
+
+def _claude_costs_from_db(
+    conn: sqlite3.Connection,
+    window: str,
+    strategy_types: list[str] | None,
+) -> dict:
+    """Aggregate cost/token stats from the decisions table for the given window."""
+    days = _WINDOW_DAYS.get(window)
+
+    # Build time-window predicates
+    where_current: list[str] = ["estimated_cost_usd IS NOT NULL"]
+    params_current: list = []
+    if days is not None:
+        where_current.append("timestamp >= datetime('now', ?)")
+        params_current.append(f"-{days} days")
+
+    where_prior: list[str] = ["estimated_cost_usd IS NOT NULL"]
+    params_prior: list = []
+    if days is not None:
+        where_prior.append("timestamp >= datetime('now', ?)")
+        where_prior.append("timestamp < datetime('now', ?)")
+        params_prior.extend([f"-{days * 2} days", f"-{days} days"])
+    else:
+        # "all" — prior window is empty
+        where_prior.append("1=0")
+
+    if strategy_types:
+        ph = ",".join(["?"] * len(strategy_types))
+        where_current.append(f"strategy_type IN ({ph})")
+        params_current.extend(strategy_types)
+        where_prior.append(f"strategy_type IN ({ph})")
+        params_prior.extend(strategy_types)
+
+    clause_c = "WHERE " + " AND ".join(where_current)
+    clause_p = "WHERE " + " AND ".join(where_prior)
+
+    def _agg(clause: str, params: list) -> dict:
+        row = conn.execute(
+            f"""
+            SELECT
+                COUNT(*)                              AS decisions_count,
+                COALESCE(SUM(estimated_cost_usd), 0) AS total_cost_usd,
+                COALESCE(SUM(cache_read_tokens), 0)  AS total_cache_read,
+                COALESCE(SUM(cache_creation_tokens), 0) AS total_cache_creation
+            FROM decisions
+            {clause}
+            """,
+            params,
+        ).fetchone()
+        return dict(row) if row else {}
+
+    cur = _agg(clause_c, params_current)
+    pri = _agg(clause_p, params_prior)
+
+    total_cost = float(cur.get("total_cost_usd") or 0.0)
+    prior_cost = float(pri.get("total_cost_usd") or 0.0)
+    decisions_count = int(cur.get("decisions_count") or 0)
+
+    # Filled-trades count (decisions where action is a trade, not skip/hold)
+    filled_rows = conn.execute(
+        f"""
+        SELECT COUNT(*) AS n FROM decisions
+        {clause_c} AND UPPER(action) NOT IN ('SKIP', 'HOLD')
+        """,
+        params_current,
+    ).fetchone()
+    filled_count = int(filled_rows["n"]) if filled_rows else 0
+    cost_per_filled = (total_cost / filled_count) if filled_count > 0 else None
+
+    # Cost by outcome bucket (open/close/skip mapped from action vocabulary)
+    outcome_rows = conn.execute(
+        f"""
+        SELECT action,
+               COUNT(*)                              AS cnt,
+               COALESCE(SUM(estimated_cost_usd), 0) AS cost_usd
+        FROM decisions
+        {clause_c}
+        GROUP BY UPPER(action)
+        """,
+        params_current,
+    ).fetchall()
+
+    _OPEN_ACTIONS = {"SELL_PUT", "SELL_CALL", "OPEN"}
+    _CLOSE_ACTIONS = {"CLOSE", "BUY_PUT", "BUY_CALL", "ROLL"}
+    _SKIP_ACTIONS = {"SKIP", "HOLD"}
+
+    cost_by_outcome: dict[str, dict] = {
+        "open":  {"count": 0, "cost_usd": 0.0},
+        "close": {"count": 0, "cost_usd": 0.0},
+        "skip":  {"count": 0, "cost_usd": 0.0},
+    }
+    for r in outcome_rows:
+        act = (r["action"] or "").upper()
+        cost_val = float(r["cost_usd"] or 0.0)
+        cnt = int(r["cnt"] or 0)
+        if act in _OPEN_ACTIONS:
+            bucket = "open"
+        elif act in _CLOSE_ACTIONS:
+            bucket = "close"
+        else:
+            bucket = "skip"
+        cost_by_outcome[bucket]["count"] += cnt
+        cost_by_outcome[bucket]["cost_usd"] = round(
+            cost_by_outcome[bucket]["cost_usd"] + cost_val, 6
+        )
+
+    # Cache hit rate
+    total_read = int(cur.get("total_cache_read") or 0)
+    total_creation = int(cur.get("total_cache_creation") or 0)
+    denom_cache = total_read + total_creation
+    cache_hit_rate = round(total_read / denom_cache, 4) if denom_cache > 0 else None
+
+    # By model version
+    model_rows = conn.execute(
+        f"""
+        SELECT model_version,
+               COUNT(*)                              AS cnt,
+               COALESCE(SUM(estimated_cost_usd), 0) AS cost_usd
+        FROM decisions
+        {clause_c} AND model_version IS NOT NULL
+        GROUP BY model_version
+        """,
+        params_current,
+    ).fetchall()
+    by_model: dict[str, dict] = {}
+    for r in model_rows:
+        mv = r["model_version"] or "unknown"
+        by_model[mv] = {"count": int(r["cnt"] or 0), "cost_usd": float(r["cost_usd"] or 0.0)}
+
+    return {
+        "window": window,
+        "total_cost_usd": round(total_cost, 6),
+        "prior_window_cost_usd": round(prior_cost, 6),
+        "decisions_count": decisions_count,
+        "filled_trades_count": filled_count,
+        "cost_per_filled_trade_usd": round(cost_per_filled, 6) if cost_per_filled is not None else None,
+        "cost_by_outcome": cost_by_outcome,
+        "cache_hit_rate": cache_hit_rate,
+        "by_model_version": by_model,
+    }
+
+
+@app.get("/api/claude-costs")
+def claude_costs(
+    window: str = Query(default="7d", pattern="^(7d|30d|90d|all)$"),
+    account: str | None = Query(default=None),
+):
+    """Aggregate Claude API cost and token stats for the requested window."""
+    conn = _open_db()
+    if conn is None:
+        return {
+            "window": window,
+            "total_cost_usd": 0.0,
+            "prior_window_cost_usd": 0.0,
+            "decisions_count": 0,
+            "filled_trades_count": 0,
+            "cost_per_filled_trade_usd": None,
+            "cost_by_outcome": {
+                "open":  {"count": 0, "cost_usd": 0.0},
+                "close": {"count": 0, "cost_usd": 0.0},
+                "skip":  {"count": 0, "cost_usd": 0.0},
+            },
+            "cache_hit_rate": None,
+            "by_model_version": {},
+        }
+    try:
+        return _claude_costs_from_db(conn, window, _strategy_filter(account))
+    except Exception:
+        logger.exception("claude-costs query failed")
+        return JSONResponse(status_code=500, content={"error": "query failed"})
+    finally:
+        conn.close()
+
+
 # ── Token usage endpoints ────────────────────────────────────────────────────
 
 

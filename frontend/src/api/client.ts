@@ -1,5 +1,6 @@
 import type {
   CircuitBreaker,
+  ClaudeCostsResponse,
   DecisionStats,
   DecisionsResponse,
   EquityHistory,
@@ -384,6 +385,13 @@ export const api = {
 
   oratsUsage: (): Promise<ORATSUsageResponse> =>
     get<ORATSUsageResponse>('/api/orats/usage'),
+
+  claudeCosts: (window: '7d' | '30d' | '90d' | 'all' = '7d', account?: string): Promise<ClaudeCostsResponse> => {
+    const q = new URLSearchParams()
+    q.set('window', window)
+    if (account) q.set('account', account)
+    return get<ClaudeCostsResponse>(`/api/claude-costs?${q.toString()}`)
+  },
 
   haltStatus: () => get<HaltInfo>('/api/halt-status'),
 

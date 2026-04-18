@@ -503,3 +503,28 @@ SCHEDULE: list[dict] = [
 ]
 
 settings = Settings()
+
+
+# ── Claude API pricing ────────────────────────────────────────────────────────
+# Rates are per million tokens (USD) as of 2026-04.
+# IMPORTANT: Never modify existing entries — historical cost rows were written
+# using the rates that were in effect at the time of write.  Add new entries for
+# new model versions; leave old ones untouched.
+CLAUDE_PRICING: dict[str, dict[str, float]] = {
+    "claude-sonnet-4-6": {
+        "input_per_mtok": 3.00,
+        "output_per_mtok": 15.00,
+        "cache_read_per_mtok": 0.30,
+        # 1-hour ephemeral cache write (the TTL used by claude_advisor.py)
+        "cache_write_per_mtok": 6.00,
+    },
+}
+
+
+def get_pricing(model_version: str) -> dict:
+    """Return pricing dict for a model.
+
+    Raises:
+        KeyError: if *model_version* is not in CLAUDE_PRICING.
+    """
+    return CLAUDE_PRICING[model_version]
