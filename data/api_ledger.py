@@ -53,6 +53,45 @@ class OratsQuotaExceeded(Exception):
         self.usage = usage
 
 
+class OratsDisabled(Exception):
+    """Raised when the ORATS kill switch is active (ORATS_DISABLED.lock present).
+
+    Callers should treat this identically to :class:`OratsQuotaExceeded` —
+    skip the symbol/trade without retrying.
+    """
+
+
+def _orats_disabled_path() -> Path:
+    """Return the path to the ORATS kill-switch lock file."""
+    from config import settings  # late import
+    return settings.DATA_DIR / "ORATS_DISABLED.lock"
+
+
+def is_orats_disabled() -> bool:
+    """Return True if the ORATS kill switch is currently active."""
+    return _orats_disabled_path().exists()
+
+
+def disable_orats(reason: str = "") -> None:
+    """Activate the ORATS kill switch by writing the lock file.
+
+    Args:
+        reason: Optional human-readable reason, written into the lock file.
+    """
+    path = _orats_disabled_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(reason or "disabled via admin endpoint", encoding="utf-8")
+    logger.warning("ORATS kill switch ACTIVATED: %s", reason or "(no reason given)")
+
+
+def enable_orats() -> None:
+    """Deactivate the ORATS kill switch by removing the lock file."""
+    path = _orats_disabled_path()
+    if path.exists():
+        path.unlink()
+    logger.info("ORATS kill switch DEACTIVATED")
+
+
 class ApiLedger:
     """Per-process SQLite ledger for API call tracking and cap enforcement.
 
@@ -112,6 +151,13 @@ class ApiLedger:
             symbol:    Underlying ticker, or None.
             job_name:  Value of ``TRADE_PILOT_JOB_NAME`` env var.
         """
+        # Kill switch: instant block regardless of caps
+        if api.startswith("orats") and is_orats_disabled():
+            raise OratsDisabled(
+                f"ORATS kill switch is active — {api} calls are disabled. "
+                "Remove DATA_DIR/ORATS_DISABLED.lock or POST /api/admin/orats/enable to re-enable."
+            )
+
         caps = self._caps_for(api)
         if caps is None:
             return  # not a capped API

@@ -532,6 +532,43 @@ def source_health():
     return {"sources": json.loads(path.read_text(encoding="utf-8"))}
 
 
+_ORATS_DISABLED_PATH = DATA_DIR / "ORATS_DISABLED.lock"
+
+
+@app.post("/api/admin/orats/disable")
+async def admin_orats_disable(request: Request):
+    """Activate the ORATS kill switch — all ORATS calls will raise OratsDisabled."""
+    try:
+        body = await request.json()
+        reason = (body or {}).get("reason", "") if isinstance(body, dict) else ""
+    except Exception:
+        reason = ""
+    from data.api_ledger import disable_orats
+    disable_orats(reason)
+    return {"status": "disabled", "reason": reason or "no reason given"}
+
+
+@app.post("/api/admin/orats/enable")
+def admin_orats_enable():
+    """Deactivate the ORATS kill switch — ORATS calls resume normally."""
+    from data.api_ledger import enable_orats
+    enable_orats()
+    return {"status": "enabled"}
+
+
+@app.get("/api/admin/orats/status")
+def admin_orats_status():
+    """Return the current ORATS kill-switch state."""
+    disabled = _ORATS_DISABLED_PATH.exists()
+    reason = ""
+    if disabled:
+        try:
+            reason = _ORATS_DISABLED_PATH.read_text(encoding="utf-8").strip()
+        except Exception:
+            pass
+    return {"disabled": disabled, "reason": reason}
+
+
 @app.post("/api/admin/reset-circuit-breaker")
 async def reset_circuit_breaker():
     """Reset the circuit breaker — delete lock file and state."""
