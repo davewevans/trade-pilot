@@ -496,6 +496,13 @@ def api_usage():
     return data
 
 
+@app.get("/api/schedule")
+def api_schedule():
+    """Return the bot's job schedule from the canonical SCHEDULE constant in config.py."""
+    from config import SCHEDULE
+    return SCHEDULE
+
+
 @app.get("/api/portfolio")
 def portfolio():
     data = _read_json(SNAPSHOTS / "portfolio.json")

@@ -96,48 +96,59 @@ def _cleanup_orats_cache() -> None:
 
 
 def register_jobs() -> None:
-    """Register every job with the ``schedule`` library."""
+    """Register every job with the ``schedule`` library.
 
-    # Weekday jobs — all times ET
-    # NOTE: market_open runs at 10:00 instead of 9:30 because:
-    # - Options bid-ask spreads are 2-3x wider in the first 30 minutes
-    # - Quoted Greeks (especially delta) are unreliable at the open
-    # - Limit orders based on mid-price at 9:30 are more likely to be
-    #   unfavorable compared to 10:00 pricing.
-    # The wheel and spread strategies all use limit orders at the mid,
-    # so accurate mid-price matters for fill quality.
-    weekday_jobs: list[tuple[str, object, str]] = [
-        ("06:00", pre_market.run, "pre_market"),
-        ("10:00", market_open.run, "market_open"),
-        ("10:45", position_check.run, "position_check"),
-        ("11:30", position_check.run, "position_check"),
-        ("12:30", position_check.run, "position_check"),
-        ("14:00", position_check.run, "position_check"),
-        ("15:00", expiry_guard.run, "expiry_guard"),
-        ("15:15", pre_close.run, "pre_close"),
-        ("16:00", market_close.run, "market_close"),
-        ("16:30", post_market.run, "post_market"),
-    ]
+    Job times and metadata live in ``config.SCHEDULE`` — the single source of
+    truth for the bot's schedule.  This function maps job names to their
+    callables and wires them up; it should not contain any hardcoded times.
+    """
+    from config import SCHEDULE
 
-    for time_str, fn, name in weekday_jobs:
-        schedule.every().day.at(time_str, tz=ET).do(
-            _weekday_run, job_fn=fn, job_name=name,
-        )
+    _JOB_FN: dict[str, object] = {
+        "pre_market": pre_market.run,
+        "market_open": market_open.run,
+        "position_check": position_check.run,
+        "expiry_guard": expiry_guard.run,
+        "pre_close": pre_close.run,
+        "market_close": market_close.run,
+        "post_market": post_market.run,
+        "portfolio_refresh": portfolio_refresh.run,
+        "weekly_report": weekly_report.run,
+        "orats_cache_cleanup": _cleanup_orats_cache,
+    }
 
-    # Portfolio refresh — every 5 minutes during market hours
-    schedule.every(5).minutes.do(
-        _weekday_run, job_fn=portfolio_refresh.run, job_name="portfolio_refresh",
-    )
+    for entry in SCHEDULE:
+        job_name = entry["job"]
+        fn = _JOB_FN.get(job_name)
+        if fn is None:
+            logger.warning(
+                "register_jobs: no callable mapped for job %r — skipping", job_name
+            )
+            continue
 
-    # Weekly report — Sunday 6:00 PM ET
-    schedule.every().sunday.at("18:00", tz=ET).do(
-        safe_run, job_fn=weekly_report.run, job_name="weekly_report",
-    )
+        job_type = entry["type"]
+        tz = entry.get("tz", ET)
 
-    # ORATS cache cleanup — daily at 5:00 AM ET
-    schedule.every().day.at("05:00", tz=ET).do(
-        safe_run, job_fn=_cleanup_orats_cache, job_name="orats_cache_cleanup",
-    )
+        if job_type == "weekday":
+            schedule.every().day.at(entry["time"], tz=tz).do(
+                _weekday_run, job_fn=fn, job_name=job_name,
+            )
+        elif job_type == "interval":
+            schedule.every(entry["interval_minutes"]).minutes.do(
+                _weekday_run, job_fn=fn, job_name=job_name,
+            )
+        elif job_type == "weekly":
+            getattr(schedule.every(), entry["day"]).at(entry["time"], tz=tz).do(
+                safe_run, job_fn=fn, job_name=job_name,
+            )
+        elif job_type == "daily":
+            schedule.every().day.at(entry["time"], tz=tz).do(
+                safe_run, job_fn=fn, job_name=job_name,
+            )
+        else:
+            logger.warning(
+                "register_jobs: unknown schedule type %r for job %r", job_type, job_name
+            )
 
 
 # ── standalone entry (prefer main.py instead) ──────────────

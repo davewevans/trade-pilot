@@ -340,4 +340,165 @@ class Settings:
         return value
 
 
+# ── Canonical schedule — single source of truth ───────────────────────────────
+# scheduler.py iterates over this to register jobs with the ``schedule`` library.
+# The API exposes this via GET /api/schedule so the frontend can render it
+# dynamically without duplicating times in component code.
+#
+# Fields per entry:
+#   job              — matches the key in scheduler.py's _JOB_FN mapping
+#   type             — "weekday" | "interval" | "weekly" | "daily"
+#   time             — HH:MM in the tz timezone (omitted for interval type)
+#   tz               — IANA timezone string (all non-interval entries use ET)
+#   interval_minutes — minutes between runs (interval type only)
+#   day              — day name, e.g. "sunday" (weekly type only)
+#   label            — short title shown in the dashboard schedule section
+#   description      — full prose description of what the job does
+SCHEDULE: list[dict] = [
+    # ── Weekday jobs (Monday–Friday, America/New_York) ──────────────────────
+    {
+        "job": "pre_market",
+        "type": "weekday",
+        "time": "06:00",
+        "tz": "America/New_York",
+        "label": "Pre-market data fetch",
+        "description": (
+            "FRED macro data, VIX, Fear & Greed index, and the Finnhub earnings calendar. "
+            "Regime classification runs here so the rest of the day's jobs see current conditions."
+        ),
+    },
+    {
+        "job": "market_open",
+        "type": "weekday",
+        "time": "10:00",
+        "tz": "America/New_York",
+        "label": "Entry evaluation",
+        "description": (
+            "The bot scans the market, builds context for each watchlist symbol, and decides "
+            "whether to open new positions. This is the only time new trades are opened. "
+            "Runs at 10:00 rather than 9:30 — options bid-ask spreads are 2-3x wider and "
+            "quoted Greeks are unreliable in the first 30 minutes after the equity open."
+        ),
+    },
+    {
+        "job": "position_check",
+        "type": "weekday",
+        "time": "10:45",
+        "tz": "America/New_York",
+        "label": "First position check",
+        "description": (
+            "For every open position, the bot fetches current option prices and evaluates: "
+            "has the profit target been hit? Has delta doubled? Is there a risk that needs attention?"
+        ),
+    },
+    {
+        "job": "position_check",
+        "type": "weekday",
+        "time": "11:30",
+        "tz": "America/New_York",
+        "label": "Late-morning check",
+        "description": (
+            "Same evaluation as 10:45 — re-checks all open positions with updated prices."
+        ),
+    },
+    {
+        "job": "position_check",
+        "type": "weekday",
+        "time": "12:30",
+        "tz": "America/New_York",
+        "label": "Midday check",
+        "description": (
+            "Midday management pass. Same evaluation as earlier checks with updated prices."
+        ),
+    },
+    {
+        "job": "position_check",
+        "type": "weekday",
+        "time": "14:00",
+        "tz": "America/New_York",
+        "label": "Afternoon check",
+        "description": (
+            "Last management pass before the end-of-day sequence begins."
+        ),
+    },
+    {
+        "job": "expiry_guard",
+        "type": "weekday",
+        "time": "15:00",
+        "tz": "America/New_York",
+        "label": "Expiry guard",
+        "description": (
+            "Safety sweep specifically for positions expiring today. Any short option that is "
+            "in the money gets closed immediately to avoid surprise assignment."
+        ),
+    },
+    {
+        "job": "pre_close",
+        "type": "weekday",
+        "time": "15:15",
+        "tz": "America/New_York",
+        "label": "Pre-close observation",
+        "description": (
+            "Scans for positions within 7 DTE and logs warnings. "
+            "No new orders are placed this close to market close."
+        ),
+    },
+    {
+        "job": "market_close",
+        "type": "weekday",
+        "time": "16:00",
+        "tz": "America/New_York",
+        "label": "Market close",
+        "description": (
+            "End-of-day sequence: reconcile orders, update position states, "
+            "write the daily report."
+        ),
+    },
+    {
+        "job": "post_market",
+        "type": "weekday",
+        "time": "16:30",
+        "tz": "America/New_York",
+        "label": "Post-market cleanup",
+        "description": (
+            "Post-market cleanup: snapshot archival, NTA event processing, fill quality logging."
+        ),
+    },
+    # ── Interval job (weekdays only, checked every 5 minutes) ───────────────
+    {
+        "job": "portfolio_refresh",
+        "type": "interval",
+        "interval_minutes": 5,
+        "label": "Portfolio refresh",
+        "description": (
+            "Refreshes dashboard data every 5 minutes during market hours: "
+            "equity balances, open positions, circuit breaker status, and spread reconciliation."
+        ),
+    },
+    # ── Weekly job ───────────────────────────────────────────────────────────
+    {
+        "job": "weekly_report",
+        "type": "weekly",
+        "day": "sunday",
+        "time": "18:00",
+        "tz": "America/New_York",
+        "label": "Weekly report",
+        "description": (
+            "Generates and emails the weekly performance summary: "
+            "P&L, win rate, strategy breakdown, and circuit breaker events."
+        ),
+    },
+    # ── Daily maintenance job ────────────────────────────────────────────────
+    {
+        "job": "orats_cache_cleanup",
+        "type": "daily",
+        "time": "05:00",
+        "tz": "America/New_York",
+        "label": "ORATS cache cleanup",
+        "description": (
+            "Expires stale ORATS cache entries from SQLite to keep the cache within quota limits."
+        ),
+    },
+]
+
 settings = Settings()

@@ -14,7 +14,7 @@ const GROUPS: Group[] = [
       },
       {
         q: 'How often does the bot run?',
-        a: 'The scheduler runs four jobs each trading day: pre-market (6:00 AM ET) for data validation and setup, market open (9:30 AM ET) for new position entry evaluation, and position checks at 10:00 AM, 12:00 PM, and 2:00 PM ET to manage open positions.',
+        a: 'The scheduler runs several jobs each trading day: pre-market (6:00 AM ET) for data fetch and regime classification, market open (10:00 AM ET) for new position entry evaluation, position checks at 10:45 AM, 11:30 AM, 12:30 PM, and 2:00 PM ET to manage open positions, expiry guard at 3:00 PM, and pre-close observation at 3:15 PM. See the Life of a Trade page for the full schedule.',
       },
       {
         q: 'What does "SKIP" mean in the decisions log?',
