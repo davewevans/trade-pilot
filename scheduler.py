@@ -24,6 +24,7 @@ from jobs import (
     expiry_guard,
     market_close,
     market_open,
+    monthly_evaluation,
     portfolio_refresh,
     position_check,
     post_market,
@@ -104,6 +105,21 @@ def _weekday_run(job_fn, job_name: str) -> None:
 # ── schedule registration ──────────────────────────────────
 
 
+def _monthly_eval_wrapper() -> None:
+    """Run monthly_evaluation.run() only on the 1st of the month (ET).
+
+    The job is registered as a daily 05:00 ET trigger so the schedule library
+    fires it every day; this wrapper gate keeps it a no-op on days 2–31.
+    """
+    now = datetime.now(_ET_ZONE)
+    if now.day != 1:
+        logger.debug(
+            "monthly_evaluation: skipping — today is day %d, not the 1st", now.day
+        )
+        return
+    monthly_evaluation.run()
+
+
 def _cleanup_orats_cache() -> None:
     from data.orats_cache import ORATSCache
     cache = ORATSCache()
@@ -130,6 +146,7 @@ def register_jobs() -> None:
         "post_market": post_market.run,
         "portfolio_refresh": portfolio_refresh.run,
         "weekly_report": weekly_report.run,
+        "monthly_evaluation": _monthly_eval_wrapper,
         "orats_cache_cleanup": _cleanup_orats_cache,
     }
 

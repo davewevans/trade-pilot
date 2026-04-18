@@ -31,7 +31,7 @@ JOB_MODULES = {
 }
 
 # Jobs handled inline (not via a module's run()):
-_INLINE_JOBS = {"score_programmatic", "score_judge"}
+_INLINE_JOBS = {"score_programmatic", "score_judge", "monthly_evaluation"}
 
 
 # ── CLI ────────────────────────────────��────────────────────
@@ -62,6 +62,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--end-date",
         help="End date for score_programmatic job (YYYY-MM-DD, defaults to today)",
+    )
+    parser.add_argument(
+        "--month",
+        help=(
+            "Target month for monthly_evaluation job (YYYY-MM). "
+            "Omit to use the prior calendar month. "
+            "Use this to backfill or regenerate a specific month."
+        ),
     )
     parser.add_argument(
         "--symbol",
@@ -501,6 +509,31 @@ def _run_score_judge(args, settings) -> None:
     db.close()
 
 
+# ── monthly_evaluation inline job ───────────────────────────
+
+
+def _run_monthly_evaluation(args, settings) -> None:
+    """Run the monthly evaluation pipeline for a specific or prior month.
+
+    Controlled by EVALUATION_AUTOMATION_ENABLED feature flag.  When the flag
+    is off the job logs an info message and exits cleanly without error.
+
+    Pass --month YYYY-MM to backfill or regenerate a specific month.
+    Regeneration uses an UPSERT pattern so no duplicate rows are created.
+    """
+    if not settings.EVALUATION_AUTOMATION_ENABLED:
+        logger.info(
+            "monthly_evaluation: EVALUATION_AUTOMATION_ENABLED is false — "
+            "nothing to do. Set EVALUATION_AUTOMATION_ENABLED=true to enable."
+        )
+        return
+
+    month = getattr(args, "month", None)
+    from jobs.monthly_evaluation import run as _eval_run
+
+    _eval_run(month=month)
+
+
 # ── main ────────────────────────────────────────────────────
 
 
@@ -600,6 +633,8 @@ def main() -> None:
                 _run_score_programmatic(args, settings)
             elif args.job == "score_judge":
                 _run_score_judge(args, settings)
+            elif args.job == "monthly_evaluation":
+                _run_monthly_evaluation(args, settings)
             else:
                 module = importlib.import_module(JOB_MODULES[args.job])
                 module.run()

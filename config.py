@@ -220,6 +220,15 @@ class Settings:
         self.EVALUATION_JUDGE_ENABLED: bool = (
             os.getenv("EVALUATION_JUDGE_ENABLED", "false").lower() == "true"
         )
+
+        # ── Monthly evaluation automation ──────────────────────
+        # When true, the monthly_evaluation job runs the full pipeline on the
+        # 1st of each month at 05:00 ET and fires an ntfy alert when flags are
+        # detected.  Off by default; turn on once scoring flags are stable and
+        # the rubric has been reviewed in production.
+        self.EVALUATION_AUTOMATION_ENABLED: bool = (
+            os.getenv("EVALUATION_AUTOMATION_ENABLED", "false").lower() == "true"
+        )
         self.JUDGE_MODEL: str = os.getenv("JUDGE_MODEL", "claude-opus-4-7")
         self.JUDGE_RATE_LIMIT_MS: int = int(os.getenv("JUDGE_RATE_LIMIT_MS", "200"))
 
@@ -516,6 +525,20 @@ SCHEDULE: list[dict] = [
         "label": "ORATS cache cleanup",
         "description": (
             "Expires stale ORATS cache entries from SQLite to keep the cache within quota limits."
+        ),
+    },
+    # ── Monthly evaluation (fires daily at 05:00; runs only on the 1st) ──────
+    {
+        "job": "monthly_evaluation",
+        "type": "daily",
+        "time": "05:00",
+        "tz": "America/New_York",
+        "label": "Monthly evaluation",
+        "description": (
+            "Runs the full rubric evaluation pipeline for the prior calendar month on "
+            "the 1st of each month at 05:00 ET.  Fires on schedule every day but "
+            "returns immediately unless today is the 1st (see _monthly_eval_wrapper).  "
+            "Requires EVALUATION_AUTOMATION_ENABLED=true."
         ),
     },
 ]

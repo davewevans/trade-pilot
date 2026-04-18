@@ -42,6 +42,43 @@ class MonthlyEvaluationsRepository:
         self._conn.commit()
         return int(cur.lastrowid)
 
+    @db_retry()
+    def upsert(self, eval_dict: dict) -> int:
+        """Insert or update the monthly_evaluations row for ``month``.
+
+        On regeneration, scores/flags/timestamp are overwritten but
+        ``reviewed_at`` and ``action_note`` are preserved so an operator's
+        review note is not lost when re-running a month.
+
+        Returns the row id.
+        """
+        existing = self.get_by_month(eval_dict["month"])
+        if existing:
+            self._conn.execute(
+                """
+                UPDATE monthly_evaluations
+                   SET decisions_evaluated    = ?,
+                       avg_score              = ?,
+                       pct_pass               = ?,
+                       score_distribution_json = ?,
+                       flags_json             = ?,
+                       created_at             = ?
+                 WHERE month = ?
+                """,
+                (
+                    eval_dict.get("decisions_evaluated", 0),
+                    eval_dict.get("avg_score"),
+                    eval_dict.get("pct_pass"),
+                    eval_dict.get("score_distribution_json"),
+                    eval_dict.get("flags_json"),
+                    eval_dict["created_at"],
+                    eval_dict["month"],
+                ),
+            )
+            self._conn.commit()
+            return int(existing["id"])
+        return self.insert(eval_dict)
+
     def get_by_month(self, month: str) -> dict | None:
         """Return the evaluation row for ``month`` (YYYY-MM), or None."""
         row = self._conn.execute(
