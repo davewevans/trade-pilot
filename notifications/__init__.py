@@ -2,7 +2,8 @@
 Notification layer. Severity-routed, pluggable backends.
 
 severity:
-  "critical" → ntfy (immediate) + JSONL append
+  "critical" → ntfy priority 5 (breaks DND) + JSONL append
+  "high"     → ntfy priority 4 + JSONL append
   "warning"  → JSONL append only
   "info"     → JSONL append only
 
@@ -32,7 +33,7 @@ def notify(severity: str, title: str, message: str, *, tags: list[str] | None = 
     except Exception:
         pass  # digest failure must not propagate
 
-    if severity == "critical":
+    if severity in ("critical", "high"):
         # Suppress ntfy push notifications on local dev machines so only the
         # production instance (Render) sends phone alerts.
         # Set ALLOW_LOCAL_NOTIFY=1 to override during local testing.
@@ -41,7 +42,8 @@ def notify(severity: str, title: str, message: str, *, tags: list[str] | None = 
         _notify_allowed = not _is_local or bool(__import__("os").environ.get("ALLOW_LOCAL_NOTIFY"))
         if _notify_allowed:
             try:
-                NtfyBackend().send(title, message, tags or [], priority=5)
+                _priority = 5 if severity == "critical" else 4
+                NtfyBackend().send(title, message, tags or [], priority=_priority)
             except Exception:
                 pass  # ntfy failure must not propagate
         else:

@@ -75,6 +75,22 @@ def safe_run(job_fn, job_name: str) -> None:
     else:
         elapsed = time.monotonic() - t0
         logger.info("=== COMPLETED: %s in %.1fs ===", job_name, elapsed)
+        # Write heartbeat so the API can detect scheduler staleness.
+        try:
+            import json as _json
+            from config import settings as _cfg
+            _hb = {
+                "ts": datetime.now(ZoneInfo("UTC")).isoformat(timespec="seconds"),
+                "job": job_name,
+                "elapsed_s": round(elapsed, 1),
+            }
+            _hb_path = _cfg.DATA_DIR / "heartbeat.json"
+            _tmp = _hb_path.with_suffix(".tmp")
+            _tmp.write_text(_json.dumps(_hb, indent=2), encoding="utf-8")
+            import os as _os
+            _os.replace(str(_tmp), str(_hb_path))
+        except Exception:
+            pass  # heartbeat write failure must not break the scheduler
 
 
 def _weekday_run(job_fn, job_name: str) -> None:

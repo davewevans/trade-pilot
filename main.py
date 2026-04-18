@@ -136,12 +136,33 @@ def execute_decision(broker, decision: dict) -> dict | None:
                         )
                     except (TypeError, ValueError):
                         pass
+                try:
+                    if settings.ALERT_FILLS:
+                        from notifications.fill_buffer import record as _record_fill
+                        _record_fill(
+                            action=decision.get("action", ""),
+                            symbol=decision.get("symbol", ""),
+                            fill_price=fill_price,
+                            limit_price=limit_price_used,
+                        )
+                except Exception:
+                    pass
             elif status in ("canceled", "cancelled", "rejected"):
                 logger.warning(
                     "Order %s was %s — trade did NOT execute. Reason: %s",
                     order_id, status,
                     order_status.get("reject_reason", "unknown"),
                 )
+                try:
+                    from notifications import notify as _notify
+                    _notify(
+                        "high",
+                        f"Order rejected: {decision.get('action', '')} {decision.get('symbol', '')}",
+                        f"Status: {status}. Reason: {order_status.get('reject_reason', 'unknown')}",
+                        tags=["rejection"],
+                    )
+                except Exception:
+                    pass
             elif status in ("new", "accepted", "pending_new", "partially_filled"):
                 logger.info(
                     "Order %s still %s after 30s — "

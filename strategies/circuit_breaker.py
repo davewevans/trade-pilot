@@ -275,9 +275,17 @@ class CircuitBreaker:
                     )
                 elif status == "YELLOW":
                     notify(
-                        "warning",
+                        "high",
                         "Circuit breaker YELLOW",
                         f"Daily P&L: {round(daily_pnl_pct, 1):.1f}%",
+                        tags=["circuit_breaker"],
+                    )
+                elif status == "GREEN" and prev_status in ("RED", "YELLOW"):
+                    notify(
+                        "high",
+                        "Circuit breaker recovered: GREEN",
+                        f"Daily P&L: {round(daily_pnl_pct, 1):.1f}%, "
+                        f"Drawdown: {round(drawdown_pct, 1):.1f}%",
                         tags=["circuit_breaker"],
                     )
             except Exception:

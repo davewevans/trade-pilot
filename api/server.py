@@ -300,9 +300,128 @@ def _open_db() -> sqlite3.Connection | None:
         return None
 
 
+_HEARTBEAT_PATH = DATA_DIR / "heartbeat.json"
+_HB_CHECK_STATE_PATH = DATA_DIR / "heartbeat_check_state.json"
+
+# Market-hours window for heartbeat checks (America/New_York).
+_HB_MARKET_OPEN_H = 6       # 6:00 AM ET
+_HB_MARKET_CLOSE_H = 16     # 4:00 PM ET
+_HB_MARKET_CLOSE_M = 30     # :30
+_HB_STALE_MINUTES = 60      # alert if no heartbeat for this long
+_HB_RESUPPRESS_MINUTES = 120  # don't re-alert within this window
+
+
+async def _heartbeat_watcher() -> None:
+    """Background task: check scheduler heartbeat freshness every 2 min.
+
+    Only active during market hours (6 AM – 4:30 PM ET). Fires a "high"
+    notification when the heartbeat file is stale, then suppresses
+    re-alerts for 2 hours.
+    """
+    import asyncio
+    from zoneinfo import ZoneInfo
+
+    _ET = ZoneInfo("America/New_York")
+
+    def _load_check_state() -> dict:
+        try:
+            if _HB_CHECK_STATE_PATH.exists():
+                return json.loads(_HB_CHECK_STATE_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+        return {}
+
+    def _save_check_state(state: dict) -> None:
+        try:
+            _HB_CHECK_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+            tmp = _HB_CHECK_STATE_PATH.with_suffix(".tmp")
+            tmp.write_text(json.dumps(state, indent=2), encoding="utf-8")
+            os.replace(str(tmp), str(_HB_CHECK_STATE_PATH))
+        except Exception:
+            pass
+
+    while True:
+        await asyncio.sleep(120)  # check every 2 min
+        try:
+            now_et = datetime.now(_ET)
+            in_window = (
+                now_et.weekday() < 5  # Mon–Fri
+                and (
+                    now_et.hour > _HB_MARKET_OPEN_H
+                    or (now_et.hour == _HB_MARKET_OPEN_H)
+                )
+                and (
+                    now_et.hour < _HB_MARKET_CLOSE_H
+                    or (now_et.hour == _HB_MARKET_CLOSE_H and now_et.minute <= _HB_MARKET_CLOSE_M)
+                )
+            )
+            if not in_window:
+                continue
+
+            if not _HEARTBEAT_PATH.exists():
+                continue  # scheduler hasn't run yet; nothing to check
+
+            try:
+                hb = json.loads(_HEARTBEAT_PATH.read_text(encoding="utf-8"))
+                hb_ts_str = hb.get("ts") or hb.get("timestamp") or ""
+                hb_ts = datetime.fromisoformat(hb_ts_str)
+                if hb_ts.tzinfo is None:
+                    hb_ts = hb_ts.replace(tzinfo=timezone.utc)
+            except Exception:
+                continue
+
+            now_utc = datetime.now(timezone.utc)
+            age_minutes = (now_utc - hb_ts).total_seconds() / 60
+
+            if age_minutes < _HB_STALE_MINUTES:
+                # Heartbeat is fresh — clear any previous alert state.
+                state = _load_check_state()
+                if state.get("alerted"):
+                    state["alerted"] = False
+                    _save_check_state(state)
+                continue
+
+            # Heartbeat is stale — check suppression window.
+            state = _load_check_state()
+            last_alert_str = state.get("last_alert_ts") or ""
+            if last_alert_str:
+                try:
+                    last_alert = datetime.fromisoformat(last_alert_str)
+                    if last_alert.tzinfo is None:
+                        last_alert = last_alert.replace(tzinfo=timezone.utc)
+                    if (now_utc - last_alert).total_seconds() / 60 < _HB_RESUPPRESS_MINUTES:
+                        continue  # still within suppression window
+                except Exception:
+                    pass
+
+            try:
+                from notifications import notify
+                notify(
+                    "high",
+                    "Scheduler heartbeat stale",
+                    f"No heartbeat for {int(age_minutes)} min. "
+                    "Scheduler may be down or stuck.",
+                    tags=["heartbeat"],
+                )
+            except Exception:
+                pass
+
+            state["alerted"] = True
+            state["last_alert_ts"] = now_utc.isoformat(timespec="seconds")
+            _save_check_state(state)
+            logger.warning(
+                "Heartbeat stale: last seen %s min ago at %s",
+                int(age_minutes), hb_ts_str,
+            )
+        except Exception:
+            logger.debug("_heartbeat_watcher tick error", exc_info=True)
+
+
 @asynccontextmanager
 async def lifespan(application: FastAPI):
     """Log snapshot directory status on startup."""
+    import asyncio
+
     logger.info("Snapshot directory: %s", SNAPSHOTS)
     for name in ("portfolio.json", "context.json", "circuit_breakers.json", "decisions.jsonl"):
         p = SNAPSHOTS / name
@@ -318,7 +437,16 @@ async def lifespan(application: FastAPI):
     except Exception as e:
         logger.warning("API startup snapshot failed (non-fatal): %s", e)
 
+    # Start background heartbeat staleness checker.
+    _hb_task = asyncio.create_task(_heartbeat_watcher())
+
     yield
+
+    _hb_task.cancel()
+    try:
+        await _hb_task
+    except asyncio.CancelledError:
+        pass
 
 
 app = FastAPI(title="trade-pilot", version="0.1.0", lifespan=lifespan)
@@ -543,16 +671,35 @@ async def halt_bot(request: Request):
 
     _append_halt_audit("halt", "dashboard", reason)
     logger.warning("Bot halted via dashboard. Reason: %r", reason)
+    try:
+        from notifications import notify
+        notify(
+            "high",
+            "Bot HALTED via dashboard",
+            reason or "No reason given",
+            tags=["halt"],
+        )
+    except Exception:
+        pass
     return JSONResponse(content=_read_halt_info())
 
 
 @app.post("/api/resume")
 def resume_bot():
     """Delete HALTED.lock and log the event. Idempotent if already running."""
+    # Capture reason before deleting the lock.
+    _halt_info = _read_halt_info()
     _append_halt_audit("resume", "dashboard")
     if LOCK_PATH.exists():
         LOCK_PATH.unlink()
         logger.info("Bot resumed via dashboard.")
+    try:
+        from notifications import notify
+        _reason = _halt_info.get("reason") or ""
+        _msg = f"Reason for halt was: {_reason}" if _reason else "No halt reason recorded."
+        notify("high", "Bot RESUMED via dashboard", _msg, tags=["resume"])
+    except Exception:
+        pass
     return {"halted": False}
 
 
