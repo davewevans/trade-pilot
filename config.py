@@ -151,6 +151,35 @@ class Settings:
             os.getenv("RESEARCH_REMOVE_MIN_WEEKS_OBSERVED", "12")
         )
 
+        # ── ORATS quota protection ─────────────────────────────
+        # Monthly caps (ORATS plan: 20,000/month; 2,000-call buffer reserved)
+        self.ORATS_HISTORICAL_MONTHLY_CAP: int = int(
+            os.getenv("ORATS_HISTORICAL_MONTHLY_CAP", "14000")
+        )
+        self.ORATS_LIVE_MONTHLY_CAP: int = int(
+            os.getenv("ORATS_LIVE_MONTHLY_CAP", "4000")
+        )
+        # Daily caps (historical is bursty so the whole monthly budget is
+        # usable in one day; live is capped at ~2× baseline ~350-525/day)
+        self.ORATS_HISTORICAL_DAILY_CAP: int = int(
+            os.getenv("ORATS_HISTORICAL_DAILY_CAP", "14000")
+        )
+        self.ORATS_LIVE_DAILY_CAP: int = int(
+            os.getenv("ORATS_LIVE_DAILY_CAP", "700")
+        )
+        # Per-minute caps (reduced from historical 900 to leave headroom)
+        self.ORATS_HISTORICAL_MINUTE_CAP: int = int(
+            os.getenv("ORATS_HISTORICAL_MINUTE_CAP", "600")
+        )
+        self.ORATS_LIVE_MINUTE_CAP: int = int(
+            os.getenv("ORATS_LIVE_MINUTE_CAP", "120")
+        )
+        # Set to 1 to override pre-flight abort when sweep estimate > 80% of
+        # remaining monthly budget (see jobs/weekly_research.py pre-flight check).
+        self.ORATS_ALLOW_BUDGET_HEAVY: int = int(
+            os.getenv("ORATS_ALLOW_BUDGET_HEAVY", "0")
+        )
+
         # ── Notifications ──────────────────────────────────────
         # ntfy.sh topic name. When unset, ntfy notifications are silently dropped.
         # Set to any unique string (e.g. "trade-pilot-abc123") to enable push alerts.

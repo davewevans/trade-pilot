@@ -317,6 +317,24 @@ _SCHEMA_STATEMENTS: tuple[str, ...] = (
         PRIMARY KEY (recommendation_id, outcome_type, window_days)
     )
     """,
+    # ── api_usage_ledger ──────────────────────────────────────────────
+    """
+    CREATE TABLE IF NOT EXISTS api_usage_ledger (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        api           TEXT    NOT NULL,
+        endpoint      TEXT    NOT NULL,
+        ts            REAL    NOT NULL,
+        symbol        TEXT,
+        cache_hit     INTEGER NOT NULL,
+        status_code   INTEGER,
+        duration_ms   INTEGER,
+        process_id    INTEGER NOT NULL,
+        job_name      TEXT,
+        blocked_reason TEXT
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_ledger_api_ts ON api_usage_ledger(api, ts)",
+    "CREATE INDEX IF NOT EXISTS idx_ledger_ts ON api_usage_ledger(ts)",
 )
 
 

@@ -6,6 +6,7 @@ skew, and expected move data.
 
 import logging
 import math
+import os
 import time
 from typing import Optional
 
@@ -95,10 +96,18 @@ class ORATSClient:
         Returns None on failure.
         """
         cached = _cache.get("summaries", symbol.upper(), _SUMMARY_TTL)
+        _job_name = os.environ.get("TRADE_PILOT_JOB_NAME")
         if cached is not None:
+            from data.api_ledger import get_ledger
+            get_ledger().record("orats_live", "summaries", symbol, True, None, None, _job_name)
             return cached
 
+        from data.api_ledger import get_ledger
+        get_ledger().check_and_reserve("orats_live", "summaries", symbol, _job_name)
         self._track_call("summaries")
+        _t0 = time.monotonic()
+        _status_code: Optional[int] = None
+        _result: Optional[dict] = None
         try:
             resp = requests.get(
                 f"{self.BASE_URL}/summaries",
@@ -106,68 +115,75 @@ class ORATSClient:
                 timeout=self.TIMEOUT,
             )
             resp.raise_for_status()
+            _status_code = resp.status_code
             payload = resp.json()
             rows = payload.get("data", [])
             if not rows:
                 logger.warning("ORATS /summaries returned empty data for %s", symbol)
-                return None
+            else:
+                row = rows[0]
 
-            row = rows[0]
+                atm_m1 = self._safe_float(row.get("atmIvM1"))
+                atm_m2 = self._safe_float(row.get("atmIvM2"))
+                term_slope = None
+                if atm_m1 is not None and atm_m2 is not None:
+                    term_slope = round(atm_m2 - atm_m1, 4)
 
-            atm_m1 = self._safe_float(row.get("atmIvM1"))
-            atm_m2 = self._safe_float(row.get("atmIvM2"))
-            term_slope = None
-            if atm_m1 is not None and atm_m2 is not None:
-                term_slope = round(atm_m2 - atm_m1, 4)
-
-            result = {
-                "ticker": symbol.upper(),
-                "iv_rank_1y": self._safe_float(row.get("ivRank1y")),
-                "iv_rank_1m": self._safe_float(row.get("ivRank1m")),
-                "iv_pct_1y": self._safe_float(row.get("ivPct1y")),
-                "iv_pct_1m": self._safe_float(row.get("ivPct1m")),
-                "atm_iv_m1": atm_m1,
-                "atm_iv_m2": atm_m2,
-                "atm_iv_m3": self._safe_float(row.get("atmIvM3")),
-                "atm_iv_m4": self._safe_float(row.get("atmIvM4")),
-                "skew_m1": self._safe_float(row.get("iSkewM1")),
-                "skew_m2": self._safe_float(row.get("iSkewM2")),
-                "implied_move_pct": self._safe_float(row.get("impliedMove")),
-                "forecast_move_pct": self._safe_float(row.get("fcstMove")),
-                "stock_price": self._safe_float(
-                    row.get("stockPrice") or row.get("stkPx")
-                ),
-                "trade_date": str(row.get("tradeDate", "")),
-                "term_structure_slope": term_slope,
-                "ex_ern_iv_30d": self._safe_float(row.get("exErnIv30d")),
-                "contango": self._safe_float(row.get("contango")),
-                "skewing": self._safe_float(row.get("skewing")),
-                "implied_earnings_move": self._safe_float(row.get("impliedEarningsMove")),
-                "rip": self._safe_float(row.get("rip")),
-            }
-
-            _cache.set("summaries", symbol.upper(), result, _SUMMARY_TTL)
-            logger.info(
-                "ORATS summary for %s: iv_rank_1y=%.1f atm_iv_m1=%.3f "
-                "skew_m1=%.3f implied_move=%.1f%%",
-                symbol,
-                result["iv_rank_1y"] or 0,
-                result["atm_iv_m1"] or 0,
-                result["skew_m1"] or 0,
-                result["implied_move_pct"] or 0,
-            )
-            _record_success("summaries")
-            return result
+                _result = {
+                    "ticker": symbol.upper(),
+                    "iv_rank_1y": self._safe_float(row.get("ivRank1y")),
+                    "iv_rank_1m": self._safe_float(row.get("ivRank1m")),
+                    "iv_pct_1y": self._safe_float(row.get("ivPct1y")),
+                    "iv_pct_1m": self._safe_float(row.get("ivPct1m")),
+                    "atm_iv_m1": atm_m1,
+                    "atm_iv_m2": atm_m2,
+                    "atm_iv_m3": self._safe_float(row.get("atmIvM3")),
+                    "atm_iv_m4": self._safe_float(row.get("atmIvM4")),
+                    "skew_m1": self._safe_float(row.get("iSkewM1")),
+                    "skew_m2": self._safe_float(row.get("iSkewM2")),
+                    "implied_move_pct": self._safe_float(row.get("impliedMove")),
+                    "forecast_move_pct": self._safe_float(row.get("fcstMove")),
+                    "stock_price": self._safe_float(
+                        row.get("stockPrice") or row.get("stkPx")
+                    ),
+                    "trade_date": str(row.get("tradeDate", "")),
+                    "term_structure_slope": term_slope,
+                    "ex_ern_iv_30d": self._safe_float(row.get("exErnIv30d")),
+                    "contango": self._safe_float(row.get("contango")),
+                    "skewing": self._safe_float(row.get("skewing")),
+                    "implied_earnings_move": self._safe_float(row.get("impliedEarningsMove")),
+                    "rip": self._safe_float(row.get("rip")),
+                }
 
         except requests.HTTPError as e:
             if e.response is not None and e.response.status_code == 401:
                 logger.error("ORATS API key is invalid or expired")
+                _status_code = e.response.status_code
             else:
                 logger.warning("ORATS /summaries HTTP error for %s: %s", symbol, e)
+                if e.response is not None:
+                    _status_code = e.response.status_code
         except Exception:
             logger.warning("ORATS /summaries failed for %s", symbol, exc_info=True)
-        _record_failure("summaries")
-        return None
+        finally:
+            get_ledger().record("orats_live", "summaries", symbol, False, _status_code, int((time.monotonic() - _t0) * 1000), _job_name)
+
+        if _result is None:
+            _record_failure("summaries")
+            return None
+
+        _cache.set("summaries", symbol.upper(), _result, _SUMMARY_TTL)
+        logger.info(
+            "ORATS summary for %s: iv_rank_1y=%.1f atm_iv_m1=%.3f "
+            "skew_m1=%.3f implied_move=%.1f%%",
+            symbol,
+            _result["iv_rank_1y"] or 0,
+            _result["atm_iv_m1"] or 0,
+            _result["skew_m1"] or 0,
+            _result["implied_move_pct"] or 0,
+        )
+        _record_success("summaries")
+        return _result
 
     def get_earnings(self, symbol: str) -> Optional[dict]:
         """Fetch the next upcoming earnings date for a symbol.
@@ -176,10 +192,18 @@ class ORATSClient:
         or None on failure.  Cached for 6 hours.
         """
         cached = _cache.get("earnings", symbol.upper(), _EARNINGS_TTL)
+        _job_name = os.environ.get("TRADE_PILOT_JOB_NAME")
         if cached is not None:
+            from data.api_ledger import get_ledger
+            get_ledger().record("orats_live", "earnings", symbol, True, None, None, _job_name)
             return cached
 
+        from data.api_ledger import get_ledger
+        get_ledger().check_and_reserve("orats_live", "earnings", symbol, _job_name)
         self._track_call("earnings")
+        _t0 = time.monotonic()
+        _status_code: Optional[int] = None
+        _result: Optional[dict] = None
         try:
             resp = requests.get(
                 f"{self.BASE_URL}/earnings",
@@ -187,6 +211,7 @@ class ORATSClient:
                 timeout=self.TIMEOUT,
             )
             resp.raise_for_status()
+            _status_code = resp.status_code
             payload = resp.json()
             rows = payload.get("data", [])
 
@@ -203,7 +228,7 @@ class ORATSClient:
                     continue
 
             if not future_rows:
-                result = {
+                _result = {
                     "next_earnings_date": None,
                     "after_close": None,
                     "days_to_earnings": None,
@@ -211,24 +236,28 @@ class ORATSClient:
             else:
                 future_rows.sort(key=lambda x: x[0])
                 ed, row = future_rows[0]
-                result = {
+                _result = {
                     "next_earnings_date": str(ed),
                     "after_close": bool(row.get("anncAfterClose", True)),
                     "days_to_earnings": (ed - today).days,
                 }
 
-            _cache.set("earnings", symbol.upper(), result, _EARNINGS_TTL)
-            logger.info(
-                "ORATS earnings for %s: date=%s days=%s",
-                symbol, result["next_earnings_date"], result["days_to_earnings"],
-            )
-            _record_success("earnings")
-            return result
-
         except Exception:
             logger.warning("ORATS /earnings failed for %s", symbol, exc_info=True)
+        finally:
+            get_ledger().record("orats_live", "earnings", symbol, False, _status_code, int((time.monotonic() - _t0) * 1000), _job_name)
+
+        if _result is None:
             _record_failure("earnings")
             return None
+
+        _cache.set("earnings", symbol.upper(), _result, _EARNINGS_TTL)
+        logger.info(
+            "ORATS earnings for %s: date=%s days=%s",
+            symbol, _result["next_earnings_date"], _result["days_to_earnings"],
+        )
+        _record_success("earnings")
+        return _result
 
     def get_iv_rank_batch(self, symbols: list[str]) -> dict[str, dict]:
         """Fetch IV rank/percentile for up to 10 tickers in one call.
@@ -240,12 +269,16 @@ class ORATSClient:
         if not symbols:
             return {}
 
+        from data.api_ledger import get_ledger
+        _job_name = os.environ.get("TRADE_PILOT_JOB_NAME")
+
         result: dict[str, dict] = {}
         misses: list[str] = []
         for sym in symbols:
             cached = _cache.get("ivrank", sym.upper(), _IVRANK_TTL)
             if cached is not None:
                 result[sym.upper()] = cached
+                get_ledger().record("orats_live", "ivrank", sym, True, None, None, _job_name)
             else:
                 misses.append(sym.upper())
 
@@ -255,7 +288,11 @@ class ORATSClient:
         # ORATS limits batch ticker queries; chunk to 10 at a time.
         for i in range(0, len(misses), 10):
             chunk = misses[i:i + 10]
+            get_ledger().check_and_reserve("orats_live", "ivrank", None, _job_name)
             self._track_call("ivrank")
+            _t0 = time.monotonic()
+            _status_code: Optional[int] = None
+            _chunk_rows: list = []
             try:
                 resp = requests.get(
                     f"{self.BASE_URL}/ivrank",
@@ -263,16 +300,21 @@ class ORATSClient:
                     timeout=self.TIMEOUT,
                 )
                 resp.raise_for_status()
-                rows = resp.json().get("data", []) or []
+                _status_code = resp.status_code
+                _chunk_rows = resp.json().get("data", []) or []
             except Exception:
                 logger.warning(
                     "ORATS /ivrank failed for chunk %s", chunk, exc_info=True,
                 )
+            finally:
+                get_ledger().record("orats_live", "ivrank", None, False, _status_code, int((time.monotonic() - _t0) * 1000), _job_name)
+
+            if _status_code is None:
                 _record_failure("ivrank")
                 continue
 
             _record_success("ivrank")
-            for row in rows:
+            for row in _chunk_rows:
                 ticker = str(row.get("ticker", "")).upper()
                 if not ticker:
                     continue
@@ -295,10 +337,18 @@ class ORATSClient:
         """
         key = symbol.upper()
         cached = _cache.get("cores", key, _CORES_TTL)
+        _job_name = os.environ.get("TRADE_PILOT_JOB_NAME")
         if cached is not None:
+            from data.api_ledger import get_ledger
+            get_ledger().record("orats_live", "cores", symbol, True, None, None, _job_name)
             return cached
 
+        from data.api_ledger import get_ledger
+        get_ledger().check_and_reserve("orats_live", "cores", symbol, _job_name)
         self._track_call("cores")
+        _t0 = time.monotonic()
+        _status_code: Optional[int] = None
+        _result: Optional[dict] = None
         try:
             resp = requests.get(
                 f"{self.BASE_URL}/cores",
@@ -306,58 +356,62 @@ class ORATSClient:
                 timeout=self.TIMEOUT,
             )
             resp.raise_for_status()
+            _status_code = resp.status_code
             rows = resp.json().get("data", []) or []
             if not rows:
                 logger.warning("ORATS /cores returned empty data for %s", key)
-                return None
+            else:
+                row = rows[0]
+                next_ern = row.get("nextErn")
+                if next_ern in ("0000-00-00", ""):
+                    next_ern = None
 
-            row = rows[0]
-            next_ern = row.get("nextErn")
-            if next_ern in ("0000-00-00", ""):
-                next_ern = None
-
-            result = {
-                "next_earnings_date": next_ern,
-                "days_to_next_earnings": row.get("daysToNextErn"),
-                "abs_avg_earnings_move": self._safe_float(row.get("absAvgErnMv")),
-                "implied_earnings_move": self._safe_float(row.get("impliedEarningsMove")),
-                "iv_hv_ratio": self._safe_float(row.get("ivHvXernRatio")),
-                "iv_hv_ratio_1y_avg": self._safe_float(row.get("ivHvXernRatio1y")),
-                "vol_of_vol": self._safe_float(row.get("volOfVol")),
-                "skew_percentile": self._safe_float(row.get("slopepctile")),
-                "skew_1y_avg": self._safe_float(row.get("slopeavg1y")),
-                "hv_20d": self._safe_float(row.get("orHv20d")),
-                "hv_30d": self._safe_float(row.get("orHv30d")),
-                "hv_ex_earnings_20d": self._safe_float(row.get("orHvXern20d")),
-                "rip": self._safe_float(row.get("rip")),
-                "best_etf": row.get("bestEtf"),
-                "sector_name": row.get("sectorName"),
-                # ORATS forecast fields
-                "or_fcst_20d": self._safe_float(row.get("orFcst20d")),
-                "or_iv_fcst_20d": self._safe_float(row.get("orIvFcst20d")),
-                "or_fcst_inf": self._safe_float(row.get("orFcstInf")),
-                "ex_ern_iv_20d": self._safe_float(row.get("exErnIv20d")),
-                "ex_ern_iv_30d": self._safe_float(row.get("exErnIv30d")),
-                "slope": self._safe_float(row.get("slope")),
-                "slope_fcst": self._safe_float(row.get("slopeFcst")),
-                "slope_inf": self._safe_float(row.get("slopeInf")),
-                "contango": self._safe_float(row.get("contango")),
-                "contango_fcst": self._safe_float(row.get("contangoFcst")),
-                "deriv": self._safe_float(row.get("deriv")),
-                "fwd_ratio_20_30": self._safe_float(row.get("fwdRatio2030")),
-                "fwd_ratio_30_60": self._safe_float(row.get("fwdRatio3060")),
-                "fwd_ratio_60_90": self._safe_float(row.get("fwdRatio6090")),
-                "confidence": self._safe_float(row.get("confidence")),
-                "r_squared": self._safe_float(row.get("rSquared")),
-            }
-            _cache.set("cores", key, result, _CORES_TTL)
-            _record_success("cores")
-            return result
+                _result = {
+                    "next_earnings_date": next_ern,
+                    "days_to_next_earnings": row.get("daysToNextErn"),
+                    "abs_avg_earnings_move": self._safe_float(row.get("absAvgErnMv")),
+                    "implied_earnings_move": self._safe_float(row.get("impliedEarningsMove")),
+                    "iv_hv_ratio": self._safe_float(row.get("ivHvXernRatio")),
+                    "iv_hv_ratio_1y_avg": self._safe_float(row.get("ivHvXernRatio1y")),
+                    "vol_of_vol": self._safe_float(row.get("volOfVol")),
+                    "skew_percentile": self._safe_float(row.get("slopepctile")),
+                    "skew_1y_avg": self._safe_float(row.get("slopeavg1y")),
+                    "hv_20d": self._safe_float(row.get("orHv20d")),
+                    "hv_30d": self._safe_float(row.get("orHv30d")),
+                    "hv_ex_earnings_20d": self._safe_float(row.get("orHvXern20d")),
+                    "rip": self._safe_float(row.get("rip")),
+                    "best_etf": row.get("bestEtf"),
+                    "sector_name": row.get("sectorName"),
+                    "or_fcst_20d": self._safe_float(row.get("orFcst20d")),
+                    "or_iv_fcst_20d": self._safe_float(row.get("orIvFcst20d")),
+                    "or_fcst_inf": self._safe_float(row.get("orFcstInf")),
+                    "ex_ern_iv_20d": self._safe_float(row.get("exErnIv20d")),
+                    "ex_ern_iv_30d": self._safe_float(row.get("exErnIv30d")),
+                    "slope": self._safe_float(row.get("slope")),
+                    "slope_fcst": self._safe_float(row.get("slopeFcst")),
+                    "slope_inf": self._safe_float(row.get("slopeInf")),
+                    "contango": self._safe_float(row.get("contango")),
+                    "contango_fcst": self._safe_float(row.get("contangoFcst")),
+                    "deriv": self._safe_float(row.get("deriv")),
+                    "fwd_ratio_20_30": self._safe_float(row.get("fwdRatio2030")),
+                    "fwd_ratio_30_60": self._safe_float(row.get("fwdRatio3060")),
+                    "fwd_ratio_60_90": self._safe_float(row.get("fwdRatio6090")),
+                    "confidence": self._safe_float(row.get("confidence")),
+                    "r_squared": self._safe_float(row.get("rSquared")),
+                }
 
         except Exception:
             logger.warning("ORATS /cores failed for %s", key, exc_info=True)
+        finally:
+            get_ledger().record("orats_live", "cores", symbol, False, _status_code, int((time.monotonic() - _t0) * 1000), _job_name)
+
+        if _result is None:
             _record_failure("cores")
             return None
+
+        _cache.set("cores", key, _result, _CORES_TTL)
+        _record_success("cores")
+        return _result
 
     def get_monies(self, symbol: str) -> list[dict]:
         """Fetch implied volatility at standardized delta levels (the vol smile).
@@ -375,10 +429,18 @@ class ORATSClient:
         """
         key = symbol.upper()
         cached = _cache.get("monies", key, _MONIES_TTL)
+        _job_name = os.environ.get("TRADE_PILOT_JOB_NAME")
         if cached is not None:
+            from data.api_ledger import get_ledger
+            get_ledger().record("orats_live", "monies", symbol, True, None, None, _job_name)
             return cached
 
+        from data.api_ledger import get_ledger
+        get_ledger().check_and_reserve("orats_live", "monies", symbol, _job_name)
         self._track_call("monies")
+        _t0 = time.monotonic()
+        _status_code: Optional[int] = None
+        rows: list = []
         try:
             resp = requests.get(
                 f"{self.BASE_URL}/monies/implied",
@@ -386,16 +448,22 @@ class ORATSClient:
                 timeout=self.TIMEOUT,
             )
             resp.raise_for_status()
+            _status_code = resp.status_code
             rows = resp.json().get("data", []) or []
         except requests.HTTPError as e:
             if e.response is not None and e.response.status_code == 401:
                 logger.error("ORATS API key is invalid or expired (monies)")
+                _status_code = e.response.status_code
             else:
                 logger.warning("ORATS /monies/implied HTTP error for %s: %s", key, e)
-            _record_failure("monies")
-            return []
+                if e.response is not None:
+                    _status_code = e.response.status_code
         except Exception:
             logger.warning("ORATS /monies/implied failed for %s", key, exc_info=True)
+        finally:
+            get_ledger().record("orats_live", "monies", symbol, False, _status_code, int((time.monotonic() - _t0) * 1000), _job_name)
+
+        if _status_code is None:
             _record_failure("monies")
             return []
 
@@ -446,7 +514,10 @@ class ORATSClient:
 
         cache_key = f"{symbol.upper()}|{side}|{delta_min}|{delta_max}|{dte_min}|{dte_max}"
         cached = _cache.get("strikes", cache_key, _STRIKES_TTL)
+        _job_name = os.environ.get("TRADE_PILOT_JOB_NAME")
         if cached is not None:
+            from data.api_ledger import get_ledger
+            get_ledger().record("orats_live", "strikes", symbol, True, None, None, _job_name)
             return cached
 
         # Puts come back with negative deltas — invert and swap the bounds.
@@ -455,7 +526,12 @@ class ORATSClient:
         else:
             d_lo, d_hi = abs(delta_min), abs(delta_max)
 
+        from data.api_ledger import get_ledger
+        get_ledger().check_and_reserve("orats_live", "strikes", symbol, _job_name)
         self._track_call("strikes")
+        _t0 = time.monotonic()
+        _status_code: Optional[int] = None
+        rows: list = []
         try:
             resp = requests.get(
                 f"{self.BASE_URL}/strikes",
@@ -468,12 +544,17 @@ class ORATSClient:
                 timeout=self.TIMEOUT,
             )
             resp.raise_for_status()
+            _status_code = resp.status_code
             rows = resp.json().get("data", []) or []
         except Exception:
             logger.warning(
                 "ORATS /strikes failed for %s %s d=%s,%s dte=%s,%s",
                 symbol, side, d_lo, d_hi, dte_min, dte_max, exc_info=True,
             )
+        finally:
+            get_ledger().record("orats_live", "strikes", symbol, False, _status_code, int((time.monotonic() - _t0) * 1000), _job_name)
+
+        if _status_code is None:
             _record_failure("strikes")
             return []
 
