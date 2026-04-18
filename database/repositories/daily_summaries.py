@@ -3,6 +3,8 @@
 import json
 import sqlite3
 
+from database.db import db_retry
+
 
 def _row_to_dict(row: sqlite3.Row) -> dict:
     d = dict(row)
@@ -20,6 +22,7 @@ class DailySummaryRepository:
     def __init__(self, conn: sqlite3.Connection):
         self._conn = conn
 
+    @db_retry()
     def upsert(self, date: str, data: dict) -> None:
         """Insert or replace the row for the given date."""
         skip_reasons_json = data.get("skip_reasons_json")

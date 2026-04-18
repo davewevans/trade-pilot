@@ -54,7 +54,6 @@ class CalendarSpreadStrategy:
         self.state_writer = state_writer
         self.spread_tracker = spread_tracker
         self.recorder = recorder
-        self.cb_status_at_entry: str | None = None
         self.state = CalendarSpreadState.IDLE
         self.open_spread_id: str | None = None
         self.pending_order_id: str | None = None
@@ -332,7 +331,7 @@ class CalendarSpreadStrategy:
 
     # ── execution ───────────────────────────────────────────
 
-    def execute_entry(self, decision: dict) -> bool:
+    def execute_entry(self, decision: dict, cb_status: str | None = None) -> bool:
         """Place the calendar spread order (sell short, buy long)."""
         legs = [
             {"symbol": decision["short_symbol"], "side": "sell",
@@ -366,7 +365,7 @@ class CalendarSpreadStrategy:
                 max_loss=decision.get("net_debit", 0) * 100,
                 max_gain=None,
                 entry_order_id=order_id,
-                cb_status_at_entry=self.cb_status_at_entry,
+                cb_status_at_entry=cb_status,
             )
             self.open_spread_id = spread_id
             self._roll_count = 0

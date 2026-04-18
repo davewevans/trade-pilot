@@ -300,9 +300,126 @@ def _open_db() -> sqlite3.Connection | None:
         return None
 
 
+# Heartbeat paths — defined after DATA_DIR below.
+# Market-hours window for heartbeat checks (America/New_York).
+_HB_MARKET_OPEN_H = 6       # 6:00 AM ET
+_HB_MARKET_CLOSE_H = 16     # 4:00 PM ET
+_HB_MARKET_CLOSE_M = 30     # :30
+_HB_STALE_MINUTES = 60      # alert if no heartbeat for this long
+_HB_RESUPPRESS_MINUTES = 120  # don't re-alert within this window
+
+
+async def _heartbeat_watcher() -> None:
+    """Background task: check scheduler heartbeat freshness every 2 min.
+
+    Only active during market hours (6 AM – 4:30 PM ET). Fires a "high"
+    notification when the heartbeat file is stale, then suppresses
+    re-alerts for 2 hours.
+    """
+    import asyncio
+    from zoneinfo import ZoneInfo
+
+    _ET = ZoneInfo("America/New_York")
+
+    def _load_check_state() -> dict:
+        try:
+            if _HB_CHECK_STATE_PATH.exists():
+                return json.loads(_HB_CHECK_STATE_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+        return {}
+
+    def _save_check_state(state: dict) -> None:
+        try:
+            _HB_CHECK_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+            tmp = _HB_CHECK_STATE_PATH.with_suffix(".tmp")
+            tmp.write_text(json.dumps(state, indent=2), encoding="utf-8")
+            os.replace(str(tmp), str(_HB_CHECK_STATE_PATH))
+        except Exception:
+            pass
+
+    while True:
+        await asyncio.sleep(120)  # check every 2 min
+        try:
+            now_et = datetime.now(_ET)
+            in_window = (
+                now_et.weekday() < 5  # Mon–Fri
+                and (
+                    now_et.hour > _HB_MARKET_OPEN_H
+                    or (now_et.hour == _HB_MARKET_OPEN_H)
+                )
+                and (
+                    now_et.hour < _HB_MARKET_CLOSE_H
+                    or (now_et.hour == _HB_MARKET_CLOSE_H and now_et.minute <= _HB_MARKET_CLOSE_M)
+                )
+            )
+            if not in_window:
+                continue
+
+            if not _HEARTBEAT_PATH.exists():
+                continue  # scheduler hasn't run yet; nothing to check
+
+            try:
+                hb = json.loads(_HEARTBEAT_PATH.read_text(encoding="utf-8"))
+                hb_ts_str = hb.get("ts") or hb.get("timestamp") or ""
+                hb_ts = datetime.fromisoformat(hb_ts_str)
+                if hb_ts.tzinfo is None:
+                    hb_ts = hb_ts.replace(tzinfo=timezone.utc)
+            except Exception:
+                continue
+
+            now_utc = datetime.now(timezone.utc)
+            age_minutes = (now_utc - hb_ts).total_seconds() / 60
+
+            if age_minutes < _HB_STALE_MINUTES:
+                # Heartbeat is fresh — clear any previous alert state.
+                state = _load_check_state()
+                if state.get("alerted"):
+                    state["alerted"] = False
+                    _save_check_state(state)
+                continue
+
+            # Heartbeat is stale — check suppression window.
+            state = _load_check_state()
+            last_alert_str = state.get("last_alert_ts") or ""
+            if last_alert_str:
+                try:
+                    last_alert = datetime.fromisoformat(last_alert_str)
+                    if last_alert.tzinfo is None:
+                        last_alert = last_alert.replace(tzinfo=timezone.utc)
+                    if (now_utc - last_alert).total_seconds() / 60 < _HB_RESUPPRESS_MINUTES:
+                        continue  # still within suppression window
+                except Exception:
+                    pass
+
+            try:
+                from notifications import notify
+                notify(
+                    "high",
+                    "Scheduler heartbeat stale",
+                    f"No heartbeat for {int(age_minutes)} min. "
+                    "Scheduler may be down or stuck.",
+                    tags=["heartbeat"],
+                )
+            except Exception:
+                pass
+
+            state["alerted"] = True
+            state["last_alert_ts"] = now_utc.isoformat(timespec="seconds")
+            _save_check_state(state)
+            logger.warning(
+                "Heartbeat stale: last seen %s min ago at %s",
+                int(age_minutes), hb_ts_str,
+            )
+        except Exception:
+            logger.debug("_heartbeat_watcher tick error", exc_info=True)
+
+
 @asynccontextmanager
 async def lifespan(application: FastAPI):
     """Log snapshot directory status on startup."""
+    import asyncio
+
     logger.info("Snapshot directory: %s", SNAPSHOTS)
     for name in ("portfolio.json", "context.json", "circuit_breakers.json", "decisions.jsonl"):
         p = SNAPSHOTS / name
@@ -318,7 +435,16 @@ async def lifespan(application: FastAPI):
     except Exception as e:
         logger.warning("API startup snapshot failed (non-fatal): %s", e)
 
+    # Start background heartbeat staleness checker.
+    _hb_task = asyncio.create_task(_heartbeat_watcher())
+
     yield
+
+    _hb_task.cancel()
+    try:
+        await _hb_task
+    except asyncio.CancelledError:
+        pass
 
 
 app = FastAPI(title="trade-pilot", version="0.1.0", lifespan=lifespan)
@@ -344,6 +470,9 @@ SNAPSHOTS = settings.SNAPSHOTS_DIR
 DATA_DIR = settings.DATA_DIR
 JOURNAL_PATH = settings.JOURNAL_PATH
 LOCK_PATH = DATA_DIR / "HALTED.lock"
+HALT_AUDIT_PATH = DATA_DIR / "halt_audit.jsonl"
+_HEARTBEAT_PATH = DATA_DIR / "heartbeat.json"
+_HB_CHECK_STATE_PATH = DATA_DIR / "heartbeat_check_state.json"
 DB_PATH = settings.DATABASE_PATH
 
 
@@ -395,6 +524,48 @@ def _read_jsonl(path: Path) -> list[dict]:
     except Exception:
         logger.exception("Failed to read %s", path)
     return entries
+
+
+def _read_halt_info() -> dict:
+    """Parse HALTED.lock and return a halt-status dict.
+
+    File existence is the authoritative halt signal. Contents are informational.
+    Handles empty files (legacy) and the new JSON format transparently.
+    """
+    if not LOCK_PATH.exists():
+        return {"halted": False}
+    try:
+        text = LOCK_PATH.read_text(encoding="utf-8").strip()
+        if not text:
+            return {"halted": True, "halted_at": None, "source": "unknown", "reason": ""}
+        data = json.loads(text)
+        return {
+            "halted": True,
+            # Support old format (timestamp) and new format (halted_at)
+            "halted_at": data.get("halted_at") or data.get("timestamp"),
+            "source": data.get("source", "unknown"),
+            "reason": data.get("reason", ""),
+        }
+    except Exception:
+        logger.warning("Failed to parse HALTED.lock contents", exc_info=True)
+        return {"halted": True, "halted_at": None, "source": "unknown", "reason": ""}
+
+
+def _append_halt_audit(event: str, source: str, reason: str = "") -> None:
+    """Append a halt or resume event to the audit log."""
+    entry = {
+        "event": event,
+        "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "source": source,
+        "reason": reason,
+        "user": "dashboard",
+    }
+    try:
+        HALT_AUDIT_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with open(HALT_AUDIT_PATH, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry) + "\n")
+    except Exception:
+        logger.exception("Failed to append halt audit log")
 
 
 # ── endpoints ───────────────────────────────────────────────
@@ -468,7 +639,70 @@ def health():
         # populates the version badge without needing a separate fetch.
         "version": settings.VERSION,
         "version_date": settings.VERSION_DATE,
+        # Feature flags — read by the frontend on each 30s health poll.
+        "strategy_health_enabled": settings.STRATEGY_HEALTH_PAGE_ENABLED,
     }
+
+
+@app.get("/api/halt-status")
+def halt_status():
+    """Return current halt state with metadata from HALTED.lock."""
+    return _read_halt_info()
+
+
+@app.post("/api/halt")
+async def halt_bot(request: Request):
+    """Write HALTED.lock and log the event. Returns 409 if already halted."""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    reason = (body.get("reason") or "").strip()
+
+    if LOCK_PATH.exists():
+        return JSONResponse(status_code=409, content=_read_halt_info())
+
+    payload = json.dumps({
+        "halted_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "source": "dashboard",
+        "reason": reason,
+    }, indent=2)
+    tmp_path = LOCK_PATH.with_name("HALTED.lock.tmp")
+    tmp_path.write_text(payload, encoding="utf-8")
+    os.replace(str(tmp_path), str(LOCK_PATH))
+
+    _append_halt_audit("halt", "dashboard", reason)
+    logger.warning("Bot halted via dashboard. Reason: %r", reason)
+    try:
+        from notifications import notify
+        notify(
+            "high",
+            "Bot HALTED via dashboard",
+            reason or "No reason given",
+            tags=["halt"],
+        )
+    except Exception:
+        pass
+    return JSONResponse(content=_read_halt_info())
+
+
+@app.post("/api/resume")
+def resume_bot():
+    """Delete HALTED.lock and log the event. Idempotent if already running."""
+    # Capture reason before deleting the lock.
+    _halt_info = _read_halt_info()
+    _append_halt_audit("resume", "dashboard")
+    if LOCK_PATH.exists():
+        LOCK_PATH.unlink()
+        logger.info("Bot resumed via dashboard.")
+    try:
+        from notifications import notify
+        _reason = _halt_info.get("reason") or ""
+        _msg = f"Reason for halt was: {_reason}" if _reason else "No halt reason recorded."
+        notify("high", "Bot RESUMED via dashboard", _msg, tags=["resume"])
+    except Exception:
+        pass
+    return {"halted": False}
 
 
 _CHANGELOG_PATH = Path(__file__).resolve().parent.parent / "CHANGELOG.md"
@@ -485,6 +719,22 @@ def changelog():
             status_code=404,
         )
     return PlainTextResponse(text)
+
+
+@app.get("/api/usage")
+def api_usage():
+    """Return current ORATS quota usage from the last written snapshot."""
+    data = _read_json(SNAPSHOTS / "api_usage.json")
+    if data is None:
+        return JSONResponse(status_code=503, content={"error": "No API usage snapshot yet"})
+    return data
+
+
+@app.get("/api/schedule")
+def api_schedule():
+    """Return the bot's job schedule from the canonical SCHEDULE constant in config.py."""
+    from config import SCHEDULE
+    return SCHEDULE
 
 
 @app.get("/api/portfolio")
@@ -523,6 +773,43 @@ def source_health():
     return {"sources": json.loads(path.read_text(encoding="utf-8"))}
 
 
+_ORATS_DISABLED_PATH = DATA_DIR / "ORATS_DISABLED.lock"
+
+
+@app.post("/api/admin/orats/disable")
+async def admin_orats_disable(request: Request):
+    """Activate the ORATS kill switch — all ORATS calls will raise OratsDisabled."""
+    try:
+        body = await request.json()
+        reason = (body or {}).get("reason", "") if isinstance(body, dict) else ""
+    except Exception:
+        reason = ""
+    from data.api_ledger import disable_orats
+    disable_orats(reason)
+    return {"status": "disabled", "reason": reason or "no reason given"}
+
+
+@app.post("/api/admin/orats/enable")
+def admin_orats_enable():
+    """Deactivate the ORATS kill switch — ORATS calls resume normally."""
+    from data.api_ledger import enable_orats
+    enable_orats()
+    return {"status": "enabled"}
+
+
+@app.get("/api/admin/orats/status")
+def admin_orats_status():
+    """Return the current ORATS kill-switch state."""
+    disabled = _ORATS_DISABLED_PATH.exists()
+    reason = ""
+    if disabled:
+        try:
+            reason = _ORATS_DISABLED_PATH.read_text(encoding="utf-8").strip()
+        except Exception:
+            pass
+    return {"disabled": disabled, "reason": reason}
+
+
 @app.post("/api/admin/reset-circuit-breaker")
 async def reset_circuit_breaker():
     """Reset the circuit breaker — delete lock file and state."""
@@ -556,6 +843,24 @@ def portfolio_by_account(account_name: str):
             content={"error": f"No data yet for account: {account_name}"},
         )
     return data
+
+
+@app.get("/api/portfolio-greeks")
+def portfolio_greeks(account: str | None = Query(default=None)):
+    """Aggregate Greek exposure across open positions.
+
+    account: optional account_id (e.g. "wheel", "spreads").  Omit for
+    portfolio-wide aggregation from the primary account snapshot.
+
+    Returns the output of compute_portfolio_greeks() which reads from
+    the most recent portfolio_refresh snapshot file — no live API calls.
+    """
+    try:
+        from data.context_builder import compute_portfolio_greeks
+        return compute_portfolio_greeks(account_id=account or None)
+    except Exception:
+        logger.exception("portfolio-greeks failed")
+        return JSONResponse(status_code=500, content={"error": "aggregation failed"})
 
 
 @app.get("/api/account-portfolios")
@@ -1350,10 +1655,17 @@ def iv_history(
 _BACKTEST_JOBS: dict[str, dict] = {}
 _BACKTEST_JOBS_LOCK = threading.Lock()
 
+# Single-flight concurrency control for the interactive backtest endpoint.
+# Only one backtest may run at a time to prevent accidental ORATS budget exhaustion.
+_api_backtest_lock_holder = None   # ProcessLock instance when a backtest is running
+_api_backtest_started_at: str | None = None  # ISO timestamp when the backtest started
+_api_backtest_ctrl_lock = threading.Lock()  # guards the two variables above
+
 
 def _run_backtest_job(job_id: str, params_dict: dict) -> None:
     """Background thread target: run the backtest and store result."""
     from backtesting.engine import BacktestEngine, BacktestParams
+    from data.api_ledger import current_job_source
     from dataclasses import asdict
 
     log_lines: list[str] = []
@@ -1368,6 +1680,8 @@ def _run_backtest_job(job_id: str, params_dict: dict) -> None:
     with _BACKTEST_JOBS_LOCK:
         _BACKTEST_JOBS[job_id]["status"] = "running"
 
+    # Tag all ORATS ledger records in this thread as "api_backtest"
+    _token = current_job_source.set("api_backtest")
     try:
         params = BacktestParams(
             strategy=params_dict.get("strategy", "bull_put_spread"),
@@ -1417,6 +1731,16 @@ def _run_backtest_job(job_id: str, params_dict: dict) -> None:
                 "error": str(exc),
             })
 
+    finally:
+        # Release source attribution and process lock regardless of outcome
+        current_job_source.reset(_token)
+        global _api_backtest_lock_holder, _api_backtest_started_at
+        with _api_backtest_ctrl_lock:
+            if _api_backtest_lock_holder is not None:
+                _api_backtest_lock_holder.release()
+                _api_backtest_lock_holder = None
+                _api_backtest_started_at = None
+
 
 @app.post("/api/backtest")
 async def start_backtest(request: Request):
@@ -1428,7 +1752,7 @@ async def start_backtest(request: Request):
 
     # Validate required fields
     strategy = body.get("strategy", "bull_put_spread")
-    from backtesting.engine import SUPPORTED_STRATEGIES
+    from backtesting.engine import SUPPORTED_STRATEGIES, BacktestEngine
     if strategy not in SUPPORTED_STRATEGIES:
         return JSONResponse(
             status_code=400,
@@ -1449,6 +1773,82 @@ async def start_backtest(request: Request):
             raise ValueError("start_date must be before end_date")
     except (KeyError, ValueError) as e:
         return JSONResponse(status_code=400, content={"error": f"Invalid date range: {e}"})
+
+    # ── Pre-flight ORATS budget check ─────────────────────────────────────────
+    try:
+        from data.api_ledger import get_ledger
+        _engine_for_estimate = BacktestEngine()
+        estimate = _engine_for_estimate.estimate_cost(symbols, strategy, start_date, end_date)
+        _usage = get_ledger().get_usage("orats_historical")
+        month_remaining = _usage["month_remaining"]
+
+        if estimate > month_remaining:
+            logger.warning(
+                "Backtest pre-flight BLOCKED: estimate=%d > month_remaining=%d",
+                estimate, month_remaining,
+            )
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": "budget_exceeded",
+                    "estimate": estimate,
+                    "remaining": month_remaining,
+                    "message": (
+                        f"This backtest would use ~{estimate:,} ORATS calls but only "
+                        f"{month_remaining:,} remain this month."
+                    ),
+                },
+            )
+
+        confirm_heavy = body.get("confirm_heavy", False)
+        if estimate > month_remaining * 0.7 and not confirm_heavy:
+            logger.info(
+                "Backtest pre-flight: confirm_required — estimate=%d, month_remaining=%d",
+                estimate, month_remaining,
+            )
+            return JSONResponse(
+                status_code=202,
+                content={
+                    "status": "confirm_required",
+                    "estimate": estimate,
+                    "remaining": month_remaining,
+                    "message": (
+                        f"This backtest would use ~{estimate:,} ORATS calls (>70% of the "
+                        f"{month_remaining:,} remaining this month). "
+                        "Resubmit with confirm_heavy=true to proceed."
+                    ),
+                },
+            )
+    except Exception:
+        logger.warning("Backtest pre-flight check failed (non-fatal) — proceeding", exc_info=True)
+
+    # ── Concurrency guard: one backtest at a time ─────────────────────────────
+    from utils.process_lock import ProcessLock, ProcessLockHeld
+    global _api_backtest_lock_holder, _api_backtest_started_at
+    with _api_backtest_ctrl_lock:
+        if _api_backtest_lock_holder is not None:
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "error": "backtest_already_running",
+                    "since": _api_backtest_started_at,
+                    "message": "A backtest is already running — please wait for it to complete.",
+                },
+            )
+        try:
+            _lock = ProcessLock("api_backtest", settings.DATA_DIR / "locks")
+            _lock.acquire()
+            _api_backtest_lock_holder = _lock
+            _api_backtest_started_at = datetime.now(timezone.utc).isoformat()
+        except ProcessLockHeld:
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "error": "backtest_already_running",
+                    "since": _api_backtest_started_at,
+                    "message": "A backtest is already running — please wait for it to complete.",
+                },
+            )
 
     job_id = str(uuid.uuid4())
     with _BACKTEST_JOBS_LOCK:
@@ -2061,6 +2461,14 @@ async def research_recommendations_apply(request: Request):
                         },
                     )
 
+        # CROSS-PROCESS WRITE TARGET: watchlist_recommendations is the only
+        # table written by both the API process (operator decisions below, via
+        # repo.record_decision()) and the scheduler process (weekly_research.py
+        # batch inserts via insert_batch()). @db_retry() on both write methods
+        # handles SQLite WAL lock contention between the two writers. If you add
+        # new cross-process write paths, document them here and confirm
+        # @db_retry() coverage.
+
         # Apply accepted changes
         applied = 0
         now_iso = datetime.now().isoformat()
@@ -2290,6 +2698,189 @@ async def orats_usage():
     }
 
 
+# ── Claude cost endpoints ────────────────────────────────────────────────────
+
+_WINDOW_DAYS: dict[str, int | None] = {
+    "7d": 7,
+    "30d": 30,
+    "90d": 90,
+    "all": None,
+}
+
+
+def _claude_costs_from_db(
+    conn: sqlite3.Connection,
+    window: str,
+    strategy_types: list[str] | None,
+) -> dict:
+    """Aggregate cost/token stats from the decisions table for the given window."""
+    days = _WINDOW_DAYS.get(window)
+
+    # Build time-window predicates
+    where_current: list[str] = ["estimated_cost_usd IS NOT NULL"]
+    params_current: list = []
+    if days is not None:
+        where_current.append("timestamp >= datetime('now', ?)")
+        params_current.append(f"-{days} days")
+
+    where_prior: list[str] = ["estimated_cost_usd IS NOT NULL"]
+    params_prior: list = []
+    if days is not None:
+        where_prior.append("timestamp >= datetime('now', ?)")
+        where_prior.append("timestamp < datetime('now', ?)")
+        params_prior.extend([f"-{days * 2} days", f"-{days} days"])
+    else:
+        # "all" — prior window is empty
+        where_prior.append("1=0")
+
+    if strategy_types:
+        ph = ",".join(["?"] * len(strategy_types))
+        where_current.append(f"strategy_type IN ({ph})")
+        params_current.extend(strategy_types)
+        where_prior.append(f"strategy_type IN ({ph})")
+        params_prior.extend(strategy_types)
+
+    clause_c = "WHERE " + " AND ".join(where_current)
+    clause_p = "WHERE " + " AND ".join(where_prior)
+
+    def _agg(clause: str, params: list) -> dict:
+        row = conn.execute(
+            f"""
+            SELECT
+                COUNT(*)                              AS decisions_count,
+                COALESCE(SUM(estimated_cost_usd), 0) AS total_cost_usd,
+                COALESCE(SUM(cache_read_tokens), 0)  AS total_cache_read,
+                COALESCE(SUM(cache_creation_tokens), 0) AS total_cache_creation
+            FROM decisions
+            {clause}
+            """,
+            params,
+        ).fetchone()
+        return dict(row) if row else {}
+
+    cur = _agg(clause_c, params_current)
+    pri = _agg(clause_p, params_prior)
+
+    total_cost = float(cur.get("total_cost_usd") or 0.0)
+    prior_cost = float(pri.get("total_cost_usd") or 0.0)
+    decisions_count = int(cur.get("decisions_count") or 0)
+
+    # Filled-trades count (decisions where action is a trade, not skip/hold)
+    filled_rows = conn.execute(
+        f"""
+        SELECT COUNT(*) AS n FROM decisions
+        {clause_c} AND UPPER(action) NOT IN ('SKIP', 'HOLD')
+        """,
+        params_current,
+    ).fetchone()
+    filled_count = int(filled_rows["n"]) if filled_rows else 0
+    cost_per_filled = (total_cost / filled_count) if filled_count > 0 else None
+
+    # Cost by outcome bucket (open/close/skip mapped from action vocabulary)
+    outcome_rows = conn.execute(
+        f"""
+        SELECT action,
+               COUNT(*)                              AS cnt,
+               COALESCE(SUM(estimated_cost_usd), 0) AS cost_usd
+        FROM decisions
+        {clause_c}
+        GROUP BY UPPER(action)
+        """,
+        params_current,
+    ).fetchall()
+
+    _OPEN_ACTIONS = {"SELL_PUT", "SELL_CALL", "OPEN"}
+    _CLOSE_ACTIONS = {"CLOSE", "BUY_PUT", "BUY_CALL", "ROLL"}
+    _SKIP_ACTIONS = {"SKIP", "HOLD"}
+
+    cost_by_outcome: dict[str, dict] = {
+        "open":  {"count": 0, "cost_usd": 0.0},
+        "close": {"count": 0, "cost_usd": 0.0},
+        "skip":  {"count": 0, "cost_usd": 0.0},
+    }
+    for r in outcome_rows:
+        act = (r["action"] or "").upper()
+        cost_val = float(r["cost_usd"] or 0.0)
+        cnt = int(r["cnt"] or 0)
+        if act in _OPEN_ACTIONS:
+            bucket = "open"
+        elif act in _CLOSE_ACTIONS:
+            bucket = "close"
+        else:
+            bucket = "skip"
+        cost_by_outcome[bucket]["count"] += cnt
+        cost_by_outcome[bucket]["cost_usd"] = round(
+            cost_by_outcome[bucket]["cost_usd"] + cost_val, 6
+        )
+
+    # Cache hit rate
+    total_read = int(cur.get("total_cache_read") or 0)
+    total_creation = int(cur.get("total_cache_creation") or 0)
+    denom_cache = total_read + total_creation
+    cache_hit_rate = round(total_read / denom_cache, 4) if denom_cache > 0 else None
+
+    # By model version
+    model_rows = conn.execute(
+        f"""
+        SELECT model_version,
+               COUNT(*)                              AS cnt,
+               COALESCE(SUM(estimated_cost_usd), 0) AS cost_usd
+        FROM decisions
+        {clause_c} AND model_version IS NOT NULL
+        GROUP BY model_version
+        """,
+        params_current,
+    ).fetchall()
+    by_model: dict[str, dict] = {}
+    for r in model_rows:
+        mv = r["model_version"] or "unknown"
+        by_model[mv] = {"count": int(r["cnt"] or 0), "cost_usd": float(r["cost_usd"] or 0.0)}
+
+    return {
+        "window": window,
+        "total_cost_usd": round(total_cost, 6),
+        "prior_window_cost_usd": round(prior_cost, 6),
+        "decisions_count": decisions_count,
+        "filled_trades_count": filled_count,
+        "cost_per_filled_trade_usd": round(cost_per_filled, 6) if cost_per_filled is not None else None,
+        "cost_by_outcome": cost_by_outcome,
+        "cache_hit_rate": cache_hit_rate,
+        "by_model_version": by_model,
+    }
+
+
+@app.get("/api/claude-costs")
+def claude_costs(
+    window: str = Query(default="7d", pattern="^(7d|30d|90d|all)$"),
+    account: str | None = Query(default=None),
+):
+    """Aggregate Claude API cost and token stats for the requested window."""
+    conn = _open_db()
+    if conn is None:
+        return {
+            "window": window,
+            "total_cost_usd": 0.0,
+            "prior_window_cost_usd": 0.0,
+            "decisions_count": 0,
+            "filled_trades_count": 0,
+            "cost_per_filled_trade_usd": None,
+            "cost_by_outcome": {
+                "open":  {"count": 0, "cost_usd": 0.0},
+                "close": {"count": 0, "cost_usd": 0.0},
+                "skip":  {"count": 0, "cost_usd": 0.0},
+            },
+            "cache_hit_rate": None,
+            "by_model_version": {},
+        }
+    try:
+        return _claude_costs_from_db(conn, window, _strategy_filter(account))
+    except Exception:
+        logger.exception("claude-costs query failed")
+        return JSONResponse(status_code=500, content={"error": "query failed"})
+    finally:
+        conn.close()
+
+
 # ── Token usage endpoints ────────────────────────────────────────────────────
 
 
@@ -2348,6 +2939,645 @@ def token_usage_summary():
     except Exception:
         logger.exception("token-usage/summary query failed")
         return JSONResponse(status_code=500, content={"error": "query failed"})
+    finally:
+        conn.close()
+
+
+# ── Cycle summary endpoint ─────────────────────────────────────────────────
+
+
+def _window_to_cutoff(window: str) -> str | None:
+    """Convert a window string (7d/30d/90d/all) to an ISO cutoff timestamp."""
+    if window == "all":
+        return None
+    try:
+        days = int(window.rstrip("d"))
+    except (ValueError, AttributeError):
+        days = 30
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    return cutoff.isoformat(timespec="seconds")
+
+
+def _empty_cycle_summary(job_run_id: str | None = None) -> dict:
+    return {
+        "job_run_id": job_run_id,
+        "cycle_started_at": None,
+        "cycle_type": "unknown",
+        "symbols_evaluated": 0,
+        "pre_check_skipped": {"total": 0, "by_reason": {}},
+        "sent_to_claude": 0,
+        "claude_outcomes": {"SKIP": 0, "OPEN": 0, "CLOSE": 0, "HOLD": 0},
+        "guardrail_rejections": {"total": 0, "by_rule": {}},
+        "orders_placed": 0,
+        "orders_details": [],
+    }
+
+
+@app.get("/api/cycle-summary")
+def cycle_summary(job_run_id: str | None = Query(default=None)):
+    """Return an aggregated summary of the latest (or specified) job run.
+
+    Groups all decisions sharing a job_run_id and computes the funnel:
+    symbols evaluated → pre-check skipped → sent to Claude → Claude outcomes
+    → guardrail rejections → orders placed.
+
+    Query params:
+        job_run_id: specific run to fetch; omit for most recent.
+    """
+    conn = _open_db()
+    if conn is None:
+        return _empty_cycle_summary()
+    try:
+        if job_run_id is None:
+            row = conn.execute(
+                "SELECT job_run_id, MIN(timestamp) AS started_at "
+                "FROM decisions WHERE job_run_id IS NOT NULL "
+                "GROUP BY job_run_id ORDER BY started_at DESC LIMIT 1"
+            ).fetchone()
+            if not row or not row["job_run_id"]:
+                return _empty_cycle_summary()
+            job_run_id = row["job_run_id"]
+
+        rows = conn.execute(
+            """
+            SELECT d.underlying, d.strategy_type, d.action,
+                   d.skip_gate, d.skip_reason_code, d.pre_check_verdict,
+                   d.timestamp, d.id,
+                   t.symbol  AS trade_symbol,
+                   t.limit_price AS trade_limit_price,
+                   t.strategy_type AS trade_strategy_type
+            FROM decisions d
+            LEFT JOIN trades t ON t.decision_id = d.id
+            WHERE d.job_run_id = ?
+            ORDER BY d.timestamp
+            """,
+            (job_run_id,),
+        ).fetchall()
+
+        if not rows:
+            return _empty_cycle_summary(job_run_id)
+
+        started_at = rows[0]["timestamp"]
+        # Extract job type from the prefix: "market_open.<uuid>" → "market_open"
+        cycle_type = job_run_id.split(".")[0] if "." in job_run_id else "unknown"
+
+        symbols_evaluated = len(rows)
+
+        # Pre-check skips (Claude never called)
+        skip_rows = [r for r in rows if (r["pre_check_verdict"] or "") == "SKIP"]
+        by_reason: dict[str, int] = {}
+        for r in skip_rows:
+            code = r["skip_reason_code"] or "unknown"
+            by_reason[code] = by_reason.get(code, 0) + 1
+
+        # Rows where Claude was actually consulted for entry decisions
+        open_rows = [r for r in rows if (r["pre_check_verdict"] or "") == "OPEN"]
+
+        # Normalise Claude's action to the 4-bucket vocabulary
+        claude_outcomes: dict[str, int] = {"SKIP": 0, "OPEN": 0, "CLOSE": 0, "HOLD": 0}
+        for r in open_rows:
+            act = (r["action"] or "").upper()
+            if act in ("SELL_PUT", "SELL_CALL", "OPEN"):
+                claude_outcomes["OPEN"] += 1
+            elif act == "SKIP":
+                claude_outcomes["SKIP"] += 1
+            elif act == "CLOSE":
+                claude_outcomes["CLOSE"] += 1
+            else:  # HOLD, ROLL, or anything else
+                claude_outcomes["HOLD"] += 1
+
+        # Guardrail rejections
+        guardrail_rows = [r for r in rows if (r["skip_gate"] or "").lower() == "guardrail"]
+        by_rule: dict[str, int] = {}
+        for r in guardrail_rows:
+            rule = r["skip_reason_code"] or "guardrail_other"
+            by_rule[rule] = by_rule.get(rule, 0) + 1
+
+        # Orders placed: decisions that have a trade row attached
+        order_rows = [r for r in rows if r["trade_symbol"] is not None]
+        orders_details = [
+            {
+                "symbol": r["underlying"],
+                "strategy": r["strategy_type"],
+                "action": r["action"],
+                "contract": r["trade_symbol"],
+                "limit_price": r["trade_limit_price"],
+            }
+            for r in order_rows
+        ]
+
+        return {
+            "job_run_id": job_run_id,
+            "cycle_started_at": started_at,
+            "cycle_type": cycle_type,
+            "symbols_evaluated": symbols_evaluated,
+            "pre_check_skipped": {"total": len(skip_rows), "by_reason": by_reason},
+            "sent_to_claude": len(open_rows),
+            "claude_outcomes": claude_outcomes,
+            "guardrail_rejections": {"total": len(guardrail_rows), "by_rule": by_rule},
+            "orders_placed": len(order_rows),
+            "orders_details": orders_details,
+        }
+    except Exception:
+        logger.exception("cycle-summary query failed")
+        return JSONResponse(status_code=500, content={"error": "query failed"})
+    finally:
+        conn.close()
+
+
+# ── Claude agreement metric endpoint ──────────────────────────────────────
+
+
+@app.get("/api/claude-agreement")
+def claude_agreement(window: str = Query(default="30d")):
+    """Return the Claude-vs-pre-check agreement metric for a time window.
+
+    Measures how often Claude disagrees with the pre-check layer:
+      - claude_skip_rate_when_precheck_says_open: fraction of pre-check-OPEN
+        decisions where Claude said SKIP.
+      - claude_open_rate_when_precheck_says_skip: fraction of pre-check-SKIP
+        decisions where Claude opened anyway (should be ~0 in normal operation).
+
+    Query params:
+        window: "7d" | "30d" | "90d" | "all" (default "30d")
+    """
+    conn = _open_db()
+    if conn is None:
+        return {
+            "window": window,
+            "decisions_evaluated": 0,
+            "precheck_open_count": 0,
+            "claude_skip_rate_when_precheck_says_open": None,
+            "precheck_skip_count": 0,
+            "claude_open_rate_when_precheck_says_skip": None,
+            "daily_series": [],
+        }
+    try:
+        cutoff = _window_to_cutoff(window)
+        query = """
+            SELECT pre_check_verdict, UPPER(action) AS action,
+                   DATE(timestamp) AS dt
+            FROM decisions
+            WHERE pre_check_verdict IN ('OPEN', 'SKIP')
+        """
+        params: list = []
+        if cutoff is not None:
+            query += " AND timestamp >= ?"
+            params.append(cutoff)
+
+        rows = conn.execute(query, params).fetchall()
+
+        precheck_open = [r for r in rows if r["pre_check_verdict"] == "OPEN"]
+        precheck_skip = [r for r in rows if r["pre_check_verdict"] == "SKIP"]
+
+        precheck_open_count = len(precheck_open)
+        precheck_skip_count = len(precheck_skip)
+
+        if precheck_open_count > 0:
+            n_claude_skip = sum(1 for r in precheck_open if r["action"] == "SKIP")
+            skip_rate: float | None = round(n_claude_skip / precheck_open_count, 4)
+        else:
+            skip_rate = None
+
+        # With current architecture this is always 0 since Claude is not
+        # consulted when pre_check_verdict = 'SKIP'. Computed defensively.
+        if precheck_skip_count > 0:
+            n_claude_open = sum(
+                1 for r in precheck_skip
+                if r["action"] not in ("SKIP", "HOLD", None, "")
+            )
+            open_rate: float | None = round(n_claude_open / precheck_skip_count, 4)
+        else:
+            open_rate = None
+
+        # Daily series: one entry per calendar day in the window (pre-check
+        # OPEN decisions only, since that's what drives the skip rate).
+        daily: dict[str, dict[str, int]] = {}
+        for r in precheck_open:
+            dt = r["dt"] or "unknown"
+            if dt not in daily:
+                daily[dt] = {"open_count": 0, "skip_count": 0}
+            daily[dt]["open_count"] += 1
+            if r["action"] == "SKIP":
+                daily[dt]["skip_count"] += 1
+
+        daily_series = []
+        for dt in sorted(daily):
+            d = daily[dt]
+            oc = d["open_count"]
+            sc = d["skip_count"]
+            daily_series.append({
+                "date": dt,
+                "skip_when_open_rate": round(sc / oc, 4) if oc > 0 else None,
+                "sample_size": oc,
+            })
+
+        return {
+            "window": window,
+            "decisions_evaluated": len(rows),
+            "precheck_open_count": precheck_open_count,
+            "claude_skip_rate_when_precheck_says_open": skip_rate,
+            "precheck_skip_count": precheck_skip_count,
+            "claude_open_rate_when_precheck_says_skip": open_rate,
+            "daily_series": daily_series,
+        }
+    except Exception:
+        logger.exception("claude-agreement query failed")
+        return JSONResponse(status_code=500, content={"error": "query failed"})
+    finally:
+        conn.close()
+
+
+# ── Evaluations endpoints ────────────────────────────────────────────────────
+
+_VALID_SPOT_CHECK_VERDICTS = frozenset({"agree", "disagree", "unclear"})
+
+
+def _parse_json_field(raw: str | None) -> list | dict | None:
+    """Parse a JSON text field, returning None on failure."""
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+
+def _eval_review_status(row: dict) -> str:
+    """Derive review_status from reviewed_at + action_note."""
+    if row.get("reviewed_at"):
+        return "reviewed-with-action" if row.get("action_note") else "reviewed"
+    return "pending"
+
+
+def _format_eval_summary(row: dict, disagree_rate: float | None) -> dict:
+    """Serialise a monthly_evaluations row for the list endpoint."""
+    flags = _parse_json_field(row.get("flags_json")) or []
+    score_dist = _parse_json_field(row.get("score_distribution_json")) or {}
+    overall = score_dist.get("overall", {}) if isinstance(score_dist, dict) else {}
+    return {
+        "month": row["month"],
+        "generated_at": row["created_at"],
+        "decisions_scored": row.get("decisions_evaluated", 0),
+        "closed_trades_in_window": overall.get("closed_trades_in_window"),
+        "insufficient_sample": None,  # not persisted; see monthly_evaluation.py
+        "flag_count": len(flags) if isinstance(flags, list) else 0,
+        "review_status": _eval_review_status(row),
+        "judge_operator_disagreement": disagree_rate,
+    }
+
+
+@app.get("/api/evaluations")
+def evaluations_list(
+    limit: int = Query(default=20, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+):
+    """List monthly evaluation summaries, newest first."""
+    conn = _open_db()
+    if conn is None:
+        return JSONResponse(status_code=503, content={"error": "database unavailable"})
+    try:
+        from database.repositories.judge_spot_checks_repository import JudgeSpotChecksRepository
+        from database.repositories.monthly_evaluations_repository import MonthlyEvaluationsRepository
+
+        evals_repo = MonthlyEvaluationsRepository(conn)
+        spot_repo = JudgeSpotChecksRepository(conn)
+
+        rows = evals_repo.get_list(limit=limit, offset=offset)
+        total = conn.execute("SELECT COUNT(*) FROM monthly_evaluations").fetchone()[0]
+
+        evaluations = [
+            _format_eval_summary(row, spot_repo.get_disagreement_rate(row["month"]))
+            for row in rows
+        ]
+        return {"evaluations": evaluations, "total": total}
+    except Exception:
+        logger.exception("evaluations list query failed")
+        return JSONResponse(status_code=500, content={"error": "query failed"})
+    finally:
+        conn.close()
+
+
+@app.get("/api/evaluations/{month}/flagged-decisions")
+def evaluations_flagged_decisions(month: str):
+    """Per-flag: the 5 lowest-scoring decisions with full context and score rows."""
+    conn = _open_db()
+    if conn is None:
+        return JSONResponse(status_code=503, content={"error": "database unavailable"})
+    try:
+        from database.repositories.decision_scores_repository import DecisionScoresRepository
+        from database.repositories.monthly_evaluations_repository import MonthlyEvaluationsRepository
+
+        evals_repo = MonthlyEvaluationsRepository(conn)
+        scores_repo = DecisionScoresRepository(conn)
+
+        row = evals_repo.get_by_month(month)
+        if row is None:
+            return JSONResponse(status_code=404, content={"error": f"evaluation for {month!r} not found"})
+
+        flags = _parse_json_field(row.get("flags_json")) or []
+        if not isinstance(flags, list):
+            flags = []
+
+        result_flags = []
+        for flag in flags:
+            decision_ids = flag.get("lowest_scoring_decisions") or []
+            decisions = []
+            if decision_ids:
+                placeholders = ",".join(["?"] * len(decision_ids))
+                decision_rows = conn.execute(
+                    f"SELECT * FROM decisions WHERE id IN ({placeholders})",
+                    decision_ids,
+                ).fetchall()
+                decision_map = {r["id"]: dict(r) for r in decision_rows}
+
+                for did in decision_ids:
+                    d = decision_map.get(did)
+                    if d is None:
+                        continue
+                    if d.get("context_json"):
+                        try:
+                            d["context"] = json.loads(d["context_json"])
+                        except (json.JSONDecodeError, TypeError):
+                            d["context"] = None
+                    if isinstance(d.get("reasoning"), str):
+                        try:
+                            d["reasoning"] = json.loads(d["reasoning"])
+                        except (json.JSONDecodeError, TypeError):
+                            pass
+                    d["scores"] = scores_repo.get_by_decision(did)
+                    decisions.append(d)
+
+            result_flags.append({
+                "strategy": flag.get("strategy"),
+                "dimension": flag.get("dimension"),
+                "severity": flag.get("severity"),
+                "reason": flag.get("reason"),
+                "decisions": decisions,
+            })
+
+        return {"month": month, "flags": result_flags}
+    except Exception:
+        logger.exception("evaluations flagged-decisions query failed for %s", month)
+        return JSONResponse(status_code=500, content={"error": "query failed"})
+    finally:
+        conn.close()
+
+
+@app.get("/api/evaluations/{month}/spot-check-queue")
+def evaluations_spot_check_queue(
+    month: str,
+    limit: int = Query(default=20, ge=1, le=100),
+):
+    """Return pending spot-check items for the month with full decision context."""
+    conn = _open_db()
+    if conn is None:
+        return JSONResponse(status_code=503, content={"error": "database unavailable"})
+    try:
+        from database.repositories.decision_scores_repository import DecisionScoresRepository
+        from database.repositories.monthly_evaluations_repository import MonthlyEvaluationsRepository
+
+        evals_repo = MonthlyEvaluationsRepository(conn)
+        scores_repo = DecisionScoresRepository(conn)
+
+        if evals_repo.get_by_month(month) is None:
+            return JSONResponse(status_code=404, content={"error": f"evaluation for {month!r} not found"})
+
+        score_rows = scores_repo.get_spot_check_queue(month, limit=limit)
+
+        queue = []
+        for score in score_rows:
+            decision_row = conn.execute(
+                "SELECT * FROM decisions WHERE id = ?", (score["decision_id"],)
+            ).fetchone()
+            decision = dict(decision_row) if decision_row else None
+            if decision:
+                if decision.get("context_json"):
+                    try:
+                        decision["context"] = json.loads(decision["context_json"])
+                    except (json.JSONDecodeError, TypeError):
+                        decision["context"] = None
+                if isinstance(decision.get("reasoning"), str):
+                    try:
+                        decision["reasoning"] = json.loads(decision["reasoning"])
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+
+            score_out = dict(score)
+            if score_out.get("dimension_scores_json"):
+                try:
+                    score_out["dimension_scores"] = json.loads(score_out["dimension_scores_json"])
+                except (json.JSONDecodeError, TypeError):
+                    score_out["dimension_scores"] = None
+
+            queue.append({"decision": decision, "score": score_out})
+
+        return {"month": month, "queue": queue}
+    except Exception:
+        logger.exception("evaluations spot-check-queue query failed for %s", month)
+        return JSONResponse(status_code=500, content={"error": "query failed"})
+    finally:
+        conn.close()
+
+
+@app.get("/api/evaluations/{month}")
+def evaluations_detail(month: str):
+    """Return the full monthly evaluation row with parsed flags and score distribution."""
+    conn = _open_db()
+    if conn is None:
+        return JSONResponse(status_code=503, content={"error": "database unavailable"})
+    try:
+        from database.repositories.judge_spot_checks_repository import JudgeSpotChecksRepository
+        from database.repositories.monthly_evaluations_repository import MonthlyEvaluationsRepository
+
+        evals_repo = MonthlyEvaluationsRepository(conn)
+        spot_repo = JudgeSpotChecksRepository(conn)
+
+        row = evals_repo.get_by_month(month)
+        if row is None:
+            return JSONResponse(status_code=404, content={"error": f"evaluation for {month!r} not found"})
+
+        return {
+            "month": row["month"],
+            "generated_at": row["created_at"],
+            "decisions_scored": row.get("decisions_evaluated", 0),
+            "avg_score": row.get("avg_score"),
+            "pct_pass": row.get("pct_pass"),
+            "reviewed_at": row.get("reviewed_at"),
+            "action_note": row.get("action_note"),
+            "review_status": _eval_review_status(row),
+            "flag_summary": _parse_json_field(row.get("flags_json")) or [],
+            "score_distribution": _parse_json_field(row.get("score_distribution_json")) or {},
+            "judge_operator_disagreement": spot_repo.get_disagreement_rate(month),
+        }
+    except Exception:
+        logger.exception("evaluations detail query failed for %s", month)
+        return JSONResponse(status_code=500, content={"error": "query failed"})
+    finally:
+        conn.close()
+
+
+@app.post("/api/evaluations/{month}/spot-checks")
+async def evaluations_submit_spot_check(month: str, request: Request):
+    """Submit an operator spot-check verdict for a decision score."""
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(status_code=400, content={"error": "invalid JSON body"})
+
+    decision_score_id = body.get("decision_score_id")
+    operator_verdict = body.get("operator_verdict")
+    note = body.get("note")
+
+    if not isinstance(decision_score_id, int):
+        return JSONResponse(status_code=400, content={"error": "'decision_score_id' must be an integer"})
+    if operator_verdict not in _VALID_SPOT_CHECK_VERDICTS:
+        return JSONResponse(
+            status_code=400,
+            content={"error": f"'operator_verdict' must be one of: {sorted(_VALID_SPOT_CHECK_VERDICTS)}"},
+        )
+    if note is not None and not isinstance(note, str):
+        return JSONResponse(status_code=400, content={"error": "'note' must be a string or null"})
+
+    conn = _open_db()
+    if conn is None:
+        return JSONResponse(status_code=503, content={"error": "database unavailable"})
+    try:
+        from database.repositories.decision_scores_repository import DecisionScoresRepository
+        from database.repositories.judge_spot_checks_repository import JudgeSpotChecksRepository
+        from database.repositories.monthly_evaluations_repository import MonthlyEvaluationsRepository
+
+        evals_repo = MonthlyEvaluationsRepository(conn)
+        scores_repo = DecisionScoresRepository(conn)
+        spot_repo = JudgeSpotChecksRepository(conn)
+
+        if evals_repo.get_by_month(month) is None:
+            return JSONResponse(status_code=404, content={"error": f"evaluation for {month!r} not found"})
+
+        score_row = conn.execute(
+            "SELECT * FROM decision_scores WHERE id = ?", (decision_score_id,)
+        ).fetchone()
+        if score_row is None:
+            return JSONResponse(
+                status_code=404,
+                content={"error": f"decision_score {decision_score_id} not found"},
+            )
+        score_dict = dict(score_row)
+        if not score_dict.get("scored_at", "").startswith(month):
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": (
+                        f"decision_score {decision_score_id} does not belong to month {month!r}"
+                    )
+                },
+            )
+
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        check_id = spot_repo.insert({
+            "decision_score_id": decision_score_id,
+            "submitted_at": now,
+            "judge_score": score_dict.get("total_score"),
+            "operator_verdict": operator_verdict,
+            "verdict_notes": note,
+            "checked_at": now,
+        })
+        scores_repo.mark_spot_check_submitted(decision_score_id)
+
+        created = conn.execute(
+            "SELECT * FROM judge_spot_checks WHERE id = ?", (check_id,)
+        ).fetchone()
+        return {"spot_check": dict(created) if created else {"id": check_id}}
+    except Exception:
+        logger.exception("evaluations spot-checks POST failed for %s", month)
+        return JSONResponse(status_code=500, content={"error": "submit failed"})
+    finally:
+        conn.close()
+
+
+@app.post("/api/evaluations/{month}/mark-reviewed")
+async def evaluations_mark_reviewed(month: str, request: Request):
+    """Mark a monthly evaluation as reviewed, optionally with an action note."""
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(status_code=400, content={"error": "invalid JSON body"})
+
+    action_note = body.get("action_note")
+    if action_note is not None and not isinstance(action_note, str):
+        return JSONResponse(status_code=400, content={"error": "'action_note' must be a string or null"})
+
+    conn = _open_db()
+    if conn is None:
+        return JSONResponse(status_code=503, content={"error": "database unavailable"})
+    try:
+        from database.repositories.monthly_evaluations_repository import MonthlyEvaluationsRepository
+
+        evals_repo = MonthlyEvaluationsRepository(conn)
+
+        if evals_repo.get_by_month(month) is None:
+            return JSONResponse(status_code=404, content={"error": f"evaluation for {month!r} not found"})
+
+        note = action_note.strip() if action_note else None
+        evals_repo.mark_reviewed(month, note or None)
+
+        updated = evals_repo.get_by_month(month)
+        return {
+            "month": updated["month"],
+            "review_status": _eval_review_status(updated),
+            "reviewed_at": updated["reviewed_at"],
+            "action_note": updated["action_note"],
+        }
+    except Exception:
+        logger.exception("evaluations mark-reviewed POST failed for %s", month)
+        return JSONResponse(status_code=500, content={"error": "mark-reviewed failed"})
+    finally:
+        conn.close()
+
+
+# ── Strategy health funnel ───────────────────────────────────────────────────
+
+
+@app.get("/api/strategy-health")
+def strategy_health(
+    weeks: int = Query(12, ge=1, le=52),
+    strategy: str | None = Query(None),
+):
+    """Weekly funnel per strategy for the last N weeks.
+
+    Paper-trading context: the returned counts reflect Claude decision quality
+    and guardrail behaviour. They do NOT reflect strategy profitability —
+    paper fills are unrealistic (mid-price, no slippage, no fees).
+
+    Returns:
+        {
+          "weeks": [...],          # list of funnel rows (see StrategyHealthRepository)
+          "generated_at": "<iso>",
+          "paper_mode": true
+        }
+    """
+    if not settings.STRATEGY_HEALTH_PAGE_ENABLED:
+        return JSONResponse(status_code=404, content={"error": "not found"})
+
+    conn = _open_db()
+    if conn is None:
+        return JSONResponse(status_code=503, content={"error": "database unavailable"})
+    try:
+        from database.repositories.strategy_health import StrategyHealthRepository
+        repo = StrategyHealthRepository(conn)
+        strategy_filter = [strategy] if strategy else None
+        rows = repo.get_strategy_health_funnel(
+            weeks_back=weeks,
+            strategy_types=strategy_filter,
+        )
+        return {
+            "weeks": rows,
+            "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "paper_mode": True,
+        }
+    except Exception:
+        logger.exception("strategy-health endpoint failed")
+        return JSONResponse(status_code=500, content={"error": "internal error"})
     finally:
         conn.close()
 

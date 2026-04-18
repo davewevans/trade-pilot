@@ -40,7 +40,6 @@ class BullPutSpreadStrategy:
         self._backtest_stats_repo = backtest_stats_repo
         # Set by the orchestrator (market_open) before each cycle so the
         # tracker can persist the CB status that was active at entry.
-        self.cb_status_at_entry: str | None = None
         self.state = BullPutSpreadState.IDLE
         self.open_spread_id: str | None = None
         self.pending_order_id: str | None = None
@@ -401,7 +400,7 @@ class BullPutSpreadStrategy:
 
     # ── execution ───────────────────────────────────────────
 
-    def execute_entry(self, decision: dict) -> bool:
+    def execute_entry(self, decision: dict, cb_status: str | None = None) -> bool:
         """Place the 2-leg mleg order and register with spread_tracker."""
         legs = [
             {"symbol": decision["short_put_symbol"], "side": "sell",
@@ -435,7 +434,7 @@ class BullPutSpreadStrategy:
                 max_loss=decision.get("max_loss", 0),
                 max_gain=abs(decision.get("net_credit", 0)) * 100,
                 entry_order_id=order_id,
-                cb_status_at_entry=self.cb_status_at_entry,
+                cb_status_at_entry=cb_status,
             )
             self.open_spread_id = spread_id
 

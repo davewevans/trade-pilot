@@ -19,6 +19,7 @@ import { EmptyState } from '../components/shared/EmptyState'
 import { IVHistoryChart } from '../components/shared/IVHistoryChart'
 import { LoadingSpinner } from '../components/shared/LoadingSpinner'
 import { StatCard } from '../components/shared/StatCard'
+import { PortfolioGreeksCard } from './Dashboard'
 import type { CircuitBreaker, EquityHistory, NtaEvent, NtaEventsResponse, Position, Trade } from '../types'
 
 // Maps the URL account slug to the strategy_type tag that
@@ -451,6 +452,8 @@ export function AccountDetail() {
           )}
         </div>
       </section>
+
+      <PortfolioGreeksCard account={account} />
 
       <section>
         <h3 className="section-heading">Equity curve (last 90 days)</h3>

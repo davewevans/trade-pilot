@@ -317,6 +317,96 @@ _SCHEMA_STATEMENTS: tuple[str, ...] = (
         PRIMARY KEY (recommendation_id, outcome_type, window_days)
     )
     """,
+    # ── api_usage_ledger ──────────────────────────────────────────────
+    """
+    CREATE TABLE IF NOT EXISTS api_usage_ledger (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        api           TEXT    NOT NULL,
+        endpoint      TEXT    NOT NULL,
+        ts            REAL    NOT NULL,
+        symbol        TEXT,
+        cache_hit     INTEGER NOT NULL,
+        status_code   INTEGER,
+        duration_ms   INTEGER,
+        process_id    INTEGER NOT NULL,
+        job_name      TEXT,
+        blocked_reason TEXT
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_ledger_api_ts ON api_usage_ledger(api, ts)",
+    "CREATE INDEX IF NOT EXISTS idx_ledger_ts ON api_usage_ledger(ts)",
+    # ── sweep_progress ────────────────────────────────────────────────────
+    # Tracks which (symbol, strategy) pairs have been primed by the rotating
+    # weekly backtest sweep.  Used by BacktestSweep.run_sweep() to prioritise
+    # unprimed pairs and skip recently-primed ones.
+    """
+    CREATE TABLE IF NOT EXISTS sweep_progress (
+        symbol            TEXT    NOT NULL,
+        strategy          TEXT    NOT NULL,
+        lookback_years    INTEGER NOT NULL,
+        last_primed_at    REAL,        -- unix epoch; NULL if never primed
+        prime_cost_calls  INTEGER,     -- estimated ORATS calls used during last prime
+        last_error        TEXT,        -- error message if last prime failed; NULL on success
+        PRIMARY KEY (symbol, strategy, lookback_years)
+    )
+    """,
+    # ── decision_scores ──────────────────────────────────────────────────
+    # Offline evaluation scores for individual decisions.  Populated by the
+    # rubric-scoring pipeline (scorer_type='automated_rubric') and optionally
+    # overridden by human judges (scorer_type='judge_manual').
+    # spot_check_pending=1 flags rows awaiting human spot-check review.
+    """
+    CREATE TABLE IF NOT EXISTS decision_scores (
+        id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+        decision_id             INTEGER NOT NULL,
+        scorer_type             TEXT    NOT NULL,
+        scored_at               TEXT    NOT NULL,
+        total_score             REAL    NOT NULL,
+        max_score               REAL    NOT NULL,
+        rubric_version          TEXT,
+        dimension_scores_json   TEXT,
+        pass_fail               TEXT,
+        notes                   TEXT,
+        spot_check_pending      INTEGER NOT NULL DEFAULT 0,
+        spot_check_submitted_at TEXT
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_dscores_decision ON decision_scores(decision_id)",
+    "CREATE INDEX IF NOT EXISTS idx_dscores_scorer_ts ON decision_scores(scorer_type, scored_at)",
+    "CREATE INDEX IF NOT EXISTS idx_dscores_spot_check ON decision_scores(spot_check_pending) WHERE spot_check_pending = 1",
+    # ── monthly_evaluations ───────────────────────────────────────────────
+    # One row per calendar month (YYYY-MM) summarising the rubric pipeline
+    # output.  The UNIQUE(month) constraint is enforced at the table level
+    # so upsert callers get a clear IntegrityError on duplicate inserts.
+    """
+    CREATE TABLE IF NOT EXISTS monthly_evaluations (
+        id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+        month                   TEXT    NOT NULL UNIQUE,
+        decisions_evaluated     INTEGER NOT NULL DEFAULT 0,
+        avg_score               REAL,
+        pct_pass                REAL,
+        score_distribution_json TEXT,
+        flags_json              TEXT,
+        created_at              TEXT    NOT NULL,
+        reviewed_at             TEXT,
+        action_note             TEXT
+    )
+    """,
+    # ── judge_spot_checks ─────────────────────────────────────────────────
+    # Human-judge review rows linked to decision_scores rows.
+    # operator_verdict: 'agree' | 'disagree' | 'abstain'
+    """
+    CREATE TABLE IF NOT EXISTS judge_spot_checks (
+        id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+        decision_score_id   INTEGER NOT NULL,
+        submitted_at        TEXT    NOT NULL,
+        judge_score         REAL,
+        operator_verdict    TEXT,
+        verdict_notes       TEXT,
+        checked_at          TEXT
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_jsc_score_id ON judge_spot_checks(decision_score_id)",
 )
 
 
@@ -335,10 +425,26 @@ _MIGRATIONS: tuple[str, ...] = (
     "ALTER TABLE decisions ADD COLUMN research_metadata_json TEXT",
     "ALTER TABLE decisions ADD COLUMN skip_gate TEXT",
     "ALTER TABLE decisions ADD COLUMN skip_reason_code TEXT",
+    "ALTER TABLE trades ADD COLUMN is_recovery_order INTEGER NOT NULL DEFAULT 0",
+    # ── Cost tracking on decisions (added Phase A, 2026-04) ─────────────
+    # New columns record token counts and cost for every row where Claude
+    # was actually invoked.  Pre-check skips (no Claude call) leave these
+    # NULL.  estimated_cost_usd is frozen at write time using the rate in
+    # config.CLAUDE_PRICING; it is NEVER recomputed on read.
+    "ALTER TABLE decisions ADD COLUMN model_version TEXT",
+    "ALTER TABLE decisions ADD COLUMN input_tokens INTEGER",
+    "ALTER TABLE decisions ADD COLUMN output_tokens INTEGER",
+    "ALTER TABLE decisions ADD COLUMN cache_read_tokens INTEGER",
+    "ALTER TABLE decisions ADD COLUMN cache_creation_tokens INTEGER",
+    "ALTER TABLE decisions ADD COLUMN estimated_cost_usd REAL",
     """UPDATE watchlist_recommendations
    SET operator_decision = 'expired'
    WHERE operator_decision IS NULL
    AND generated_at < datetime('now', '-14 days')""",
+    "ALTER TABLE decisions ADD COLUMN job_run_id TEXT",
+    "ALTER TABLE decisions ADD COLUMN pre_check_verdict TEXT",
+    "CREATE INDEX IF NOT EXISTS idx_decisions_job_run ON decisions(job_run_id) WHERE job_run_id IS NOT NULL",
+    "CREATE INDEX IF NOT EXISTS idx_decisions_pcv ON decisions(pre_check_verdict, timestamp)",
 )
 
 

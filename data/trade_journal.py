@@ -9,15 +9,14 @@ from version import VERSION
 
 logger = logging.getLogger(__name__)
 
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent
-_DEFAULT_PATH = _PROJECT_ROOT / "data" / "journal.jsonl"
-
-
 class TradeJournal:
     """Append-only trade journal stored as JSONL (one JSON object per line)."""
 
     def __init__(self, path: Path | None = None):
-        self.path = path or _DEFAULT_PATH
+        if path is None:
+            from config import settings
+            path = settings.JOURNAL_PATH
+        self.path = path
         self.path.parent.mkdir(parents=True, exist_ok=True)
 
     def append(self, entry: dict) -> None:
@@ -45,6 +44,8 @@ class TradeJournal:
             "version": VERSION,
         }
         record.update(entry)
+        record.setdefault("max_adverse_value", None)
+        record.setdefault("max_adverse_timestamp", None)
         with open(self.path, "a", encoding="utf-8") as f:
             f.write(json.dumps(record, default=str) + "\n")
         logger.info("Journal append: %s %s %s", record.get("action"), record.get("symbol"), record.get("order_id"))
@@ -106,6 +107,66 @@ class TradeJournal:
             for entry in entries:
                 f.write(json.dumps(entry, default=str) + "\n")
         logger.info("Journal update: order_id %s updated with %s", order_id, list(updates.keys()))
+
+    def update_mae(self, order_id: str, current_value: float, timestamp: str) -> None:
+        """Update max-adverse-excursion for an open journal entry.
+
+        current_value is the unrealized P&L from Alpaca (signed: positive =
+        profit, negative = loss). Records the worst (most negative) value
+        observed.  Backward-compat: pre-MAE entries without the key treat
+        missing as None.
+        """
+        entries = self._read_all()
+        found = False
+        for entry in entries:
+            if entry.get("order_id") == order_id:
+                stored = entry.get("max_adverse_value")
+                if stored is None or current_value < stored:
+                    entry["max_adverse_value"] = current_value
+                    entry["max_adverse_timestamp"] = timestamp
+                    found = True
+                break
+        if not found:
+            # order_id not in journal — not necessarily an error (spread entries
+            # are tracked via SpreadTracker, not the journal, in many cases)
+            return
+        with open(self.path, "w", encoding="utf-8") as f:
+            for entry in entries:
+                f.write(json.dumps(entry, default=str) + "\n")
+        logger.debug(
+            "MAE updated order_id=%s value=%.4f ts=%s", order_id, current_value, timestamp
+        )
+
+    def bulk_update_mae(self, symbol_pl_map: dict) -> int:
+        """Update MAE for multiple open journal entries in a single read/write.
+
+        symbol_pl_map: {contract_symbol_upper: (current_pl, timestamp)}
+        Returns the count of entries updated.
+        """
+        if not symbol_pl_map:
+            return 0
+        entries = self._read_all()
+        updated = 0
+        for entry in entries:
+            csym = (entry.get("contract_symbol") or "").upper()
+            if not csym or csym not in symbol_pl_map:
+                continue
+            if entry.get("status") not in ("submitted", "filled"):
+                continue
+            if entry.get("closed_at") is not None:
+                continue
+            current_value, timestamp = symbol_pl_map[csym]
+            stored = entry.get("max_adverse_value")
+            if stored is None or current_value < stored:
+                entry["max_adverse_value"] = current_value
+                entry["max_adverse_timestamp"] = timestamp
+                updated += 1
+        if updated > 0:
+            with open(self.path, "w", encoding="utf-8") as f:
+                for entry in entries:
+                    f.write(json.dumps(entry, default=str) + "\n")
+            logger.debug("bulk_update_mae: updated %d journal entries", updated)
+        return updated
 
     def get_symbol_stats(self, symbol: str, days: int = 30) -> dict:
         """Return aggregate performance stats for a symbol over the past N days.

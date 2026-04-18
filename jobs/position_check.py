@@ -2,6 +2,7 @@
 
 import json
 import logging
+import uuid
 from dataclasses import asdict
 from datetime import datetime
 
@@ -13,6 +14,7 @@ logger = logging.getLogger(__name__)
 
 def run() -> None:
     """Check open options positions and ask Claude whether to roll, close, or hold."""
+    job_run_id = f"position_check.{uuid.uuid4()}"
     logger.info("=== POSITION CHECK JOB STARTING ===")
 
     from ai.claude_advisor import ClaudeAdvisor
@@ -141,6 +143,102 @@ def run() -> None:
             except Exception as e:
                 logger.warning("Failed to write context snapshot for %s: %s", underlying, e)
 
+            # ── Force-close check (SHORT_PUT only) ─────────────
+            # Runs BEFORE the advisor. If abs(delta) ≥ 0.70 AND DTE ≤ 3 the
+            # position is in a regime where deterministic rules beat Claude.
+            # A ForceCloseResult bypasses the advisor entirely for this cycle.
+            if state.value == "SHORT_PUT":
+                from strategies import force_close as _fc
+                _fc_option_chain = context.get("option_chain") or {}
+                _fc_snap = _fc_option_chain.get(symbol_occ) or {}
+                _fc_greeks = _fc_snap.get("greeks") or {}
+                _fc_quote = _fc_snap.get("latest_quote") or {}
+                _fc_delta = _fc_greeks.get("delta")
+                _fc_bid = _fc_quote.get("bid_price")
+                _fc_ask = _fc_quote.get("ask_price")
+                # DTE: encoded in OCC symbol as YYMMDD after the root ticker
+                _fc_dte: int | None = None
+                try:
+                    for _fc_i, _fc_ch in enumerate(symbol_occ):
+                        if _fc_ch.isdigit():
+                            _fc_exp = datetime.strptime(
+                                symbol_occ[_fc_i:_fc_i + 6], "%y%m%d",
+                            ).date()
+                            _fc_dte = (_fc_exp - datetime.now().date()).days
+                            break
+                except Exception:
+                    logger.debug(
+                        "Could not parse DTE from OCC symbol %s", symbol_occ,
+                    )
+
+                _fc_result = _fc.check_wheel_short_put(
+                    pos,
+                    {"delta": _fc_delta, "dte": _fc_dte, "bid": _fc_bid, "ask": _fc_ask},
+                )
+                if _fc_result is not None:
+                    logger.warning(
+                        "FORCE_CLOSE triggered for %s [%s]: %s",
+                        underlying, _fc_result.rule_code, _fc_result.reason,
+                    )
+                    _fc_decision = {
+                        "action": "close",
+                        "symbol": symbol_occ,
+                        "qty": 1,
+                        "order_type": "limit",
+                        "limit_price": _fc_result.suggested_limit_price,
+                        "reasoning": {"risk": _fc_result.reason},
+                        "confidence": "high",
+                    }
+                    _fc_decision_id = None
+                    _fc_cycle_id = None
+                    if recorder is not None:
+                        _fc_decision_id, _fc_cycle_id = recorder.record_decision(
+                            strategy_type="wheel", underlying=underlying,
+                            action="CLOSE",
+                            wheel_state=state.value,
+                            reasoning=f"[{_fc_result.rule_code}] {_fc_result.reason}",
+                            confidence="high",
+                            context=context,
+                            job_run_id=job_run_id,
+                            pre_check_verdict="MANAGE",
+                            prompt_version=None,
+                        )
+                    if settings.DRY_RUN:
+                        logger.info(
+                            "DRY RUN - would FORCE_CLOSE: %s",
+                            json.dumps(_fc_decision, default=str),
+                        )
+                    else:
+                        _fc_exec = execute_decision(broker, _fc_decision)
+                        _fc_order_id = _fc_exec.get("id") if _fc_exec else None
+                        if _fc_order_id:
+                            journal.update(pos.get("order_id", ""), {
+                                "status": "closed",
+                                "fill_status": "pending",
+                                "closed_at": datetime.now().isoformat(timespec="seconds"),
+                                "close_regime": context.get("confirmed_market_regime"),
+                            })
+                            logger.info(
+                                "%s FORCE_CLOSE executed: order=%s",
+                                underlying, _fc_order_id,
+                            )
+                            if recorder is not None and _fc_cycle_id:
+                                recorder.record_trade(
+                                    cycle_id=_fc_cycle_id,
+                                    decision_id=_fc_decision_id,
+                                    alpaca_order_id=_fc_order_id,
+                                    underlying=underlying,
+                                    strategy_type="wheel",
+                                    action="close",
+                                    symbol=symbol_occ,
+                                    limit_price=_fc_decision.get("limit_price") or 0.0,
+                                    contracts=1,
+                                )
+                    report_lines.append(
+                        f"**{underlying}** — FORCE_CLOSE ({_fc_result.rule_code})"
+                    )
+                    continue
+
             import time as _time
             _t0_ask = _time.monotonic()
             decision = advisor.ask(context, state)
@@ -187,6 +285,9 @@ def run() -> None:
                             reasoning=f"Guardrail rejected: {rejection}",
                             confidence=decision.get("confidence"),
                             context=context,
+                            job_run_id=job_run_id,
+                            pre_check_verdict="MANAGE",
+                            prompt_version=advisor.prompt_version,
                         )
 
                     report_lines.append(f"**{underlying}** — {action} REJECTED: {rejection}")
@@ -213,6 +314,9 @@ def run() -> None:
                         reasoning=decision.get("reasoning"),
                         confidence=decision.get("confidence"),
                         context=context,
+                        job_run_id=job_run_id,
+                        pre_check_verdict="MANAGE",
+                        prompt_version=advisor.prompt_version,
                     )
 
                 if settings.DRY_RUN:
@@ -275,6 +379,9 @@ def run() -> None:
                         reasoning=decision.get("reasoning"),
                         confidence=decision.get("confidence"),
                         context=context,
+                        job_run_id=job_run_id,
+                        pre_check_verdict="MANAGE",
+                        prompt_version=advisor.prompt_version,
                     )
 
                 report_lines.append(f"**{underlying}** — hold")

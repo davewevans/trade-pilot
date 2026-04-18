@@ -6,6 +6,8 @@ import json
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
+from database.db import db_retry
+
 
 class LiquidityRepository:
     """Read/write access to symbol_liquidity_snapshots and symbol_liquidity_scores."""
@@ -15,6 +17,7 @@ class LiquidityRepository:
 
     # ── Snapshot methods ───────────────────────────────────────────────────────
 
+    @db_retry()
     def insert_snapshot(self, data: dict) -> int:
         """Insert or replace a liquidity snapshot. Returns snapshot_id.
 
@@ -101,6 +104,7 @@ class LiquidityRepository:
 
     # ── Score methods ─────────────────────────────────────────────────────────
 
+    @db_retry()
     def upsert_score(self, score: dict) -> None:
         """Insert or update a liquidity score row.
 

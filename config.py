@@ -84,9 +84,9 @@ class Settings:
         self.RENDER: bool = os.getenv("RENDER", "false").lower() == "true"
 
         if self.RENDER:
-            self.DATA_DIR: Path = Path(os.getenv("DATA_DIR", "/data"))
+            self.DATA_DIR: Path = Path(os.getenv("DATA_DIR", "/data")).resolve()
         else:
-            self.DATA_DIR: Path = Path("data")
+            self.DATA_DIR: Path = Path("data").resolve()
 
         self.REPORTS_DIR: Path = self.DATA_DIR / "reports"
         self.JOURNAL_PATH: Path = self.DATA_DIR / "journal.jsonl"
@@ -139,6 +139,16 @@ class Settings:
         self.RESEARCH_BACKTEST_MAX_SYMBOLS_PER_RUN: int = int(
             os.getenv("RESEARCH_BACKTEST_MAX_SYMBOLS_PER_RUN", "50")
         )
+        # Max ORATS historical calls consumed by a single weekly_research sweep run.
+        # The rotating sweep stops when this budget or the monthly cap is exhausted.
+        self.WEEKLY_SWEEP_BUDGET_CALLS: int = int(
+            os.getenv("WEEKLY_SWEEP_BUDGET_CALLS", "3000")
+        )
+        # Weeks after which a primed (symbol, strategy) pair becomes eligible for
+        # re-priming to pick up recent backtest data.
+        self.SWEEP_REPRIME_WEEKS: int = int(
+            os.getenv("SWEEP_REPRIME_WEEKS", "4")
+        )
 
         # Research layer — watchlist recommendations
         self.RESEARCH_RECOMMENDATIONS_ENABLED: bool = (
@@ -151,6 +161,39 @@ class Settings:
             os.getenv("RESEARCH_REMOVE_MIN_WEEKS_OBSERVED", "12")
         )
 
+        # ── ORATS quota protection ─────────────────────────────
+        # Monthly caps (ORATS plan: 20,000/month; 2,000-call buffer reserved)
+        self.ORATS_HISTORICAL_MONTHLY_CAP: int = int(
+            os.getenv("ORATS_HISTORICAL_MONTHLY_CAP", "14000")
+        )
+        self.ORATS_LIVE_MONTHLY_CAP: int = int(
+            os.getenv("ORATS_LIVE_MONTHLY_CAP", "4000")
+        )
+        # Daily caps (historical is bursty so the whole monthly budget is
+        # usable in one day; live is capped at ~2× baseline ~350-525/day)
+        self.ORATS_HISTORICAL_DAILY_CAP: int = int(
+            os.getenv("ORATS_HISTORICAL_DAILY_CAP", "14000")
+        )
+        self.ORATS_LIVE_DAILY_CAP: int = int(
+            os.getenv("ORATS_LIVE_DAILY_CAP", "700")
+        )
+        # Per-minute caps (reduced from historical 900 to leave headroom)
+        self.ORATS_HISTORICAL_MINUTE_CAP: int = int(
+            os.getenv("ORATS_HISTORICAL_MINUTE_CAP", "600")
+        )
+        self.ORATS_LIVE_MINUTE_CAP: int = int(
+            os.getenv("ORATS_LIVE_MINUTE_CAP", "120")
+        )
+        # Set to 1 to override pre-flight abort when sweep estimate > 80% of
+        # remaining monthly budget (see jobs/weekly_research.py pre-flight check).
+        self.ORATS_ALLOW_BUDGET_HEAVY: int = int(
+            os.getenv("ORATS_ALLOW_BUDGET_HEAVY", "0")
+        )
+        # Set to "1" to allow ORATSCache to silently fall back to in-memory when
+        # SQLite init fails.  In production (RENDER=true) the default is to raise
+        # rather than degrade invisibly.  Dev always falls back with a CRITICAL log.
+        self.ORATS_CACHE_ALLOW_FALLBACK: str = os.getenv("ORATS_CACHE_ALLOW_FALLBACK", "0")
+
         # ── Notifications ──────────────────────────────────────
         # ntfy.sh topic name. When unset, ntfy notifications are silently dropped.
         # Set to any unique string (e.g. "trade-pilot-abc123") to enable push alerts.
@@ -162,6 +205,33 @@ class Settings:
         # "true" (default) → critical (immediate push); "false" → info (digest only).
         self.ALERT_FILLS: bool = os.getenv("ALERT_FILLS", "true").lower() == "true"
 
+        # ── Evaluation / scoring ───────────────────────────────
+        # Enable the programmatic decision scorer CLI job.
+        # Off by default; turn on once the rubric is reviewed and backfill
+        # is ready.  When off, --job=score_programmatic logs and exits cleanly.
+        self.EVALUATION_SCORER_ENABLED: bool = (
+            os.getenv("EVALUATION_SCORER_ENABLED", "false").lower() == "true"
+        )
+
+        # ── LLM judge scorer ───────────────────────────────────
+        # Off by default; turn on once the judge prompt has been reviewed and
+        # ANTHROPIC_API_KEY is confirmed to have Opus access.
+        # --job=score_judge logs and exits cleanly when false.
+        self.EVALUATION_JUDGE_ENABLED: bool = (
+            os.getenv("EVALUATION_JUDGE_ENABLED", "false").lower() == "true"
+        )
+
+        # ── Monthly evaluation automation ──────────────────────
+        # When true, the monthly_evaluation job runs the full pipeline on the
+        # 1st of each month at 05:00 ET and fires an ntfy alert when flags are
+        # detected.  Off by default; turn on once scoring flags are stable and
+        # the rubric has been reviewed in production.
+        self.EVALUATION_AUTOMATION_ENABLED: bool = (
+            os.getenv("EVALUATION_AUTOMATION_ENABLED", "false").lower() == "true"
+        )
+        self.JUDGE_MODEL: str = os.getenv("JUDGE_MODEL", "claude-opus-4-7")
+        self.JUDGE_RATE_LIMIT_MS: int = int(os.getenv("JUDGE_RATE_LIMIT_MS", "200"))
+
         # Circuit breaker thresholds (percentages)
         self.DAILY_LOSS_HALT_PCT: float = float(os.getenv("DAILY_LOSS_HALT_PCT", "3.0"))
         self.DAILY_LOSS_REDUCE_PCT: float = float(os.getenv("DAILY_LOSS_REDUCE_PCT", "1.5"))
@@ -169,10 +239,24 @@ class Settings:
         self.DRAWDOWN_HALT_PCT: float = float(os.getenv("DRAWDOWN_HALT_PCT", "10.0"))
         self.DRAWDOWN_LOCK_PCT: float = float(os.getenv("DRAWDOWN_LOCK_PCT", "15.0"))
 
+        # Force-close rules: bypass Claude for catastrophic positions (deep ITM + near expiry).
+        # Default true — this is a safety mechanism. Set to "false" to disable.
+        self.FORCE_CLOSE_ENABLED: bool = (
+            os.getenv("FORCE_CLOSE_ENABLED", "true").lower() == "true"
+        )
+
+        # Strategy health dashboard page. Read-only; defaults on.
+        # Set STRATEGY_HEALTH_PAGE_ENABLED=false to hide the sidebar link
+        # and 404 the API endpoint. Does not affect any strategy logic.
+        self.STRATEGY_HEALTH_PAGE_ENABLED: bool = (
+            os.getenv("STRATEGY_HEALTH_PAGE_ENABLED", "true").lower() == "true"
+        )
+
         # Create required directories
         self.DATA_DIR.mkdir(parents=True, exist_ok=True)
         self.LOG_DIR.mkdir(parents=True, exist_ok=True)
         self.SNAPSHOTS_DIR.mkdir(parents=True, exist_ok=True)
+        (self.DATA_DIR / "locks").mkdir(parents=True, exist_ok=True)
         for sub in ("daily", "weekly", "positions", "strategies"):
             (self.REPORTS_DIR / sub).mkdir(parents=True, exist_ok=True)
 
@@ -297,4 +381,204 @@ class Settings:
         return value
 
 
+# ── Canonical schedule — single source of truth ───────────────────────────────
+# scheduler.py iterates over this to register jobs with the ``schedule`` library.
+# The API exposes this via GET /api/schedule so the frontend can render it
+# dynamically without duplicating times in component code.
+#
+# Fields per entry:
+#   job              — matches the key in scheduler.py's _JOB_FN mapping
+#   type             — "weekday" | "interval" | "weekly" | "daily"
+#   time             — HH:MM in the tz timezone (omitted for interval type)
+#   tz               — IANA timezone string (all non-interval entries use ET)
+#   interval_minutes — minutes between runs (interval type only)
+#   day              — day name, e.g. "sunday" (weekly type only)
+#   label            — short title shown in the dashboard schedule section
+#   description      — full prose description of what the job does
+SCHEDULE: list[dict] = [
+    # ── Weekday jobs (Monday–Friday, America/New_York) ──────────────────────
+    {
+        "job": "pre_market",
+        "type": "weekday",
+        "time": "06:00",
+        "tz": "America/New_York",
+        "label": "Pre-market data fetch",
+        "description": (
+            "FRED macro data, VIX, Fear & Greed index, and the Finnhub earnings calendar. "
+            "Regime classification runs here so the rest of the day's jobs see current conditions."
+        ),
+    },
+    {
+        "job": "market_open",
+        "type": "weekday",
+        "time": "10:00",
+        "tz": "America/New_York",
+        "label": "Entry evaluation",
+        "description": (
+            "The bot scans the market, builds context for each watchlist symbol, and decides "
+            "whether to open new positions. This is the only time new trades are opened. "
+            "Runs at 10:00 rather than 9:30 — options bid-ask spreads are 2-3x wider and "
+            "quoted Greeks are unreliable in the first 30 minutes after the equity open."
+        ),
+    },
+    {
+        "job": "position_check",
+        "type": "weekday",
+        "time": "10:45",
+        "tz": "America/New_York",
+        "label": "First position check",
+        "description": (
+            "For every open position, the bot fetches current option prices and evaluates: "
+            "has the profit target been hit? Has delta doubled? Is there a risk that needs attention?"
+        ),
+    },
+    {
+        "job": "position_check",
+        "type": "weekday",
+        "time": "11:30",
+        "tz": "America/New_York",
+        "label": "Late-morning check",
+        "description": (
+            "Same evaluation as 10:45 — re-checks all open positions with updated prices."
+        ),
+    },
+    {
+        "job": "position_check",
+        "type": "weekday",
+        "time": "12:30",
+        "tz": "America/New_York",
+        "label": "Midday check",
+        "description": (
+            "Midday management pass. Same evaluation as earlier checks with updated prices."
+        ),
+    },
+    {
+        "job": "position_check",
+        "type": "weekday",
+        "time": "14:00",
+        "tz": "America/New_York",
+        "label": "Afternoon check",
+        "description": (
+            "Last management pass before the end-of-day sequence begins."
+        ),
+    },
+    {
+        "job": "expiry_guard",
+        "type": "weekday",
+        "time": "15:00",
+        "tz": "America/New_York",
+        "label": "Expiry guard",
+        "description": (
+            "Safety sweep specifically for positions expiring today. Any short option that is "
+            "in the money gets closed immediately to avoid surprise assignment."
+        ),
+    },
+    {
+        "job": "pre_close",
+        "type": "weekday",
+        "time": "15:15",
+        "tz": "America/New_York",
+        "label": "Pre-close observation",
+        "description": (
+            "Scans for positions within 7 DTE and logs warnings. "
+            "No new orders are placed this close to market close."
+        ),
+    },
+    {
+        "job": "market_close",
+        "type": "weekday",
+        "time": "16:00",
+        "tz": "America/New_York",
+        "label": "Market close",
+        "description": (
+            "End-of-day sequence: reconcile orders, update position states, "
+            "write the daily report."
+        ),
+    },
+    {
+        "job": "post_market",
+        "type": "weekday",
+        "time": "16:30",
+        "tz": "America/New_York",
+        "label": "Post-market cleanup",
+        "description": (
+            "Post-market cleanup: snapshot archival, NTA event processing, fill quality logging."
+        ),
+    },
+    # ── Interval job (weekdays only, checked every 5 minutes) ───────────────
+    {
+        "job": "portfolio_refresh",
+        "type": "interval",
+        "interval_minutes": 5,
+        "label": "Portfolio refresh",
+        "description": (
+            "Refreshes dashboard data every 5 minutes during market hours: "
+            "equity balances, open positions, circuit breaker status, and spread reconciliation."
+        ),
+    },
+    # ── Weekly job ───────────────────────────────────────────────────────────
+    {
+        "job": "weekly_report",
+        "type": "weekly",
+        "day": "sunday",
+        "time": "18:00",
+        "tz": "America/New_York",
+        "label": "Weekly report",
+        "description": (
+            "Generates and emails the weekly performance summary: "
+            "P&L, win rate, strategy breakdown, and circuit breaker events."
+        ),
+    },
+    # ── Daily maintenance job ────────────────────────────────────────────────
+    {
+        "job": "orats_cache_cleanup",
+        "type": "daily",
+        "time": "05:00",
+        "tz": "America/New_York",
+        "label": "ORATS cache cleanup",
+        "description": (
+            "Expires stale ORATS cache entries from SQLite to keep the cache within quota limits."
+        ),
+    },
+    # ── Monthly evaluation (fires daily at 05:00; runs only on the 1st) ──────
+    {
+        "job": "monthly_evaluation",
+        "type": "daily",
+        "time": "05:00",
+        "tz": "America/New_York",
+        "label": "Monthly evaluation",
+        "description": (
+            "Runs the full rubric evaluation pipeline for the prior calendar month on "
+            "the 1st of each month at 05:00 ET.  Fires on schedule every day but "
+            "returns immediately unless today is the 1st (see _monthly_eval_wrapper).  "
+            "Requires EVALUATION_AUTOMATION_ENABLED=true."
+        ),
+    },
+]
+
 settings = Settings()
+
+
+# ── Claude API pricing ────────────────────────────────────────────────────────
+# Rates are per million tokens (USD) as of 2026-04.
+# IMPORTANT: Never modify existing entries — historical cost rows were written
+# using the rates that were in effect at the time of write.  Add new entries for
+# new model versions; leave old ones untouched.
+CLAUDE_PRICING: dict[str, dict[str, float]] = {
+    "claude-sonnet-4-6": {
+        "input_per_mtok": 3.00,
+        "output_per_mtok": 15.00,
+        "cache_read_per_mtok": 0.30,
+        # 1-hour ephemeral cache write (the TTL used by claude_advisor.py)
+        "cache_write_per_mtok": 6.00,
+    },
+}
+
+
+def get_pricing(model_version: str) -> dict:
+    """Return pricing dict for a model.
+
+    Raises:
+        KeyError: if *model_version* is not in CLAUDE_PRICING.
+    """
+    return CLAUDE_PRICING[model_version]

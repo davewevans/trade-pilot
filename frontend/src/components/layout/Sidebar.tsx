@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { NavLink, useLocation } from 'react-router-dom'
 import { useAccounts } from '../../hooks/useAccounts'
+import { useFeatureFlags } from '../../hooks/useFeatureFlags'
 
 function usePendingRecsCount(): number {
   const [count, setCount] = useState(0)
@@ -116,6 +117,7 @@ export function Sidebar() {
   const isLearnRoute = LEARN_ROUTES.some((p) => location.pathname.startsWith(p))
   const { accounts } = useAccounts()
   const pendingRecs = usePendingRecsCount()
+  const featureFlags = useFeatureFlags()
 
   return (
     <aside
@@ -132,9 +134,21 @@ export function Sidebar() {
         <NavLink to="/reasoning" className={linkClass} style={({ isActive }) => linkStyle(isActive)}>
           Reasoning
         </NavLink>
+        <NavLink to="/evaluations" className={linkClass} style={({ isActive }) => linkStyle(isActive)}>
+          Evaluations
+        </NavLink>
         <NavLink to="/watchlist" className={linkClass} style={({ isActive }) => linkStyle(isActive)}>
           Watchlist
         </NavLink>
+        {featureFlags.strategy_health_enabled && (
+          <NavLink
+            to="/strategy-health"
+            className={linkClass}
+            style={({ isActive }) => linkStyle(isActive)}
+          >
+            Strategy Health
+          </NavLink>
+        )}
       </SidebarSection>
 
       <SidebarSection label="Research" storageKey="research" defaultOpen={true}>

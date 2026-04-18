@@ -103,6 +103,8 @@ class SpreadTracker:
             "pnl": None,
             "closed_at": None,
             "registered_at": datetime.now().isoformat(timespec="seconds"),
+            "max_adverse_value": None,
+            "max_adverse_timestamp": None,
         }
         self._spreads.append(spread)
         self._save()
@@ -170,6 +172,24 @@ class SpreadTracker:
         self._save()
         logger.info(
             "Spread %s → PENDING_CLOSE order=%s", spread_id, close_order_id,
+        )
+
+    def set_recovery_close_order_id(self, spread_id: str, order_id: str) -> None:
+        """Tag a spread with a recovery close order ID for idempotency.
+
+        Called by the startup reconciler when it places a sell-to-close order
+        for an orphaned long leg.  If the reconciler restarts before the order
+        fills, the tagged ID is detected on the next run so the order is not
+        double-placed.
+        """
+        s = self._find(spread_id)
+        if not s:
+            logger.warning("set_recovery_close_order_id: spread %s not found", spread_id)
+            return
+        s["recovery_close_order_id"] = order_id
+        self._save()
+        logger.info(
+            "Spread %s tagged with recovery_close_order_id=%s", spread_id, order_id
         )
 
     def revert_to_open(self, spread_id: str, reason: str = "") -> None:
@@ -342,3 +362,25 @@ class SpreadTracker:
                 if sym:
                     symbols.add(sym.upper())
         return symbols
+
+    def update_mae(self, spread_id: str, current_value: float, timestamp: str) -> None:
+        """Update max-adverse-excursion for an open spread.
+
+        current_value is the combined unrealized P&L across all legs (already
+        signed by Alpaca — positive = profit, negative = loss). Records the
+        worst (most negative) value observed. Backward-compat: spreads loaded
+        from disk without these keys treat missing as None.
+        """
+        s = self._find(spread_id)
+        if not s:
+            logger.warning("update_mae: spread %s not found", spread_id)
+            return
+        stored = s.get("max_adverse_value")
+        if stored is None or current_value < stored:
+            s["max_adverse_value"] = current_value
+            s["max_adverse_timestamp"] = timestamp
+            self._save()
+            logger.debug(
+                "MAE updated spread=%s value=%.4f ts=%s",
+                spread_id, current_value, timestamp,
+            )

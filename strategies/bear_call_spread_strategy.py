@@ -38,7 +38,6 @@ class BearCallSpreadStrategy:
         self.recorder = recorder
         self._liquidity_repo = liquidity_repo
         self._backtest_stats_repo = backtest_stats_repo
-        self.cb_status_at_entry: str | None = None
         self.state = BearCallSpreadState.IDLE
         self.open_spread_id: str | None = None
         self.pending_order_id: str | None = None
@@ -424,7 +423,7 @@ class BearCallSpreadStrategy:
 
     # ── execution ───────────────────────────────────────────
 
-    def execute_entry(self, decision: dict) -> bool:
+    def execute_entry(self, decision: dict, cb_status: str | None = None) -> bool:
         legs = [
             {"symbol": decision["short_call_symbol"], "side": "sell",
              "ratio_qty": 1, "position_intent": "sell_to_open"},
@@ -457,7 +456,7 @@ class BearCallSpreadStrategy:
                 max_loss=decision.get("max_loss", 0),
                 max_gain=abs(decision.get("net_credit", 0)) * 100,
                 entry_order_id=order_id,
-                cb_status_at_entry=self.cb_status_at_entry,
+                cb_status_at_entry=cb_status,
             )
             self.open_spread_id = spread_id
 

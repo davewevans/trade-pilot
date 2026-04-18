@@ -40,7 +40,6 @@ class LongCallVerticalStrategy:
         self.recorder = recorder
         self._liquidity_repo = liquidity_repo
         self._backtest_stats_repo = backtest_stats_repo
-        self.cb_status_at_entry: str | None = None
         self.state = LongCallVerticalState.IDLE
         self.open_spread_id: str | None = None
         self.pending_order_id: str | None = None
@@ -392,7 +391,7 @@ class LongCallVerticalStrategy:
 
     # ── execution ───────────────────────────────────────────
 
-    def execute_entry(self, decision: dict) -> bool:
+    def execute_entry(self, decision: dict, cb_status: str | None = None) -> bool:
         legs = [
             {"symbol": decision["long_call_symbol"], "side": "buy",
              "ratio_qty": 1, "position_intent": "buy_to_open"},
@@ -437,7 +436,7 @@ class LongCallVerticalStrategy:
                 max_loss=round(decision.get("net_debit", 0) * 100, 2),
                 max_gain=round((wing_width - decision.get("net_debit", 0)) * 100, 2),
                 entry_order_id=order_id,
-                cb_status_at_entry=self.cb_status_at_entry,
+                cb_status_at_entry=cb_status,
                 original_dte=original_dte,
             )
             self.open_spread_id = spread_id

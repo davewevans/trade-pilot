@@ -127,6 +127,14 @@ export interface HealthStatus {
   halted: boolean
   version?: string
   version_date?: string
+  strategy_health_enabled?: boolean
+}
+
+export interface HaltInfo {
+  halted: boolean
+  halted_at?: string | null
+  source?: string
+  reason?: string
 }
 
 export interface FillQualityResponse {
@@ -177,6 +185,27 @@ export interface CircuitBreaker {
   dry_run?: boolean
 }
 
+export interface ClaudeCostOutcomeBucket {
+  count: number
+  cost_usd: number
+}
+
+export interface ClaudeCostsResponse {
+  window: string
+  total_cost_usd: number
+  prior_window_cost_usd: number
+  decisions_count: number
+  filled_trades_count: number
+  cost_per_filled_trade_usd: number | null
+  cost_by_outcome: {
+    open: ClaudeCostOutcomeBucket
+    close: ClaudeCostOutcomeBucket
+    skip: ClaudeCostOutcomeBucket
+  }
+  cache_hit_rate: number | null
+  by_model_version: Record<string, { count: number; cost_usd: number }>
+}
+
 export interface TokenUsageToday {
   date: string
   total_input: number
@@ -224,4 +253,88 @@ export interface TokenUsageSummary {
     utilization_pct: number | null
     measured_at: string
   } | null
+}
+
+export interface CycleSummaryOrder {
+  symbol: string
+  strategy: string
+  action: string
+  contract: string | null
+  limit_price: number | null
+}
+
+export interface CycleSummaryResponse {
+  job_run_id: string | null
+  cycle_started_at: string | null
+  cycle_type: string
+  symbols_evaluated: number
+  pre_check_skipped: {
+    total: number
+    by_reason: Record<string, number>
+  }
+  sent_to_claude: number
+  claude_outcomes: {
+    SKIP: number
+    OPEN: number
+    CLOSE: number
+    HOLD: number
+  }
+  guardrail_rejections: {
+    total: number
+    by_rule: Record<string, number>
+  }
+  orders_placed: number
+  orders_details: CycleSummaryOrder[]
+}
+
+export interface PortfolioGreeksBucket {
+  theta: number
+  vega: number
+  position_count: number
+}
+
+export interface PortfolioGreeksByStrategy {
+  net_delta: number
+  net_theta: number
+  net_vega: number
+  position_count: number
+}
+
+export interface PortfolioGreeks {
+  net_delta: number
+  net_theta: number
+  net_vega: number
+  net_gamma: number
+  total_defined_risk_usd: number
+  position_count: number
+  by_dte_bucket: {
+    '0_7': PortfolioGreeksBucket
+    '8_21': PortfolioGreeksBucket
+    '22_45': PortfolioGreeksBucket
+    '46_plus': PortfolioGreeksBucket
+  }
+  by_strategy: Record<string, PortfolioGreeksByStrategy>
+  freshness: {
+    oldest_contract_age_seconds: number
+    newest_contract_age_seconds: number
+    max_skew_seconds: number
+    contracts_from_fallback_source: number
+    computed_at: string
+  }
+}
+
+export interface ClaudeAgreementDailyPoint {
+  date: string
+  skip_when_open_rate: number | null
+  sample_size: number
+}
+
+export interface ClaudeAgreementResponse {
+  window: string
+  decisions_evaluated: number
+  precheck_open_count: number
+  claude_skip_rate_when_precheck_says_open: number | null
+  precheck_skip_count: number
+  claude_open_rate_when_precheck_says_skip: number | null
+  daily_series: ClaudeAgreementDailyPoint[]
 }

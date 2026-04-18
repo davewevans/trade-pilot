@@ -102,7 +102,6 @@ def strategy(tmp_path):
         s.state = BearCallSpreadState.IDLE
         s.open_spread_id = None
         s.pending_order_id = None
-        s.cb_status_at_entry = None
         s._state_path = tmp_path / "bcs_state.json"
         advisor = MagicMock()
         advisor.ask_spread.return_value = {"action": "SKIP", "reasoning": "default mock"}

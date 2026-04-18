@@ -8,6 +8,8 @@ import logging
 import sqlite3
 from datetime import datetime, timezone
 
+from database.db import db_retry
+
 logger = logging.getLogger(__name__)
 
 # ── Pricing: Claude Sonnet 4.6 (per million tokens) ──────────
@@ -48,6 +50,7 @@ class TokenUsageRepository:
     def __init__(self, conn: sqlite3.Connection):
         self._conn = conn
 
+    @db_retry()
     def insert(self, row: dict) -> int | None:
         """Insert a token usage record. Returns the row id or None on failure."""
         try:

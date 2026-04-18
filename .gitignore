@@ -7,6 +7,12 @@ venv/
 data/cache/
 data/snapshots/
 data/watchlist.json
+data/*.jsonl
+data/logs/
+data/locks/
+data/*.db
+data/*.db-shm
+data/*.db-wal
 
 # frontend build artifacts (Vite outputs into api/static/)
 node_modules/
