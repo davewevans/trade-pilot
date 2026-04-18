@@ -210,11 +210,6 @@ def run() -> None:
         spread_strategies["calendar_spread"] = CalendarSpreadStrategy(
             broker=paper5_broker, state_writer=sw, spread_tracker=tracker, recorder=recorder,
         )
-    # Stamp current circuit-breaker color on each strategy so any spread
-    # opened this cycle records the CB status it was entered under.
-    for _s in spread_strategies.values():
-        _s.cb_status_at_entry = cb_status.status
-
     # Reconcile any PENDING_OPEN / PENDING_CLOSE spreads from a previous
     # session before we make new decisions. Without this, management logic
     # could act on phantom positions (orders that never filled or were
@@ -825,6 +820,7 @@ def run() -> None:
                             strategy_name, strat, decision, guardrails,
                             spread_ctx, account, tracker, settings, report_lines,
                             journal=journal,
+                            cb_status=cb_status.status,
                         )
                         # Re-poll order status immediately so a same-cycle fast
                         # fill flips PENDING_OPEN → OPEN before the next loop.
@@ -860,6 +856,7 @@ _GUARDRAIL_MAP = {
 def _handle_spread_open(
     name, strat, decision, guardrails, context, account, tracker, settings, report_lines,
     journal=None,
+    cb_status: str | None = None,
 ):
     """Validate and execute a spread OPEN decision."""
     validator_name = _GUARDRAIL_MAP.get(name)
@@ -942,7 +939,7 @@ def _handle_spread_open(
         report_lines.append(f"**{name}** -- DRY RUN: OPEN")
         return
 
-    success = strat.execute_entry({**decision, "underlying": underlying})
+    success = strat.execute_entry({**decision, "underlying": underlying}, cb_status=cb_status)
     if success:
         report_lines.append(
             f"**{name}** -- OPENED (credit/debit: "

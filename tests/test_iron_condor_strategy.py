@@ -86,7 +86,6 @@ def strategy(tmp_path):
             s.state = IronCondorState.IDLE
             s.open_spread_id = None
             s.pending_order_id = None
-            s.cb_status_at_entry = None
             s._state_path = tmp_path / "iron_condor_state.json"
             # Mock advisor — strategies now REQUIRE an advisor in run_cycle.
             advisor = MagicMock()

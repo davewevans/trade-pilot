@@ -44,7 +44,6 @@ class IronCondorStrategy:
         self.recorder = recorder
         self._liquidity_repo = liquidity_repo
         self._backtest_stats_repo = backtest_stats_repo
-        self.cb_status_at_entry: str | None = None
         self.state = IronCondorState.IDLE
         self.open_spread_id: str | None = None
         self.pending_order_id: str | None = None
@@ -382,7 +381,7 @@ class IronCondorStrategy:
 
     # ── execution ───────────────────────────────────────────
 
-    def execute_entry(self, decision: dict) -> bool:
+    def execute_entry(self, decision: dict, cb_status: str | None = None) -> bool:
         """Place the 4-leg mleg order and register with spread_tracker."""
         legs = [
             {"symbol": decision["put_short_symbol"], "side": "sell",
@@ -421,7 +420,7 @@ class IronCondorStrategy:
                 max_loss=decision.get("max_loss", 0),
                 max_gain=abs(decision.get("total_credit", 0)) * 100,
                 entry_order_id=order_id,
-                cb_status_at_entry=self.cb_status_at_entry,
+                cb_status_at_entry=cb_status,
             )
             self.open_spread_id = spread_id
 
