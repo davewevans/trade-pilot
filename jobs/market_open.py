@@ -7,6 +7,7 @@ limit-at-mid orders fill more cleanly once the quotes settle.
 
 import json
 import logging
+import uuid
 from dataclasses import asdict
 
 from config import settings
@@ -20,6 +21,7 @@ def run() -> None:
 
     Uses StrategyRouter to decide which spread strategies are active.
     """
+    job_run_id = f"market_open.{uuid.uuid4()}"
     logger.info("=== MARKET OPEN JOB STARTING ===")
 
     from datetime import datetime
@@ -272,6 +274,10 @@ def run() -> None:
     for symbol in settings.WATCHLIST:
         try:
             state = wheel_strategy.get_current_state(symbol)
+            # pre_check_verdict for this symbol: MANAGE for position-management
+            # states; OPEN for IDLE (entry will be evaluated by Claude); overridden
+            # to SKIP below if the liquidity gate rejects the symbol.
+            _wheel_pcv = "OPEN" if state.value == "IDLE" else "MANAGE"
             logger.info("%s wheel state: %s", symbol, state.value)
 
             context = ctx_builder.build(symbol, state.value)
@@ -315,6 +321,8 @@ def run() -> None:
                         research_metadata=_liq_skip.get("_research"),
                         skip_gate=SkipGate.LIQUIDITY_FLOOR,
                         skip_reason_code=SkipReason.LIQUIDITY_TIER_D,
+                        job_run_id=job_run_id,
+                        pre_check_verdict="SKIP",
                     )
                 report_lines.append(
                     f"**{symbol}** -- SKIPPED (liquidity floor: {_liq_skip.get('skip_reason')})"
@@ -372,6 +380,8 @@ def run() -> None:
                         research_metadata=context.get("_research"),
                         skip_gate=SkipGate.CLAUDE_SKIP,
                         skip_reason_code=SkipReason.CLAUDE_SKIP,
+                        job_run_id=job_run_id,
+                        pre_check_verdict=_wheel_pcv,
                     )
                 report_lines.append(
                     f"**{symbol}** -- {decision.get('action').upper()} "
@@ -404,6 +414,8 @@ def run() -> None:
                         research_metadata=context.get("_research"),
                         skip_gate=SkipGate.GUARDRAIL,
                         skip_reason_code=SkipReason.GUARDRAIL_OTHER,
+                        job_run_id=job_run_id,
+                        pre_check_verdict=_wheel_pcv,
                     )
                 from strategies.guardrails import Guardrails as _G
                 journal.append({
@@ -446,6 +458,8 @@ def run() -> None:
                     confidence=decision.get("confidence"),
                     context=context,
                     research_metadata=context.get("_research"),
+                    job_run_id=job_run_id,
+                    pre_check_verdict=_wheel_pcv,
                 )
 
             if settings.DRY_RUN:
@@ -499,6 +513,8 @@ def run() -> None:
                             context=context,
                             skip_gate=SkipGate.CIRCUIT_BREAKER,
                             skip_reason_code=_cb_reason_code,
+                            job_run_id=job_run_id,
+                            pre_check_verdict=_wheel_pcv,
                         )
                     report_lines.append(f"**{symbol}** -- SKIPPED ({cb_skip_reason})")
                     continue
@@ -767,6 +783,12 @@ def run() -> None:
                         else:
                             _spread_skip_gate = SkipGate.CLAUDE_SKIP
                             _spread_skip_reason_code = SkipReason.CLAUDE_SKIP
+                    # pre_check_verdict: MANAGE for open-position management cycles;
+                    # OPEN if winner found (pre-check passed); SKIP if no candidates.
+                    _spread_pcv = (
+                        "MANAGE" if strat_state_value == "OPEN"
+                        else ("OPEN" if decision.get("_pre_check_would_have") == "OPEN" else "SKIP")
+                    )
                     recorder.record_decision(
                         strategy_type=strategy_name,
                         underlying=spread_underlying,
@@ -777,6 +799,8 @@ def run() -> None:
                         research_metadata=(spread_ctx or {}).get("_research"),
                         skip_gate=_spread_skip_gate,
                         skip_reason_code=_spread_skip_reason_code,
+                        job_run_id=job_run_id,
+                        pre_check_verdict=_spread_pcv,
                     )
 
                 # Journal SKIPs from spread strategies so Claude sees them

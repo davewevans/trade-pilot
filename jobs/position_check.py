@@ -2,6 +2,7 @@
 
 import json
 import logging
+import uuid
 from dataclasses import asdict
 from datetime import datetime
 
@@ -13,6 +14,7 @@ logger = logging.getLogger(__name__)
 
 def run() -> None:
     """Check open options positions and ask Claude whether to roll, close, or hold."""
+    job_run_id = f"position_check.{uuid.uuid4()}"
     logger.info("=== POSITION CHECK JOB STARTING ===")
 
     from ai.claude_advisor import ClaudeAdvisor
@@ -187,6 +189,8 @@ def run() -> None:
                             reasoning=f"Guardrail rejected: {rejection}",
                             confidence=decision.get("confidence"),
                             context=context,
+                            job_run_id=job_run_id,
+                            pre_check_verdict="MANAGE",
                         )
 
                     report_lines.append(f"**{underlying}** — {action} REJECTED: {rejection}")
@@ -213,6 +217,8 @@ def run() -> None:
                         reasoning=decision.get("reasoning"),
                         confidence=decision.get("confidence"),
                         context=context,
+                        job_run_id=job_run_id,
+                        pre_check_verdict="MANAGE",
                     )
 
                 if settings.DRY_RUN:
@@ -275,6 +281,8 @@ def run() -> None:
                         reasoning=decision.get("reasoning"),
                         confidence=decision.get("confidence"),
                         context=context,
+                        job_run_id=job_run_id,
+                        pre_check_verdict="MANAGE",
                     )
 
                 report_lines.append(f"**{underlying}** — hold")

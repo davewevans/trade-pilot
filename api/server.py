@@ -2923,6 +2923,251 @@ def token_usage_summary():
         conn.close()
 
 
+# ── Cycle summary endpoint ─────────────────────────────────────────────────
+
+
+def _window_to_cutoff(window: str) -> str | None:
+    """Convert a window string (7d/30d/90d/all) to an ISO cutoff timestamp."""
+    if window == "all":
+        return None
+    try:
+        days = int(window.rstrip("d"))
+    except (ValueError, AttributeError):
+        days = 30
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    return cutoff.isoformat(timespec="seconds")
+
+
+def _empty_cycle_summary(job_run_id: str | None = None) -> dict:
+    return {
+        "job_run_id": job_run_id,
+        "cycle_started_at": None,
+        "cycle_type": "unknown",
+        "symbols_evaluated": 0,
+        "pre_check_skipped": {"total": 0, "by_reason": {}},
+        "sent_to_claude": 0,
+        "claude_outcomes": {"SKIP": 0, "OPEN": 0, "CLOSE": 0, "HOLD": 0},
+        "guardrail_rejections": {"total": 0, "by_rule": {}},
+        "orders_placed": 0,
+        "orders_details": [],
+    }
+
+
+@app.get("/api/cycle-summary")
+def cycle_summary(job_run_id: str | None = Query(default=None)):
+    """Return an aggregated summary of the latest (or specified) job run.
+
+    Groups all decisions sharing a job_run_id and computes the funnel:
+    symbols evaluated → pre-check skipped → sent to Claude → Claude outcomes
+    → guardrail rejections → orders placed.
+
+    Query params:
+        job_run_id: specific run to fetch; omit for most recent.
+    """
+    conn = _open_db()
+    if conn is None:
+        return _empty_cycle_summary()
+    try:
+        if job_run_id is None:
+            row = conn.execute(
+                "SELECT job_run_id, MIN(timestamp) AS started_at "
+                "FROM decisions WHERE job_run_id IS NOT NULL "
+                "GROUP BY job_run_id ORDER BY started_at DESC LIMIT 1"
+            ).fetchone()
+            if not row or not row["job_run_id"]:
+                return _empty_cycle_summary()
+            job_run_id = row["job_run_id"]
+
+        rows = conn.execute(
+            """
+            SELECT d.underlying, d.strategy_type, d.action,
+                   d.skip_gate, d.skip_reason_code, d.pre_check_verdict,
+                   d.timestamp, d.id,
+                   t.symbol  AS trade_symbol,
+                   t.limit_price AS trade_limit_price,
+                   t.strategy_type AS trade_strategy_type
+            FROM decisions d
+            LEFT JOIN trades t ON t.decision_id = d.id
+            WHERE d.job_run_id = ?
+            ORDER BY d.timestamp
+            """,
+            (job_run_id,),
+        ).fetchall()
+
+        if not rows:
+            return _empty_cycle_summary(job_run_id)
+
+        started_at = rows[0]["timestamp"]
+        # Extract job type from the prefix: "market_open.<uuid>" → "market_open"
+        cycle_type = job_run_id.split(".")[0] if "." in job_run_id else "unknown"
+
+        symbols_evaluated = len(rows)
+
+        # Pre-check skips (Claude never called)
+        skip_rows = [r for r in rows if (r["pre_check_verdict"] or "") == "SKIP"]
+        by_reason: dict[str, int] = {}
+        for r in skip_rows:
+            code = r["skip_reason_code"] or "unknown"
+            by_reason[code] = by_reason.get(code, 0) + 1
+
+        # Rows where Claude was actually consulted for entry decisions
+        open_rows = [r for r in rows if (r["pre_check_verdict"] or "") == "OPEN"]
+
+        # Normalise Claude's action to the 4-bucket vocabulary
+        claude_outcomes: dict[str, int] = {"SKIP": 0, "OPEN": 0, "CLOSE": 0, "HOLD": 0}
+        for r in open_rows:
+            act = (r["action"] or "").upper()
+            if act in ("SELL_PUT", "SELL_CALL", "OPEN"):
+                claude_outcomes["OPEN"] += 1
+            elif act == "SKIP":
+                claude_outcomes["SKIP"] += 1
+            elif act == "CLOSE":
+                claude_outcomes["CLOSE"] += 1
+            else:  # HOLD, ROLL, or anything else
+                claude_outcomes["HOLD"] += 1
+
+        # Guardrail rejections
+        guardrail_rows = [r for r in rows if (r["skip_gate"] or "").lower() == "guardrail"]
+        by_rule: dict[str, int] = {}
+        for r in guardrail_rows:
+            rule = r["skip_reason_code"] or "guardrail_other"
+            by_rule[rule] = by_rule.get(rule, 0) + 1
+
+        # Orders placed: decisions that have a trade row attached
+        order_rows = [r for r in rows if r["trade_symbol"] is not None]
+        orders_details = [
+            {
+                "symbol": r["underlying"],
+                "strategy": r["strategy_type"],
+                "action": r["action"],
+                "contract": r["trade_symbol"],
+                "limit_price": r["trade_limit_price"],
+            }
+            for r in order_rows
+        ]
+
+        return {
+            "job_run_id": job_run_id,
+            "cycle_started_at": started_at,
+            "cycle_type": cycle_type,
+            "symbols_evaluated": symbols_evaluated,
+            "pre_check_skipped": {"total": len(skip_rows), "by_reason": by_reason},
+            "sent_to_claude": len(open_rows),
+            "claude_outcomes": claude_outcomes,
+            "guardrail_rejections": {"total": len(guardrail_rows), "by_rule": by_rule},
+            "orders_placed": len(order_rows),
+            "orders_details": orders_details,
+        }
+    except Exception:
+        logger.exception("cycle-summary query failed")
+        return JSONResponse(status_code=500, content={"error": "query failed"})
+    finally:
+        conn.close()
+
+
+# ── Claude agreement metric endpoint ──────────────────────────────────────
+
+
+@app.get("/api/claude-agreement")
+def claude_agreement(window: str = Query(default="30d")):
+    """Return the Claude-vs-pre-check agreement metric for a time window.
+
+    Measures how often Claude disagrees with the pre-check layer:
+      - claude_skip_rate_when_precheck_says_open: fraction of pre-check-OPEN
+        decisions where Claude said SKIP.
+      - claude_open_rate_when_precheck_says_skip: fraction of pre-check-SKIP
+        decisions where Claude opened anyway (should be ~0 in normal operation).
+
+    Query params:
+        window: "7d" | "30d" | "90d" | "all" (default "30d")
+    """
+    conn = _open_db()
+    if conn is None:
+        return {
+            "window": window,
+            "decisions_evaluated": 0,
+            "precheck_open_count": 0,
+            "claude_skip_rate_when_precheck_says_open": None,
+            "precheck_skip_count": 0,
+            "claude_open_rate_when_precheck_says_skip": None,
+            "daily_series": [],
+        }
+    try:
+        cutoff = _window_to_cutoff(window)
+        query = """
+            SELECT pre_check_verdict, UPPER(action) AS action,
+                   DATE(timestamp) AS dt
+            FROM decisions
+            WHERE pre_check_verdict IN ('OPEN', 'SKIP')
+        """
+        params: list = []
+        if cutoff is not None:
+            query += " AND timestamp >= ?"
+            params.append(cutoff)
+
+        rows = conn.execute(query, params).fetchall()
+
+        precheck_open = [r for r in rows if r["pre_check_verdict"] == "OPEN"]
+        precheck_skip = [r for r in rows if r["pre_check_verdict"] == "SKIP"]
+
+        precheck_open_count = len(precheck_open)
+        precheck_skip_count = len(precheck_skip)
+
+        if precheck_open_count > 0:
+            n_claude_skip = sum(1 for r in precheck_open if r["action"] == "SKIP")
+            skip_rate: float | None = round(n_claude_skip / precheck_open_count, 4)
+        else:
+            skip_rate = None
+
+        # With current architecture this is always 0 since Claude is not
+        # consulted when pre_check_verdict = 'SKIP'. Computed defensively.
+        if precheck_skip_count > 0:
+            n_claude_open = sum(
+                1 for r in precheck_skip
+                if r["action"] not in ("SKIP", "HOLD", None, "")
+            )
+            open_rate: float | None = round(n_claude_open / precheck_skip_count, 4)
+        else:
+            open_rate = None
+
+        # Daily series: one entry per calendar day in the window (pre-check
+        # OPEN decisions only, since that's what drives the skip rate).
+        daily: dict[str, dict[str, int]] = {}
+        for r in precheck_open:
+            dt = r["dt"] or "unknown"
+            if dt not in daily:
+                daily[dt] = {"open_count": 0, "skip_count": 0}
+            daily[dt]["open_count"] += 1
+            if r["action"] == "SKIP":
+                daily[dt]["skip_count"] += 1
+
+        daily_series = []
+        for dt in sorted(daily):
+            d = daily[dt]
+            oc = d["open_count"]
+            sc = d["skip_count"]
+            daily_series.append({
+                "date": dt,
+                "skip_when_open_rate": round(sc / oc, 4) if oc > 0 else None,
+                "sample_size": oc,
+            })
+
+        return {
+            "window": window,
+            "decisions_evaluated": len(rows),
+            "precheck_open_count": precheck_open_count,
+            "claude_skip_rate_when_precheck_says_open": skip_rate,
+            "precheck_skip_count": precheck_skip_count,
+            "claude_open_rate_when_precheck_says_skip": open_rate,
+            "daily_series": daily_series,
+        }
+    except Exception:
+        logger.exception("claude-agreement query failed")
+        return JSONResponse(status_code=500, content={"error": "query failed"})
+    finally:
+        conn.close()
+
+
 # ── Static frontend (SPA catch-all) ────────────────────────
 # Defined as a route (not a mount) so that unknown paths like
 # /reasoning fall back to index.html instead of 404-ing.

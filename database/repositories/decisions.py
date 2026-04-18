@@ -53,8 +53,9 @@ class DecisionRepository:
                 prompt_version, context_json, research_metadata_json,
                 skip_gate, skip_reason_code,
                 model_version, input_tokens, output_tokens,
-                cache_read_tokens, cache_creation_tokens, estimated_cost_usd
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                cache_read_tokens, cache_creation_tokens, estimated_cost_usd,
+                job_run_id, pre_check_verdict
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 decision["timestamp"],
@@ -77,6 +78,8 @@ class DecisionRepository:
                 decision.get("cache_read_tokens"),
                 decision.get("cache_creation_tokens"),
                 decision.get("estimated_cost_usd"),
+                decision.get("job_run_id"),
+                decision.get("pre_check_verdict"),
             ),
         )
         self._conn.commit()

@@ -113,6 +113,8 @@ class TradeRecorder:
         skip_gate: str | None = None,
         skip_reason_code: str | None = None,
         usage_data: dict | None = None,
+        job_run_id: str | None = None,
+        pre_check_verdict: str | None = None,
     ) -> tuple[int | None, str | None]:
         """Insert a decision row, auto-creating a cycle if appropriate.
 
@@ -170,6 +172,8 @@ class TradeRecorder:
                 "cache_read_tokens": (usage_data or {}).get("cache_read_tokens"),
                 "cache_creation_tokens": (usage_data or {}).get("cache_creation_tokens"),
                 "estimated_cost_usd": (usage_data or {}).get("estimated_cost_usd"),
+                "job_run_id": job_run_id,
+                "pre_check_verdict": pre_check_verdict,
             })
             return decision_id, cycle_id
         except Exception:

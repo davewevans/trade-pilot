@@ -384,6 +384,10 @@ _MIGRATIONS: tuple[str, ...] = (
    SET operator_decision = 'expired'
    WHERE operator_decision IS NULL
    AND generated_at < datetime('now', '-14 days')""",
+    "ALTER TABLE decisions ADD COLUMN job_run_id TEXT",
+    "ALTER TABLE decisions ADD COLUMN pre_check_verdict TEXT",
+    "CREATE INDEX IF NOT EXISTS idx_decisions_job_run ON decisions(job_run_id) WHERE job_run_id IS NOT NULL",
+    "CREATE INDEX IF NOT EXISTS idx_decisions_pcv ON decisions(pre_check_verdict, timestamp)",
 )
 
 

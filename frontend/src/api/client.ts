@@ -1,6 +1,8 @@
 import type {
   CircuitBreaker,
+  ClaudeAgreementResponse,
   ClaudeCostsResponse,
+  CycleSummaryResponse,
   DecisionStats,
   DecisionsResponse,
   EquityHistory,
@@ -391,6 +393,15 @@ export const api = {
     q.set('window', window)
     if (account) q.set('account', account)
     return get<ClaudeCostsResponse>(`/api/claude-costs?${q.toString()}`)
+  },
+
+  cycleSummary: (jobRunId?: string): Promise<CycleSummaryResponse> => {
+    const qs = jobRunId ? `?job_run_id=${encodeURIComponent(jobRunId)}` : ''
+    return get<CycleSummaryResponse>(`/api/cycle-summary${qs}`)
+  },
+
+  claudeAgreement: (window: '7d' | '30d' | '90d' | 'all' = '30d'): Promise<ClaudeAgreementResponse> => {
+    return get<ClaudeAgreementResponse>(`/api/claude-agreement?window=${window}`)
   },
 
   haltStatus: () => get<HaltInfo>('/api/halt-status'),

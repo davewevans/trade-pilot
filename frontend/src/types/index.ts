@@ -253,3 +253,51 @@ export interface TokenUsageSummary {
     measured_at: string
   } | null
 }
+
+export interface CycleSummaryOrder {
+  symbol: string
+  strategy: string
+  action: string
+  contract: string | null
+  limit_price: number | null
+}
+
+export interface CycleSummaryResponse {
+  job_run_id: string | null
+  cycle_started_at: string | null
+  cycle_type: string
+  symbols_evaluated: number
+  pre_check_skipped: {
+    total: number
+    by_reason: Record<string, number>
+  }
+  sent_to_claude: number
+  claude_outcomes: {
+    SKIP: number
+    OPEN: number
+    CLOSE: number
+    HOLD: number
+  }
+  guardrail_rejections: {
+    total: number
+    by_rule: Record<string, number>
+  }
+  orders_placed: number
+  orders_details: CycleSummaryOrder[]
+}
+
+export interface ClaudeAgreementDailyPoint {
+  date: string
+  skip_when_open_rate: number | null
+  sample_size: number
+}
+
+export interface ClaudeAgreementResponse {
+  window: string
+  decisions_evaluated: number
+  precheck_open_count: number
+  claude_skip_rate_when_precheck_says_open: number | null
+  precheck_skip_count: number
+  claude_open_rate_when_precheck_says_skip: number | null
+  daily_series: ClaudeAgreementDailyPoint[]
+}

@@ -13,7 +13,9 @@ import { LoadingSpinner } from '../components/shared/LoadingSpinner'
 import { StatCard } from '../components/shared/StatCard'
 import type {
   CircuitBreaker,
+  ClaudeAgreementResponse,
   ClaudeCostsResponse,
+  CycleSummaryResponse,
   Decision,
   FillQualityResponse,
   Portfolio,
@@ -729,6 +731,297 @@ function ClaudeCostsCard() {
   )
 }
 
+// ── Today's Cycle card ───────────────────────────────────────
+
+function fmtRelTime(iso: string | null): string {
+  if (!iso) return ''
+  const ms = Date.now() - new Date(iso).getTime()
+  const mins = Math.floor(ms / 60_000)
+  if (mins < 1) return 'just now'
+  if (mins < 60) return `${mins}m ago`
+  const hrs = Math.floor(mins / 60)
+  if (hrs < 24) return `${hrs}h ago`
+  return `${Math.floor(hrs / 24)}d ago`
+}
+
+function TodaysCycleCard() {
+  const [data, setData] = useState<CycleSummaryResponse | null>(null)
+  const [expanded, setExpanded] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    const load = () => {
+      api.cycleSummary().then((d) => { if (!cancelled) setData(d) }).catch(() => {})
+    }
+    load()
+    const id = setInterval(load, 60_000)
+    return () => { cancelled = true; clearInterval(id) }
+  }, [])
+
+  const ROW_STYLE: React.CSSProperties = {
+    display: 'flex',
+    alignItems: 'baseline',
+    gap: 6,
+    fontSize: 13,
+    lineHeight: '1.6',
+    color: 'var(--text-secondary)',
+  }
+  const LABEL: React.CSSProperties = { color: 'var(--text-muted)', minWidth: 160, flexShrink: 0 }
+  const NUM: React.CSSProperties = { fontFamily: 'monospace', color: 'var(--text-primary)', fontVariantNumeric: 'tabular-nums' }
+
+  const isEmpty = !data || data.symbols_evaluated === 0
+
+  const headerLabel = isEmpty
+    ? 'No cycle data yet'
+    : `${data.cycle_type.replace(/_/g, ' ')} · ${fmtRelTime(data.cycle_started_at)}`
+
+  const guardrailRules = data ? Object.entries(data.guardrail_rejections.by_rule) : []
+  const preCheckReasons = data ? Object.entries(data.pre_check_skipped.by_reason) : []
+  const orders = data ? data.orders_details : []
+
+  return (
+    <div>
+      <h2 className="section-heading">Today&apos;s cycle</h2>
+      <div
+        className="rounded-md p-4"
+        style={{ backgroundColor: 'var(--bg-card)', border: '1px solid var(--border)', fontFamily: 'inherit' }}
+      >
+        <div className="text-xs mb-3" style={{ color: 'var(--text-muted)' }}>{headerLabel}</div>
+
+        {isEmpty ? (
+          <div className="text-sm" style={{ color: 'var(--text-muted)' }}>
+            Waiting for the first job run.
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            {/* Symbols evaluated */}
+            <div style={ROW_STYLE}>
+              <span style={LABEL}>Symbols evaluated</span>
+              <span style={NUM}>{data!.symbols_evaluated}</span>
+            </div>
+
+            {/* Pre-check skipped */}
+            <div style={{ ...ROW_STYLE, paddingLeft: 16 }}>
+              <span style={{ ...LABEL, color: 'var(--text-muted)' }}>├─ Pre-check skipped</span>
+              <span style={NUM}>{data!.pre_check_skipped.total}</span>
+              {preCheckReasons.length > 0 && (
+                <button
+                  onClick={() => setExpanded((e) => !e)}
+                  style={{ fontSize: 11, color: 'var(--accent)', background: 'none', border: 'none', cursor: 'pointer', padding: '0 4px' }}
+                >
+                  {expanded ? '▲' : '▼'}
+                </button>
+              )}
+            </div>
+            {expanded && preCheckReasons.map(([reason, count]) => (
+              <div key={reason} style={{ ...ROW_STYLE, paddingLeft: 36, fontSize: 12 }}>
+                <span style={{ ...LABEL, color: 'var(--text-muted)', fontSize: 12 }}>│  {reason}</span>
+                <span style={{ ...NUM, fontSize: 12 }}>{count}</span>
+              </div>
+            ))}
+
+            {/* Sent to Claude */}
+            <div style={{ ...ROW_STYLE, paddingLeft: 16 }}>
+              <span style={{ ...LABEL, color: 'var(--text-muted)' }}>├─ Sent to Claude</span>
+              <span style={NUM}>{data!.sent_to_claude}</span>
+            </div>
+
+            {/* Claude outcomes */}
+            {(data!.claude_outcomes.SKIP > 0 || data!.claude_outcomes.OPEN > 0 ||
+              data!.claude_outcomes.CLOSE > 0 || data!.claude_outcomes.HOLD > 0) && (
+              <>
+                {data!.claude_outcomes.SKIP > 0 && (
+                  <div style={{ ...ROW_STYLE, paddingLeft: 32 }}>
+                    <span style={{ ...LABEL, color: 'var(--text-muted)', fontSize: 12 }}>│   ├─ Claude SKIP</span>
+                    <span style={{ ...NUM, fontSize: 12 }}>{data!.claude_outcomes.SKIP}</span>
+                  </div>
+                )}
+                {data!.claude_outcomes.OPEN > 0 && (
+                  <div style={{ ...ROW_STYLE, paddingLeft: 32 }}>
+                    <span style={{ ...LABEL, color: 'var(--text-muted)', fontSize: 12 }}>│   ├─ Claude OPEN</span>
+                    <span style={{ ...NUM, fontSize: 12 }}>{data!.claude_outcomes.OPEN}</span>
+                  </div>
+                )}
+                {data!.claude_outcomes.CLOSE > 0 && (
+                  <div style={{ ...ROW_STYLE, paddingLeft: 32 }}>
+                    <span style={{ ...LABEL, color: 'var(--text-muted)', fontSize: 12 }}>│   ├─ Claude CLOSE</span>
+                    <span style={{ ...NUM, fontSize: 12 }}>{data!.claude_outcomes.CLOSE}</span>
+                  </div>
+                )}
+                {data!.claude_outcomes.HOLD > 0 && (
+                  <div style={{ ...ROW_STYLE, paddingLeft: 32 }}>
+                    <span style={{ ...LABEL, color: 'var(--text-muted)', fontSize: 12 }}>│   └─ Claude HOLD</span>
+                    <span style={{ ...NUM, fontSize: 12 }}>{data!.claude_outcomes.HOLD}</span>
+                  </div>
+                )}
+              </>
+            )}
+
+            {/* Guardrail rejections */}
+            {data!.guardrail_rejections.total > 0 && (
+              <>
+                <div style={{ ...ROW_STYLE, paddingLeft: 48 }}>
+                  <span style={{ fontSize: 12, color: 'var(--red)', minWidth: 144 }}>│       ├─ Guardrail rej.</span>
+                  <span style={{ ...NUM, fontSize: 12, color: 'var(--red)' }}>{data!.guardrail_rejections.total}</span>
+                </div>
+                {guardrailRules.map(([rule, count]) => (
+                  <div key={rule} style={{ ...ROW_STYLE, paddingLeft: 64, fontSize: 11 }}>
+                    <span style={{ color: 'var(--text-muted)', minWidth: 128, fontSize: 11 }}>│        {rule}</span>
+                    <span style={{ ...NUM, fontSize: 11, color: 'var(--red)' }}>{count}</span>
+                  </div>
+                ))}
+              </>
+            )}
+
+            {/* Orders placed */}
+            {data!.orders_placed > 0 && (
+              <div style={{ ...ROW_STYLE, paddingLeft: 48 }}>
+                <span style={{ fontSize: 12, color: 'var(--green)', minWidth: 144 }}>│       └─ Order placed</span>
+                <span style={{ ...NUM, fontSize: 12, color: 'var(--green)' }}>{data!.orders_placed}</span>
+              </div>
+            )}
+            {orders.map((o, i) => (
+              <div key={i} style={{ ...ROW_STYLE, paddingLeft: 64, fontSize: 11 }}>
+                <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>
+                  {o.symbol} {o.contract ?? ''}{o.limit_price != null ? ` @ $${Math.abs(o.limit_price).toFixed(2)}` : ''}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ── Claude Agreement card ────────────────────────────────────
+
+function ClaudeAgreementCard() {
+  const [data, setData] = useState<ClaudeAgreementResponse | null>(null)
+  const [window, setWindow] = useState<'7d' | '30d' | '90d' | 'all'>('30d')
+
+  useEffect(() => {
+    let cancelled = false
+    const load = () => {
+      api.claudeAgreement(window).then((d) => { if (!cancelled) setData(d) }).catch(() => {})
+    }
+    load()
+    const id = setInterval(load, 5 * 60_000)
+    return () => { cancelled = true; clearInterval(id) }
+  }, [window])
+
+  const skipRate = data?.claude_skip_rate_when_precheck_says_open
+  const skipRatePct = skipRate != null ? (skipRate * 100).toFixed(1) : null
+  const openRate = data?.claude_open_rate_when_precheck_says_skip
+  const openRatePct = openRate != null ? (openRate * 100).toFixed(1) : null
+  const sampleSize = data?.precheck_open_count ?? 0
+
+  const interpretation = skipRate == null
+    ? null
+    : skipRate > 0.6
+      ? 'Claude is more selective than pre-check.'
+      : skipRate < 0.2
+        ? 'Claude is rubber-stamping pre-check verdicts.'
+        : 'Claude and pre-check are roughly aligned.'
+
+  const WINDOW_LABELS: Record<string, string> = { '7d': '7d', '30d': '30d', '90d': '90d', 'all': 'all' }
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-0">
+        <h2 className="section-heading">Claude agreement</h2>
+        <div className="flex gap-1 mb-1">
+          {(['7d', '30d', '90d', 'all'] as const).map((w) => (
+            <button
+              key={w}
+              onClick={() => setWindow(w)}
+              className="text-xs px-2 py-0.5 rounded transition-colors"
+              style={{
+                backgroundColor: window === w ? 'var(--accent)' : 'var(--bg-secondary)',
+                color: window === w ? '#fff' : 'var(--text-muted)',
+                border: '1px solid var(--border)',
+                cursor: 'pointer',
+              }}
+            >
+              {WINDOW_LABELS[w]}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div
+        className="rounded-md p-4"
+        style={{ backgroundColor: 'var(--bg-card)', border: '1px solid var(--border)' }}
+      >
+        {!data || data.decisions_evaluated === 0 ? (
+          <div className="text-sm text-center py-2" style={{ color: 'var(--text-muted)' }}>
+            No entry decisions recorded for {window === 'all' ? 'all time' : `last ${window}`}
+          </div>
+        ) : (
+          <>
+            {/* Headline metric */}
+            <div className="mb-3">
+              <div className="text-xs mb-1" style={{ color: 'var(--text-muted)' }}>
+                Claude SKIP rate when pre-check says OPEN ({window}
+                {sampleSize > 0 ? `, n=${sampleSize}` : ''})
+              </div>
+              <div
+                className="text-4xl font-mono tabular"
+                style={{ color: skipRatePct != null ? 'var(--text-primary)' : 'var(--text-muted)' }}
+              >
+                {skipRatePct != null ? `${skipRatePct}%` : '—'}
+              </div>
+              {interpretation && (
+                <div className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>
+                  {interpretation}
+                </div>
+              )}
+            </div>
+
+            {/* Sparkline */}
+            {data.daily_series.length > 1 && (
+              <div className="mb-3">
+                <ResponsiveContainer width="100%" height={60}>
+                  <BarChart
+                    data={data.daily_series}
+                    margin={{ top: 2, right: 4, left: 0, bottom: 0 }}
+                  >
+                    <XAxis dataKey="date" hide />
+                    <Tooltip
+                      contentStyle={{
+                        backgroundColor: 'var(--bg-card)',
+                        border: '1px solid var(--border)',
+                        fontSize: 11,
+                      }}
+                      formatter={(value: number, _name: string) => [`${(value * 100).toFixed(1)}%`, 'Skip rate']}
+                      labelFormatter={(label: string) => label}
+                    />
+                    <Bar
+                      dataKey="skip_when_open_rate"
+                      fill="var(--accent)"
+                      radius={[2, 2, 0, 0]}
+                    />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+
+            {/* Secondary stat */}
+            <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
+              Claude OPEN rate when pre-check says SKIP:{' '}
+              <span className="font-mono" style={{ color: 'var(--text-secondary)' }}>
+                {openRatePct != null ? `${openRatePct}%` : '—'}
+              </span>
+              {data.precheck_skip_count > 0 && (
+                <span style={{ marginLeft: 4 }}>(n={data.precheck_skip_count})</span>
+              )}
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
 export function Dashboard() {
   const { data, loading } = useDecisions({ limit: 20 })
   const { accounts: accountList } = useAccounts()
@@ -828,6 +1121,11 @@ export function Dashboard() {
       <FillQualityCard />
 
       <ClaudeCostsCard />
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <TodaysCycleCard />
+        <ClaudeAgreementCard />
+      </div>
 
       <DataHealthPanel />
 
