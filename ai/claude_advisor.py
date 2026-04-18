@@ -108,6 +108,7 @@ class ClaudeAdvisor:
         if mode != "off":
             logger.info("Adaptive thinking enabled: mode=%s", mode)
 
+        self.prompt_version = "unknown"
         self.load_prompts()
 
     def _build_output_config(self, schema: dict) -> dict:
@@ -241,6 +242,31 @@ class ClaudeAdvisor:
                 else:
                     logger.warning("Spread prompt not found: %s", path)
         logger.info("Loaded prompt files from %s", _PROMPTS_DIR)
+        self.prompt_version = self._compute_prompt_version()
+        logger.info("Prompt version: %s", self.prompt_version)
+
+    def _compute_prompt_version(self) -> str:
+        """SHA256-12 of concatenated prompt file contents.
+
+        Walks _PROMPTS_DIR, reads every .md file in sorted order, joins them
+        with a file boundary marker, and hashes. Any read error → "unknown".
+        Returns first 12 hex chars of the digest.
+        """
+        import hashlib
+        try:
+            if not _PROMPTS_DIR.exists():
+                return "unknown"
+            md_files = sorted(_PROMPTS_DIR.glob("*.md"))
+            parts: list[str] = []
+            for path in md_files:
+                parts.append(f"---FILE:{path.name}---")
+                parts.append(path.read_text(encoding="utf-8"))
+            joined = "\n".join(parts)
+            digest = hashlib.sha256(joined.encode("utf-8")).hexdigest()
+            return digest[:12]
+        except Exception:
+            logger.warning("Failed to compute prompt version", exc_info=True)
+            return "unknown"
 
     def _inject_strategy_params(self, prompt_text: str, strategy_name: str) -> str:
         """Replace {{param_name}} placeholders with values from strategy definition.

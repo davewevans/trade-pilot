@@ -323,6 +323,7 @@ def run() -> None:
                         skip_reason_code=SkipReason.LIQUIDITY_TIER_D,
                         job_run_id=job_run_id,
                         pre_check_verdict="SKIP",
+                        prompt_version=None,
                     )
                 report_lines.append(
                     f"**{symbol}** -- SKIPPED (liquidity floor: {_liq_skip.get('skip_reason')})"
@@ -382,6 +383,7 @@ def run() -> None:
                         skip_reason_code=SkipReason.CLAUDE_SKIP,
                         job_run_id=job_run_id,
                         pre_check_verdict=_wheel_pcv,
+                        prompt_version=advisor.prompt_version,
                     )
                 report_lines.append(
                     f"**{symbol}** -- {decision.get('action').upper()} "
@@ -416,6 +418,7 @@ def run() -> None:
                         skip_reason_code=SkipReason.GUARDRAIL_OTHER,
                         job_run_id=job_run_id,
                         pre_check_verdict=_wheel_pcv,
+                        prompt_version=advisor.prompt_version,
                     )
                 from strategies.guardrails import Guardrails as _G
                 journal.append({
@@ -460,6 +463,7 @@ def run() -> None:
                     research_metadata=context.get("_research"),
                     job_run_id=job_run_id,
                     pre_check_verdict=_wheel_pcv,
+                    prompt_version=advisor.prompt_version,
                 )
 
             if settings.DRY_RUN:
@@ -515,6 +519,7 @@ def run() -> None:
                             skip_reason_code=_cb_reason_code,
                             job_run_id=job_run_id,
                             pre_check_verdict=_wheel_pcv,
+                            prompt_version=advisor.prompt_version,
                         )
                     report_lines.append(f"**{symbol}** -- SKIPPED ({cb_skip_reason})")
                     continue
@@ -621,6 +626,7 @@ def run() -> None:
                 strat_state_value = strat.get_state().value
                 spread_ctx = None
                 decision = None
+                _spread_used_advisor = False
 
                 if strat_state_value == "OPEN":
                     mgmt_underlying = None
@@ -647,6 +653,7 @@ def run() -> None:
                         )
                         continue
                     decision = strat.run_cycle(spread_ctx, advisor)
+                    _spread_used_advisor = True
                 else:
                     # IDLE: scan the strategy-specific watchlist, pre-check without
                     # Claude, then run_cycle (→ Claude) once for the winner.
@@ -738,6 +745,7 @@ def run() -> None:
                             strategy_name, best_symbol, best_score,
                         )
                         decision = strat.run_cycle(spread_ctx, advisor)
+                        _spread_used_advisor = True
                         # Tag the winning underlying so _handle_spread_open uses it.
                         if decision.get("action") == "OPEN":
                             decision["underlying"] = best_symbol
@@ -801,6 +809,7 @@ def run() -> None:
                         skip_reason_code=_spread_skip_reason_code,
                         job_run_id=job_run_id,
                         pre_check_verdict=_spread_pcv,
+                        prompt_version=advisor.prompt_version if _spread_used_advisor else None,
                     )
 
                 # Journal SKIPs from spread strategies so Claude sees them

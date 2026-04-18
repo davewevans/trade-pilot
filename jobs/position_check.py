@@ -191,6 +191,7 @@ def run() -> None:
                             context=context,
                             job_run_id=job_run_id,
                             pre_check_verdict="MANAGE",
+                            prompt_version=advisor.prompt_version,
                         )
 
                     report_lines.append(f"**{underlying}** — {action} REJECTED: {rejection}")
@@ -219,6 +220,7 @@ def run() -> None:
                         context=context,
                         job_run_id=job_run_id,
                         pre_check_verdict="MANAGE",
+                        prompt_version=advisor.prompt_version,
                     )
 
                 if settings.DRY_RUN:
@@ -283,6 +285,7 @@ def run() -> None:
                         context=context,
                         job_run_id=job_run_id,
                         pre_check_verdict="MANAGE",
+                        prompt_version=advisor.prompt_version,
                     )
 
                 report_lines.append(f"**{underlying}** — hold")
