@@ -179,6 +179,10 @@ class Settings:
         self.ORATS_ALLOW_BUDGET_HEAVY: int = int(
             os.getenv("ORATS_ALLOW_BUDGET_HEAVY", "0")
         )
+        # Set to "1" to allow ORATSCache to silently fall back to in-memory when
+        # SQLite init fails.  In production (RENDER=true) the default is to raise
+        # rather than degrade invisibly.  Dev always falls back with a CRITICAL log.
+        self.ORATS_CACHE_ALLOW_FALLBACK: str = os.getenv("ORATS_CACHE_ALLOW_FALLBACK", "0")
 
         # ── Notifications ──────────────────────────────────────
         # ntfy.sh topic name. When unset, ntfy notifications are silently dropped.
