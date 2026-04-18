@@ -350,6 +350,63 @@ _SCHEMA_STATEMENTS: tuple[str, ...] = (
         PRIMARY KEY (symbol, strategy, lookback_years)
     )
     """,
+    # ── decision_scores ──────────────────────────────────────────────────
+    # Offline evaluation scores for individual decisions.  Populated by the
+    # rubric-scoring pipeline (scorer_type='automated_rubric') and optionally
+    # overridden by human judges (scorer_type='judge_manual').
+    # spot_check_pending=1 flags rows awaiting human spot-check review.
+    """
+    CREATE TABLE IF NOT EXISTS decision_scores (
+        id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+        decision_id             INTEGER NOT NULL,
+        scorer_type             TEXT    NOT NULL,
+        scored_at               TEXT    NOT NULL,
+        total_score             REAL    NOT NULL,
+        max_score               REAL    NOT NULL,
+        rubric_version          TEXT,
+        dimension_scores_json   TEXT,
+        pass_fail               TEXT,
+        notes                   TEXT,
+        spot_check_pending      INTEGER NOT NULL DEFAULT 0,
+        spot_check_submitted_at TEXT
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_dscores_decision ON decision_scores(decision_id)",
+    "CREATE INDEX IF NOT EXISTS idx_dscores_scorer_ts ON decision_scores(scorer_type, scored_at)",
+    "CREATE INDEX IF NOT EXISTS idx_dscores_spot_check ON decision_scores(spot_check_pending) WHERE spot_check_pending = 1",
+    # ── monthly_evaluations ───────────────────────────────────────────────
+    # One row per calendar month (YYYY-MM) summarising the rubric pipeline
+    # output.  The UNIQUE(month) constraint is enforced at the table level
+    # so upsert callers get a clear IntegrityError on duplicate inserts.
+    """
+    CREATE TABLE IF NOT EXISTS monthly_evaluations (
+        id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+        month                   TEXT    NOT NULL UNIQUE,
+        decisions_evaluated     INTEGER NOT NULL DEFAULT 0,
+        avg_score               REAL,
+        pct_pass                REAL,
+        score_distribution_json TEXT,
+        flags_json              TEXT,
+        created_at              TEXT    NOT NULL,
+        reviewed_at             TEXT,
+        action_note             TEXT
+    )
+    """,
+    # ── judge_spot_checks ─────────────────────────────────────────────────
+    # Human-judge review rows linked to decision_scores rows.
+    # operator_verdict: 'agree' | 'disagree' | 'abstain'
+    """
+    CREATE TABLE IF NOT EXISTS judge_spot_checks (
+        id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+        decision_score_id   INTEGER NOT NULL,
+        submitted_at        TEXT    NOT NULL,
+        judge_score         REAL,
+        operator_verdict    TEXT,
+        verdict_notes       TEXT,
+        checked_at          TEXT
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_jsc_score_id ON judge_spot_checks(decision_score_id)",
 )
 
 
