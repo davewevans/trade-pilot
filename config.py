@@ -139,6 +139,16 @@ class Settings:
         self.RESEARCH_BACKTEST_MAX_SYMBOLS_PER_RUN: int = int(
             os.getenv("RESEARCH_BACKTEST_MAX_SYMBOLS_PER_RUN", "50")
         )
+        # Max ORATS historical calls consumed by a single weekly_research sweep run.
+        # The rotating sweep stops when this budget or the monthly cap is exhausted.
+        self.WEEKLY_SWEEP_BUDGET_CALLS: int = int(
+            os.getenv("WEEKLY_SWEEP_BUDGET_CALLS", "3000")
+        )
+        # Weeks after which a primed (symbol, strategy) pair becomes eligible for
+        # re-priming to pick up recent backtest data.
+        self.SWEEP_REPRIME_WEEKS: int = int(
+            os.getenv("SWEEP_REPRIME_WEEKS", "4")
+        )
 
         # Research layer — watchlist recommendations
         self.RESEARCH_RECOMMENDATIONS_ENABLED: bool = (

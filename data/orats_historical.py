@@ -24,19 +24,38 @@ _TIMEOUT = 15
 
 # ── SQLite cache ─────────────────────────────────────────────────────────────
 
-# Historical data is immutable: 7-day TTL is effectively permanent for
-# symbol+date combinations that have already settled.
-_HIST_TTL = 7 * 24 * 3600  # 7 days in seconds
+# Historical data for past settled trading days is immutable — once fetched it
+# never needs to be re-fetched.  Use an astronomically large TTL so SQLite
+# cache rows are never treated as expired for past dates.
+#
+# Today's data may not have settled yet (ORATS updates intraday) so it uses a
+# shorter 1-hour TTL.
+_IMMUTABLE_TTL: float = 10.0 * 365.25 * 24 * 3600  # ~10 years (effectively forever)
+_TODAY_TTL: float = 3600.0  # 1 hour for the current trading day
 
 _hist_cache = ORATSCache()
 
 
-def _cache_get(endpoint: str, params_key: str) -> Optional[list | dict]:
-    return _hist_cache.get(endpoint, params_key, _HIST_TTL)
+def _ttl_for_date(trade_date: str) -> float:
+    """Return the appropriate cache TTL for a historical data date.
+
+    Past dates → _IMMUTABLE_TTL (data is immutable, never re-fetch).
+    Today → _TODAY_TTL (data may not have settled yet).
+    """
+    from datetime import date as _date
+    try:
+        today = _date.today().isoformat()
+    except Exception:
+        return _TODAY_TTL
+    return _TODAY_TTL if trade_date >= today else _IMMUTABLE_TTL
 
 
-def _cache_set(endpoint: str, params_key: str, data: list | dict) -> None:
-    _hist_cache.set(endpoint, params_key, data, _HIST_TTL)
+def _cache_get(endpoint: str, params_key: str, trade_date: str) -> Optional[list | dict]:
+    return _hist_cache.get(endpoint, params_key, _ttl_for_date(trade_date))
+
+
+def _cache_set(endpoint: str, params_key: str, data: list | dict, trade_date: str) -> None:
+    _hist_cache.set(endpoint, params_key, data, _ttl_for_date(trade_date))
 
 
 # ── Client ───────────────────────────────────────────────────────────────────
@@ -80,7 +99,7 @@ class ORATSHistorical:
             d_lo, d_hi = abs(delta_min), abs(delta_max)
 
         params_key = f"{symbol.upper()}|{trade_date}|{dte_min}|{dte_max}|{d_lo}|{d_hi}"
-        cached = _cache_get("hist/strikes", params_key)
+        cached = _cache_get("hist/strikes", params_key, trade_date)
         _job_name = os.environ.get("TRADE_PILOT_JOB_NAME")
         if cached is not None:
             from data.api_ledger import get_ledger
@@ -118,7 +137,7 @@ class ORATSHistorical:
         if not rows and _status_code is None:
             return []
 
-        _cache_set("hist/strikes", params_key, rows)
+        _cache_set("hist/strikes", params_key, rows, trade_date)
         return self._project_strikes(rows, side)
 
     def get_summary_on_date(self, symbol: str, trade_date: str) -> Optional[dict]:
@@ -128,7 +147,7 @@ class ORATSHistorical:
         or None on failure.
         """
         params_key = f"{symbol.upper()}|{trade_date}"
-        cached = _cache_get("hist/summaries", params_key)
+        cached = _cache_get("hist/summaries", params_key, trade_date)
         _job_name = os.environ.get("TRADE_PILOT_JOB_NAME")
         if cached is not None:
             from data.api_ledger import get_ledger
@@ -164,7 +183,7 @@ class ORATSHistorical:
         if _status_code is None:
             return None
 
-        _cache_set("hist/summaries", params_key, rows)
+        _cache_set("hist/summaries", params_key, rows, trade_date)
         if not rows:
             return None
         return self._normalize_summary(rows[0])
@@ -172,7 +191,7 @@ class ORATSHistorical:
     def get_cores_on_date(self, symbol: str, trade_date: str) -> Optional[dict]:
         """Fetch historical /cores data for a specific date."""
         params_key = f"{symbol.upper()}|{trade_date}"
-        cached = _cache_get("hist/cores", params_key)
+        cached = _cache_get("hist/cores", params_key, trade_date)
         _job_name = os.environ.get("TRADE_PILOT_JOB_NAME")
         if cached is not None:
             from data.api_ledger import get_ledger
@@ -208,7 +227,7 @@ class ORATSHistorical:
         if _status_code is None:
             return None
 
-        _cache_set("hist/cores", params_key, rows)
+        _cache_set("hist/cores", params_key, rows, trade_date)
         if not rows:
             return None
         return self._normalize_cores(rows[0])
@@ -224,7 +243,7 @@ class ORATSHistorical:
         Returns a list of dicts with tradeDate, iv, ivRank1y, etc.
         """
         params_key = f"{symbol.upper()}|{start_date or ''}|{end_date or ''}"
-        cached = _cache_get("hist/ivrank", params_key)
+        cached = _cache_get("hist/ivrank", params_key, trade_date)
         _job_name = os.environ.get("TRADE_PILOT_JOB_NAME")
         if cached is not None:
             from data.api_ledger import get_ledger
@@ -259,7 +278,7 @@ class ORATSHistorical:
         if _status_code is None:
             return []
 
-        _cache_set("hist/ivrank", params_key, rows)
+        _cache_set("hist/ivrank", params_key, rows, trade_date)
         return rows
 
     def find_contract_on_date(
@@ -296,7 +315,7 @@ class ORATSHistorical:
         dte_hi = dte_remaining + 5
 
         params_key = f"{symbol.upper()}|{trade_date}|{dte_lo}|{dte_hi}|{d_lo}|{d_hi}|wide"
-        cached = _cache_get("hist/strikes", params_key)
+        cached = _cache_get("hist/strikes", params_key, trade_date)
         _job_name = os.environ.get("TRADE_PILOT_JOB_NAME")
         if cached is None:
             from data.api_ledger import get_ledger
@@ -327,7 +346,7 @@ class ORATSHistorical:
                 get_ledger().record("orats_historical", "hist/strikes", symbol, False, _status_code, int((time.monotonic() - _t0) * 1000), _job_name)
             if _status_code is None:
                 return None
-            _cache_set("hist/strikes", params_key, cached)
+            _cache_set("hist/strikes", params_key, cached, trade_date)
         else:
             from data.api_ledger import get_ledger
             get_ledger().record("orats_historical", "hist/strikes", symbol, True, None, None, _job_name)
