@@ -25,6 +25,8 @@ import { Volatility } from './pages/Volatility'
 import { Research } from './pages/Research'
 import { Recommendations } from './pages/Recommendations'
 import { ResearchGuide } from './pages/ResearchGuide'
+import { Evaluations } from './pages/Evaluations'
+import { EvaluationDetail } from './pages/EvaluationDetail'
 
 export function App() {
   return (
@@ -40,6 +42,8 @@ export function App() {
           <Route path="/backtest-intel" element={<BacktestIntel />} />
           <Route path="/volatility" element={<Volatility />} />
           <Route path="/account/:account" element={<AccountDetail />} />
+          <Route path="/evaluations" element={<Evaluations />} />
+          <Route path="/evaluations/:month" element={<EvaluationDetail />} />
           <Route path="/decisions" element={<DecisionLog />} />
           <Route path="/reasoning" element={<ReasoningExplorer />} />
           <Route path="/guardrails" element={<Guardrails />} />

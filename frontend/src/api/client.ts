@@ -203,6 +203,110 @@ export interface ORATSUsageResponse {
   this_month_total: number;
 }
 
+// ── Evaluation types ──────────────────────────────────────────────────────────
+
+export type ReviewStatus = 'pending' | 'reviewed' | 'reviewed-with-action'
+
+export interface EvaluationSummary {
+  month: string
+  generated_at: string
+  decisions_scored: number
+  closed_trades_in_window: number | null
+  insufficient_sample: null  // not persisted by backend
+  flag_count: number
+  review_status: ReviewStatus
+  judge_operator_disagreement: number | null
+}
+
+export interface EvaluationsListResponse {
+  evaluations: EvaluationSummary[]
+  total: number
+}
+
+export interface DimensionStats {
+  mean: number
+  median: number
+  stddev: number
+  n: number
+  by_prompt_version?: Record<string, { mean: number; median: number; stddev: number; n: number }>
+}
+
+export interface StrategyDistribution {
+  by_dimension: Record<string, DimensionStats>
+  decisions_scored: number
+  closed_trades_in_window: number
+}
+
+export interface ScoreDistribution {
+  by_strategy: Record<string, StrategyDistribution>
+  overall: {
+    by_dimension: Record<string, DimensionStats>
+    decisions_scored: number
+    closed_trades_in_window: number
+  }
+}
+
+export interface FlagSummaryItem {
+  strategy: string
+  dimension: string
+  severity: string
+  reason: string
+}
+
+export interface EvaluationDetailResponse {
+  month: string
+  generated_at: string
+  decisions_scored: number
+  avg_score: number | null
+  pct_pass: number | null
+  reviewed_at: string | null
+  action_note: string | null
+  review_status: ReviewStatus
+  flag_summary: FlagSummaryItem[]
+  score_distribution: ScoreDistribution
+  judge_operator_disagreement: number | null
+}
+
+export interface FlaggedDecision {
+  id: number
+  timestamp: string
+  underlying: string | null
+  action: string | null
+  reasoning: unknown
+  context: unknown
+  scores: Array<{
+    id: number
+    decision_id: number
+    scorer_type: string
+    total_score: number | null
+    dimension_scores_json: string | null
+    dimension_scores?: Array<{ dimension: string; score: number; justification?: string }>
+    scored_at: string
+    prompt_version: string | null
+  }>
+  [key: string]: unknown
+}
+
+export interface FlaggedDecisionGroup {
+  strategy: string
+  dimension: string
+  severity: string
+  reason: string
+  decisions: FlaggedDecision[]
+}
+
+export interface FlaggedDecisionsResponse {
+  month: string
+  flags: FlaggedDecisionGroup[]
+}
+
+export interface MarkReviewedResponse {
+  month: string
+  review_status: ReviewStatus
+  reviewed_at: string | null
+  action_note: string | null
+}
+
 export const api = {
   health: () => get<HealthStatus>('/api/health'),
 
@@ -388,6 +492,34 @@ export const api = {
 
   oratsUsage: (): Promise<ORATSUsageResponse> =>
     get<ORATSUsageResponse>('/api/orats/usage'),
+
+  listEvaluations: (limit = 20, offset = 0): Promise<EvaluationsListResponse> => {
+    const q = new URLSearchParams()
+    q.set('limit', String(limit))
+    q.set('offset', String(offset))
+    return get<EvaluationsListResponse>(`/api/evaluations?${q.toString()}`)
+  },
+
+  getEvaluation: (month: string): Promise<EvaluationDetailResponse> =>
+    get<EvaluationDetailResponse>(`/api/evaluations/${encodeURIComponent(month)}`),
+
+  getFlaggedDecisions: (month: string): Promise<FlaggedDecisionsResponse> =>
+    get<FlaggedDecisionsResponse>(`/api/evaluations/${encodeURIComponent(month)}/flagged-decisions`),
+
+  markReviewed: async (month: string, actionNote: string | null): Promise<MarkReviewedResponse> => {
+    const res = await fetchWithRetry(`${BASE}/api/evaluations/${encodeURIComponent(month)}/mark-reviewed`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ action_note: actionNote }),
+    })
+    if (res.status === 401) { _handleUnauthorized(); throw new Error('Unauthorized') }
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }))
+      throw new Error(err.error ?? `API error ${res.status}`)
+    }
+    return res.json() as Promise<MarkReviewedResponse>
+  },
 
   claudeCosts: (window: '7d' | '30d' | '90d' | 'all' = '7d', account?: string): Promise<ClaudeCostsResponse> => {
     const q = new URLSearchParams()

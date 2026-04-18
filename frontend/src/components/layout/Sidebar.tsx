@@ -132,6 +132,9 @@ export function Sidebar() {
         <NavLink to="/reasoning" className={linkClass} style={({ isActive }) => linkStyle(isActive)}>
           Reasoning
         </NavLink>
+        <NavLink to="/evaluations" className={linkClass} style={({ isActive }) => linkStyle(isActive)}>
+          Evaluations
+        </NavLink>
         <NavLink to="/watchlist" className={linkClass} style={({ isActive }) => linkStyle(isActive)}>
           Watchlist
         </NavLink>
