@@ -487,6 +487,15 @@ def changelog():
     return PlainTextResponse(text)
 
 
+@app.get("/api/usage")
+def api_usage():
+    """Return current ORATS quota usage from the last written snapshot."""
+    data = _read_json(SNAPSHOTS / "api_usage.json")
+    if data is None:
+        return JSONResponse(status_code=503, content={"error": "No API usage snapshot yet"})
+    return data
+
+
 @app.get("/api/portfolio")
 def portfolio():
     data = _read_json(SNAPSHOTS / "portfolio.json")

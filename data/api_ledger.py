@@ -24,6 +24,8 @@ WAL mode serialises writes; the soft-enforcement race window is sub-millisecond
 and acceptable for this use-case.
 """
 
+import atexit
+import json
 import logging
 import os
 import sqlite3
@@ -58,6 +60,9 @@ class ApiLedger:
         db_path: Path to the SQLite database (same file as the main DB).
     """
 
+    # How many billable (non-cache, non-blocked) calls between auto-snapshots.
+    _SNAPSHOT_INTERVAL = 50
+
     def __init__(self, db_path: Path) -> None:
         self._db_path = Path(db_path)
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -66,7 +71,9 @@ class ApiLedger:
         self._conn.execute("PRAGMA busy_timeout=5000")
         self._conn.commit()
         self._lock = threading.RLock()  # RLock so check_and_reserve can call _insert while holding it
+        self._billable_since_snapshot = 0
         self._init_schema()
+        atexit.register(self._atexit_snapshot)
 
     # ── public API ────────────────────────────────────────────────────────
 
@@ -98,6 +105,7 @@ class ApiLedger:
         if caps is None:
             return  # not a capped API
 
+        quota_exc: Optional[OratsQuotaExceeded] = None
         with self._lock:
             now = time.time()
             month_used = self._count_window(api, self._month_start_ts(now))
@@ -132,7 +140,13 @@ class ApiLedger:
                         blocked_reason=reason,
                     )
                     self._emit_api_log(api, endpoint, symbol, False, None, None, reason, job_name)
-                    raise OratsQuotaExceeded(reason=reason, usage=usage)
+                    quota_exc = OratsQuotaExceeded(reason=reason, usage=usage)
+                    break  # only raise on the first exceeded cap
+
+        # Snapshot and raise outside the lock
+        if quota_exc is not None:
+            self.write_snapshot()
+            raise quota_exc
 
     # ── structured api_calls log ──────────────────────────────────────────
 
@@ -208,7 +222,20 @@ class ApiLedger:
                 job_name=job_name,
                 blocked_reason=None,
             )
+            # Count only real billable calls toward the snapshot trigger
+            if not cache_hit and self._caps_for(api) is not None:
+                self._billable_since_snapshot += 1
+                if self._billable_since_snapshot >= self._SNAPSHOT_INTERVAL:
+                    self._billable_since_snapshot = 0
+                    do_snapshot = True
+                else:
+                    do_snapshot = False
+            else:
+                do_snapshot = False
+
         self._emit_api_log(api, endpoint, symbol, cache_hit, status_code, duration_ms, None, job_name)
+        if do_snapshot:
+            self.write_snapshot()
 
     def get_usage(self, api: str) -> dict:
         """Return current usage counters and caps for *api*.
@@ -237,6 +264,33 @@ class ApiLedger:
             "minute_cap": caps["minute"],
             "minute_remaining": max(0, caps["minute"] - minute_used),
         }
+
+    def write_snapshot(self) -> None:
+        """Write current usage for all capped APIs to data/snapshots/api_usage.json.
+
+        Atomic write (tmp → replace) so the API server never reads a partial file.
+        Safe to call from any thread; never raises.
+        """
+        try:
+            from config import settings  # late import — avoids circular dep
+
+            snapshot = {
+                "ts": datetime.now(tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "orats_historical": self.get_usage("orats_historical"),
+                "orats_live": self.get_usage("orats_live"),
+            }
+            snapshots_dir = settings.SNAPSHOTS_DIR
+            snapshots_dir.mkdir(parents=True, exist_ok=True)
+            out_path = snapshots_dir / "api_usage.json"
+            tmp_path = out_path.with_suffix(".json.tmp")
+            tmp_path.write_text(json.dumps(snapshot, indent=2), encoding="utf-8")
+            os.replace(str(tmp_path), str(out_path))
+        except Exception:
+            logger.warning("ApiLedger.write_snapshot failed", exc_info=True)
+
+    def _atexit_snapshot(self) -> None:
+        """Write a final snapshot on process exit (atexit hook)."""
+        self.write_snapshot()
 
     # ── internals ─────────────────────────────────────────────────────────
 
