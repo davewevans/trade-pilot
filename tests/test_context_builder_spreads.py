@@ -376,22 +376,55 @@ class TestEmptyCandidates:
 
 
 class TestSelectSpreadStrategies:
-    def test_bear_regime(self):
-        assert ContextBuilder._select_spread_strategies("BEAR", "HIGH") == ["bear_call_spread"]
+    # ── Unchanged regimes (still pass after data-driven rewrite) ──
 
-    def test_neutral_high_iv(self):
-        assert ContextBuilder._select_spread_strategies("NEUTRAL", "HIGH") == ["iron_condor"]
-
-    def test_neutral_moderate_iv(self):
-        result = ContextBuilder._select_spread_strategies("NEUTRAL", "MODERATE")
-        assert "bull_put_spread" in result
-        assert "iron_condor" in result
-
-    def test_bull_low_iv(self):
-        assert ContextBuilder._select_spread_strategies("BULL", "LOW") == ["long_call_vertical"]
+    def test_bear_high_returns_bear_call_only(self):
+        # bear_call_spread.json: BEAR + MODERATE/HIGH.  No other JSON allows BEAR.
+        result = ContextBuilder._select_spread_strategies("BEAR", "HIGH")
+        assert result == ["bear_call_spread"]
 
     def test_crash_returns_empty(self):
         assert ContextBuilder._select_spread_strategies("CRASH", "HIGH") == []
+
+    # ── Data-driven fixes: iron_condor is HIGH only (not MODERATE) ──
+
+    def test_neutral_high_includes_iron_condor_and_iron_butterfly(self):
+        # Both iron_condor.json and iron_butterfly.json: NEUTRAL + HIGH.
+        result = ContextBuilder._select_spread_strategies("NEUTRAL", "HIGH")
+        assert "iron_condor" in result
+        assert "iron_butterfly" in result
+
+    def test_neutral_moderate_does_not_include_iron_condor(self):
+        # iron_condor.json: iv_environment.allowed = ["HIGH"] only.
+        result = ContextBuilder._select_spread_strategies("NEUTRAL", "MODERATE")
+        assert "iron_condor" not in result
+        assert "bull_put_spread" in result
+
+    def test_neutral_moderate_includes_calendar_spread(self):
+        # calendar_spread.json: NEUTRAL + LOW/MODERATE.
+        result = ContextBuilder._select_spread_strategies("NEUTRAL", "MODERATE")
+        assert "calendar_spread" in result
+
+    def test_neutral_low_returns_calendar_spread_only(self):
+        # Only calendar_spread.json allows LOW iv_environment.
+        result = ContextBuilder._select_spread_strategies("NEUTRAL", "LOW")
+        assert result == ["calendar_spread"]
+
+    def test_bull_low_includes_long_call_vertical_and_calendar(self):
+        # long_call_vertical.json: BULL + LOW.  calendar_spread.json: BULL + LOW/MODERATE.
+        result = ContextBuilder._select_spread_strategies("BULL", "LOW")
+        assert "long_call_vertical" in result
+        assert "calendar_spread" in result
+
+    def test_bull_high_does_not_include_calendar_spread(self):
+        # calendar_spread.json: iv_environment.allowed = ["LOW", "MODERATE"] only.
+        result = ContextBuilder._select_spread_strategies("BULL", "HIGH")
+        assert "calendar_spread" not in result
+
+    def test_iron_butterfly_not_returned_for_neutral_moderate(self):
+        # iron_butterfly.json: iv_environment.allowed = ["HIGH"] only.
+        result = ContextBuilder._select_spread_strategies("NEUTRAL", "MODERATE")
+        assert "iron_butterfly" not in result
 
 
 # ── calculate_current_spread_value ──────────────────────────
@@ -563,3 +596,328 @@ class TestORATSSnapshotEnrichment:
         builder.broker.get_option_snapshots.assert_called_once_with(
             ["SPY250502P00525000"], underlying="SPY"
         )
+
+
+# ── Iron Butterfly candidate building ───────────────────────
+
+
+def _make_ib_contracts(exp, strikes, opt_type, oi=500):
+    """Helper: make a list of chain contracts for iron butterfly tests."""
+    return [
+        _make_contract(f"{opt_type.upper()}{int(s)}", s, exp, opt_type, oi=oi)
+        for s in strikes
+    ]
+
+
+def _make_ib_snapshots(exp, strikes_mids, opt_type):
+    """Helper: {symbol: snapshot} for iron butterfly tests.
+
+    ``strikes_mids`` is a list of (strike, mid) tuples.
+    """
+    snaps = {}
+    for strike, mid in strikes_mids:
+        sym = f"{opt_type.upper()}{int(strike)}"
+        half = mid / 4
+        snaps[sym] = _make_snapshot(bid=mid - half, ask=mid + half, delta=-0.20 if opt_type == "put" else 0.20, oi=500)
+    return snaps
+
+
+class TestIronButterflyCandidate:
+    """Tests for ContextBuilder.build_iron_butterfly_candidates()."""
+
+    EXP = "2025-06-20"  # ~60 days out — inside dte_min=20/dte_max=45 doesn't matter;
+    # DTE filtering is done by the broker chain call, not by the builder.
+
+    def _setup_chain(self, builder, center=540.0, put_wing=5, call_wing=5,
+                     put_short_mid=3.50, call_short_mid=3.50,
+                     put_long_mid=0.80, call_long_mid=0.80, oi=500):
+        """Wire broker mocks for a symmetric butterfly around ``center``."""
+        put_strikes = [center - put_wing, center]
+        call_strikes = [center, center + call_wing]
+
+        builder.broker.get_option_chain_with_greeks.side_effect = [
+            _make_ib_contracts(self.EXP, put_strikes, "put", oi=oi),
+            _make_ib_contracts(self.EXP, call_strikes, "call", oi=oi),
+        ]
+
+        put_mids = [(center - put_wing, put_long_mid), (center, put_short_mid)]
+        call_mids = [(center, call_short_mid), (center + call_wing, call_long_mid)]
+        snaps = {
+            **_make_ib_snapshots(self.EXP, put_mids, "put"),
+            **_make_ib_snapshots(self.EXP, call_mids, "call"),
+        }
+        builder.broker.get_option_snapshots.return_value = snaps
+
+    def test_atm_strike_on_exact_price(self, builder):
+        """When underlying_price is exactly on a listed strike, that strike is ATM."""
+        self._setup_chain(builder, center=540.0)
+        result = builder.build_iron_butterfly_candidates(
+            "SPY", underlying_price=540.0,
+        )
+        assert result["iron_butterfly_legs"] is not None
+        assert result["iron_butterfly_legs"]["center_strike"] == 540.0
+
+    def test_atm_tie_breaking_prefers_higher_strike(self, builder):
+        """When price is exactly between two strikes, the higher strike wins."""
+        # Strikes: 537.5 and 542.5; price: 540.0 → equidistant → pick 542.5
+        exp = self.EXP
+        put_strikes = [537.5, 542.5]  # 542.5 will be center; 537.5 is wing
+        call_strikes = [542.5, 547.5]  # center=542.5, wing=547.5
+
+        builder.broker.get_option_chain_with_greeks.side_effect = [
+            _make_ib_contracts(exp, put_strikes, "put"),
+            _make_ib_contracts(exp, call_strikes, "call"),
+        ]
+        snaps = {
+            **_make_ib_snapshots(exp, [(537.5, 1.00), (542.5, 3.50)], "put"),
+            **_make_ib_snapshots(exp, [(542.5, 3.50), (547.5, 0.80)], "call"),
+        }
+        builder.broker.get_option_snapshots.return_value = snaps
+
+        # price 540.0 is equidistant from 537.5 and 542.5; must pick 542.5
+        result = builder.build_iron_butterfly_candidates(
+            "SPY", underlying_price=540.0,
+            put_wing_width=5, call_wing_width=5,
+        )
+        assert result["iron_butterfly_legs"] is not None
+        assert result["iron_butterfly_legs"]["center_strike"] == 542.5
+
+    def test_four_leg_structure_and_credit_math(self, builder):
+        """Verifies symmetric legs, total_credit, max_loss, credit_to_width_ratio."""
+        center = 540.0
+        put_short_mid = 3.50
+        call_short_mid = 3.50
+        put_long_mid = 0.80
+        call_long_mid = 0.80
+
+        self._setup_chain(
+            builder, center=center, put_wing=5, call_wing=5,
+            put_short_mid=put_short_mid, call_short_mid=call_short_mid,
+            put_long_mid=put_long_mid, call_long_mid=call_long_mid,
+        )
+
+        result = builder.build_iron_butterfly_candidates(
+            "SPY", underlying_price=center, put_wing_width=5, call_wing_width=5,
+        )
+
+        assert result["iron_butterfly_legs"] is not None
+        legs = result["iron_butterfly_legs"]
+
+        # Short strikes must both equal center
+        assert legs["put_short"]["strike"] == center
+        assert legs["call_short"]["strike"] == center
+
+        # Wing strikes
+        assert legs["put_long"]["strike"] == center - 5
+        assert legs["call_long"]["strike"] == center + 5
+
+        expected_credit = round(
+            put_short_mid + call_short_mid - put_long_mid - call_long_mid, 4
+        )  # 3.50 + 3.50 - 0.80 - 0.80 = 5.40
+        assert legs["total_credit"] == expected_credit
+
+        max_wing = 5
+        expected_max_loss = round(max_wing * 100 - expected_credit * 100, 2)
+        assert legs["max_loss"] == expected_max_loss
+
+        expected_ratio = round(expected_credit / max_wing, 4)
+        assert legs["credit_to_width_ratio"] == expected_ratio
+
+    def test_short_strikes_always_match(self, builder):
+        """put_short.strike and call_short.strike must equal center_strike."""
+        self._setup_chain(builder, center=540.0)
+        result = builder.build_iron_butterfly_candidates("SPY", underlying_price=540.0)
+        legs = result["iron_butterfly_legs"]
+        assert legs is not None
+        assert legs["put_short"]["strike"] == legs["call_short"]["strike"]
+        assert legs["put_short"]["strike"] == legs["center_strike"]
+
+    def test_empty_chain_returns_none_legs(self, builder):
+        """When broker returns no contracts, iron_butterfly_legs and best_candidate are None."""
+        builder.broker.get_option_chain_with_greeks.return_value = []
+        builder.broker.get_option_snapshots.return_value = {}
+
+        result = builder.build_iron_butterfly_candidates("SPY", underlying_price=540.0)
+        assert result["iron_butterfly_legs"] is None
+        assert result["best_candidate"] is None
+        assert result["candidates"] == []
+
+    def test_min_total_credit_filter_excludes_low_credit_candidate(self, builder):
+        """Candidates below min_total_credit (2.00 from JSON) are excluded."""
+        # Total credit will be: 1.10 + 1.10 - 0.60 - 0.60 = 1.00 < 2.00
+        self._setup_chain(
+            builder, center=540.0, put_wing=5, call_wing=5,
+            put_short_mid=1.10, call_short_mid=1.10,
+            put_long_mid=0.60, call_long_mid=0.60,
+        )
+        result = builder.build_iron_butterfly_candidates(
+            "SPY", underlying_price=540.0, put_wing_width=5, call_wing_width=5,
+        )
+        assert result["candidates"] == []
+        assert result["iron_butterfly_legs"] is None
+        assert result["best_candidate"] is None
+
+    def test_missing_leg_skips_expiration(self, builder):
+        """If any of the 4 legs is absent from the chain, that expiration is skipped."""
+        exp = self.EXP
+        # Only provide put chain — call chain is empty → call_short missing
+        builder.broker.get_option_chain_with_greeks.side_effect = [
+            _make_ib_contracts(exp, [535.0, 540.0], "put"),
+            [],  # empty call chain
+        ]
+        snaps = _make_ib_snapshots(exp, [(535.0, 1.00), (540.0, 3.50)], "put")
+        builder.broker.get_option_snapshots.return_value = snaps
+
+        result = builder.build_iron_butterfly_candidates("SPY", underlying_price=540.0)
+        assert result["iron_butterfly_legs"] is None
+
+    def test_iron_butterfly_legs_equals_best_candidate(self, builder):
+        """iron_butterfly_legs and best_candidate are the same object."""
+        self._setup_chain(builder, center=540.0)
+        result = builder.build_iron_butterfly_candidates("SPY", underlying_price=540.0)
+        assert result["iron_butterfly_legs"] is result["best_candidate"]
+
+
+# ── Calendar spread routing via build() ─────────────────────
+
+
+class TestCalendarSpreadInBuild:
+    """Verifies that build() routes calendar_spread through build_calendar_candidates
+    and stores the result under context["spread_candidates"]["calendar_spread"]."""
+
+    def _build_with_calendar_routing(self, builder):
+        """Call build() with enough mocking to reach the spread candidates section,
+        with _select_spread_strategies forced to return ["calendar_spread"] and
+        build_calendar_candidates returning a fixed result."""
+        cal_result = {
+            "underlying": "SPY",
+            "underlying_price": 540.0,
+            "strategy_type": "calendar_spread",
+            "candidates": [{"strike": 540, "net_debit": 1.20, "liquidity_ok": True}],
+            "best_candidate": {"strike": 540, "net_debit": 1.20},
+        }
+
+        with (
+            patch("data.context_builder.market_data") as md,
+            patch("data.context_builder.derive_market_regime") as drm,
+            patch("data.context_builder.compute_portfolio_greeks", return_value={}),
+            patch("data.context_builder._fetch_news", return_value=[]),
+            patch.object(
+                ContextBuilder, "_select_spread_strategies", return_value=["calendar_spread"]
+            ),
+            patch.object(builder, "build_calendar_candidates", return_value=cal_result),
+        ):
+            md.get_stock_technicals.return_value = {"current_price": 540.0}
+            md.get_vix.return_value = 20.0
+            md.get_fear_greed_index.return_value = {"score": 50, "rating": "Neutral"}
+            md.get_risk_free_rate.return_value = 0.05
+            # orats_summary=None → iv_env="UNKNOWN" (fine; _select_spread is patched)
+            md.get_orats_summary.return_value = None
+            md.get_orats_cores.return_value = {}
+            md.get_orats_monies.return_value = []
+            md.get_finnhub_earnings_history.return_value = []
+            md.get_finnhub_analyst_data.return_value = {}
+            md.get_finnhub_news_sentiment.return_value = {}
+            md.get_earnings_calendar.return_value = {"days_to_earnings": 90}
+            md.get_vix_term_structure.return_value = {}
+            md.get_ex_dividend_date.return_value = {}
+            md.interpret_vix.return_value = "NEUTRAL"
+
+            def _set_regime(ctx):
+                ctx["market_regime"] = "NEUTRAL"
+                ctx["confirmed_market_regime"] = "NEUTRAL"
+                ctx["regime_stable"] = True
+
+            drm.side_effect = _set_regime
+
+            # regime_filter is a MagicMock from fixture; set explicit return values
+            builder._regime_filter.get_confirmed_regime.return_value = "NEUTRAL"
+            builder._regime_filter.is_stable.return_value = True
+
+            builder.broker.get_account.return_value = {
+                "buying_power": 10000, "options_buying_power": 5000,
+                "options_approved_level": 2, "options_trading_level": 2,
+                "portfolio_value": 20000,
+            }
+            builder.broker.get_all_positions.return_value = []
+            builder.broker.get_orders.return_value = []
+            builder.broker.get_option_chain_with_greeks.return_value = []
+
+            builder.journal.format_for_prompt.return_value = ""
+            builder.journal.format_stats_for_prompt.return_value = ""
+            builder.journal.format_skip_history_for_prompt.return_value = ""
+            builder.journal.format_rejections_for_prompt.return_value = ""
+
+            context = builder.build("SPY", "IDLE")
+
+        return context, cal_result
+
+    def test_build_includes_calendar_spread_in_spread_candidates(self, builder):
+        """build() populates context['spread_candidates']['calendar_spread']."""
+        context, cal_result = self._build_with_calendar_routing(builder)
+        assert "spread_candidates" in context
+        assert "calendar_spread" in context["spread_candidates"]
+
+    def test_build_calendar_best_candidate_is_correct(self, builder):
+        """context['spread_candidates']['calendar_spread']['best_candidate'] matches."""
+        context, cal_result = self._build_with_calendar_routing(builder)
+        cs = context["spread_candidates"]["calendar_spread"]
+        assert cs["best_candidate"] == cal_result["best_candidate"]
+
+    def test_build_calls_build_calendar_candidates_with_put_option_type(self, builder):
+        """build() passes option_type='put' (from calendar_spread.json) to builder."""
+        with (
+            patch("data.context_builder.market_data") as md,
+            patch("data.context_builder.derive_market_regime") as drm,
+            patch("data.context_builder.compute_portfolio_greeks", return_value={}),
+            patch("data.context_builder._fetch_news", return_value=[]),
+            patch.object(
+                ContextBuilder, "_select_spread_strategies", return_value=["calendar_spread"]
+            ),
+            patch.object(
+                builder, "build_calendar_candidates", return_value={
+                    "underlying": "SPY", "underlying_price": 540.0,
+                    "strategy_type": "calendar_spread", "candidates": [],
+                    "best_candidate": None,
+                }
+            ) as mock_cal,
+        ):
+            md.get_stock_technicals.return_value = {"current_price": 540.0}
+            md.get_vix.return_value = 20.0
+            md.get_fear_greed_index.return_value = {"score": 50}
+            md.get_risk_free_rate.return_value = 0.05
+            md.get_orats_summary.return_value = None
+            md.get_orats_cores.return_value = {}
+            md.get_orats_monies.return_value = []
+            md.get_finnhub_earnings_history.return_value = []
+            md.get_finnhub_analyst_data.return_value = {}
+            md.get_finnhub_news_sentiment.return_value = {}
+            md.get_earnings_calendar.return_value = {"days_to_earnings": 90}
+            md.get_vix_term_structure.return_value = {}
+            md.get_ex_dividend_date.return_value = {}
+            md.interpret_vix.return_value = "NEUTRAL"
+            drm.side_effect = lambda ctx: ctx.update({
+                "market_regime": "NEUTRAL",
+                "confirmed_market_regime": "NEUTRAL",
+                "regime_stable": True,
+            })
+            builder._regime_filter.get_confirmed_regime.return_value = "NEUTRAL"
+            builder._regime_filter.is_stable.return_value = True
+            builder.broker.get_account.return_value = {
+                "buying_power": 10000, "options_buying_power": 5000,
+                "options_approved_level": 2, "options_trading_level": 2,
+                "portfolio_value": 20000,
+            }
+            builder.broker.get_all_positions.return_value = []
+            builder.broker.get_orders.return_value = []
+            builder.broker.get_option_chain_with_greeks.return_value = []
+            builder.journal.format_for_prompt.return_value = ""
+            builder.journal.format_stats_for_prompt.return_value = ""
+            builder.journal.format_skip_history_for_prompt.return_value = ""
+            builder.journal.format_rejections_for_prompt.return_value = ""
+
+            builder.build("SPY", "IDLE")
+
+        # Verify option_type="put" was passed (from calendar_spread.json)
+        _, kwargs = mock_cal.call_args
+        assert kwargs.get("option_type") == "put"
