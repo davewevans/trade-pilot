@@ -30,6 +30,9 @@ JOB_MODULES = {
     "weekly_research": "jobs.weekly_research",
 }
 
+# Jobs handled inline (not via a module's run()):
+_INLINE_JOBS = {"score_programmatic"}
+
 
 # ── CLI ────────────────────────────────��────────────────────
 
@@ -43,13 +46,22 @@ def parse_args() -> argparse.Namespace:
             "  python main.py --job pre_market                 # run one job\n"
             "  python main.py --job market_open --dry-run      # test without trading\n"
             "  python main.py --job market_open --symbol AAPL  # single symbol\n"
+            "  python main.py --job score_programmatic --start-date 2026-04-01 --end-date 2026-04-30\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
         "--job",
-        choices=list(JOB_MODULES.keys()),
+        choices=sorted(list(JOB_MODULES.keys()) + list(_INLINE_JOBS)),
         help="Run a single job by name, then exit",
+    )
+    parser.add_argument(
+        "--start-date",
+        help="Start date for score_programmatic job (YYYY-MM-DD, defaults to 30 days ago)",
+    )
+    parser.add_argument(
+        "--end-date",
+        help="End date for score_programmatic job (YYYY-MM-DD, defaults to today)",
     )
     parser.add_argument(
         "--symbol",
@@ -376,6 +388,50 @@ def validate_startup() -> None:
         pass  # notification failure must not crash startup
 
 
+# ── score_programmatic inline job ───────────────────────────
+
+
+def _run_score_programmatic(args, settings) -> None:
+    """Run the programmatic decision scorer for a date range.
+
+    Controlled by EVALUATION_SCORER_ENABLED feature flag.  When the flag
+    is off the job logs an info message and exits cleanly without error.
+    """
+    if not settings.EVALUATION_SCORER_ENABLED:
+        logger.info(
+            "score_programmatic: EVALUATION_SCORER_ENABLED is false — "
+            "nothing to do. Set EVALUATION_SCORER_ENABLED=true to enable."
+        )
+        return
+
+    from datetime import date, timedelta
+
+    end_date = args.end_date or date.today().isoformat()
+    start_date = args.start_date or (date.today() - timedelta(days=30)).isoformat()
+
+    start_iso = f"{start_date}T00:00:00"
+    end_iso = f"{end_date}T23:59:59"
+
+    logger.info(
+        "score_programmatic: scoring decisions from %s to %s", start_iso, end_iso
+    )
+
+    from database.db import Database
+    from database.repositories.decision_scores_repository import DecisionScoresRepository
+    from evaluation.scorer_programmatic import ProgrammaticScorer
+    from evaluation.scoring_orchestrator import score_decisions_in_range
+
+    db = Database(path=str(settings.DATABASE_PATH))
+    db.init_schema()
+    conn = db.get_connection()
+    scores_repo = DecisionScoresRepository(conn)
+    scorer = ProgrammaticScorer()
+
+    count = score_decisions_in_range(start_iso, end_iso, scorer, scores_repo)
+    logger.info("score_programmatic: wrote %d score rows", count)
+    db.close()
+
+
 # ── main ────────────────────────────────────────────────────
 
 
@@ -470,8 +526,13 @@ def main() -> None:
 
         try:
             logger.info("Running job: %s", args.job)
-            module = importlib.import_module(JOB_MODULES[args.job])
-            module.run()
+
+            if args.job == "score_programmatic":
+                _run_score_programmatic(args, settings)
+            else:
+                module = importlib.import_module(JOB_MODULES[args.job])
+                module.run()
+
             logger.info("Job %s finished — exiting", args.job)
         finally:
             _job_lock.release()

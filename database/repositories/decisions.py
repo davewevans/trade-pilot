@@ -242,3 +242,19 @@ class DecisionRepository:
             (*params, limit, offset),
         ).fetchall()
         return [_row_to_dict(r) for r in rows], int(total)
+
+    def get_in_range(self, start_iso: str, end_iso: str) -> list[dict]:
+        """Return all decisions with timestamp in [start_iso, end_iso] (inclusive).
+
+        Results are ordered by timestamp ASC, id ASC so the caller processes
+        decisions in chronological order.
+        """
+        rows = self._conn.execute(
+            """
+            SELECT * FROM decisions
+             WHERE timestamp >= ? AND timestamp <= ?
+             ORDER BY timestamp ASC, id ASC
+            """,
+            (start_iso, end_iso),
+        ).fetchall()
+        return [_row_to_dict(r) for r in rows]

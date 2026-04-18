@@ -205,6 +205,14 @@ class Settings:
         # "true" (default) → critical (immediate push); "false" → info (digest only).
         self.ALERT_FILLS: bool = os.getenv("ALERT_FILLS", "true").lower() == "true"
 
+        # ── Evaluation / scoring ───────────────────────────────
+        # Enable the programmatic decision scorer CLI job.
+        # Off by default; turn on once the rubric is reviewed and backfill
+        # is ready.  When off, --job=score_programmatic logs and exits cleanly.
+        self.EVALUATION_SCORER_ENABLED: bool = (
+            os.getenv("EVALUATION_SCORER_ENABLED", "false").lower() == "true"
+        )
+
         # Circuit breaker thresholds (percentages)
         self.DAILY_LOSS_HALT_PCT: float = float(os.getenv("DAILY_LOSS_HALT_PCT", "3.0"))
         self.DAILY_LOSS_REDUCE_PCT: float = float(os.getenv("DAILY_LOSS_REDUCE_PCT", "1.5"))
