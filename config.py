@@ -239,6 +239,12 @@ class Settings:
         self.DRAWDOWN_HALT_PCT: float = float(os.getenv("DRAWDOWN_HALT_PCT", "10.0"))
         self.DRAWDOWN_LOCK_PCT: float = float(os.getenv("DRAWDOWN_LOCK_PCT", "15.0"))
 
+        # Force-close rules: bypass Claude for catastrophic positions (deep ITM + near expiry).
+        # Default true — this is a safety mechanism. Set to "false" to disable.
+        self.FORCE_CLOSE_ENABLED: bool = (
+            os.getenv("FORCE_CLOSE_ENABLED", "true").lower() == "true"
+        )
+
         # Create required directories
         self.DATA_DIR.mkdir(parents=True, exist_ok=True)
         self.LOG_DIR.mkdir(parents=True, exist_ok=True)
