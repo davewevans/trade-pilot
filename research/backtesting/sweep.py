@@ -55,6 +55,34 @@ _STRATEGY_PARAMS: dict[str, dict] = {
 }
 
 
+def _count_hist_summaries_cached(cache, symbol: str, max_days: int) -> int:
+    """Count fresh hist/summaries cache entries for *symbol* in the ORATS cache table.
+
+    Returns the number of distinct (symbol, date) summary rows that are still
+    within their TTL — used by :meth:`BacktestSweep.estimate_cost` to compute
+    the warm-cache call estimate.
+    """
+    if cache._conn is None:
+        return 0
+    import time as _time
+
+    now = _time.time()
+    try:
+        row = cache._conn.execute(
+            """
+            SELECT COUNT(*) FROM orats_cache
+            WHERE endpoint = 'hist/summaries'
+              AND cache_key LIKE ?
+              AND (? - fetched_at) < ttl_seconds
+            """,
+            (f"{symbol}|%", now),
+        ).fetchone()
+        return min(int(row[0]) if row else 0, max_days)
+    except Exception:
+        logger.warning("_count_hist_summaries_cached failed for %s", symbol, exc_info=True)
+        return 0
+
+
 class BacktestSweep:
     """Orchestrates weekly backtest sweeps and aggregated stats computation.
 
@@ -77,6 +105,79 @@ class BacktestSweep:
             self._data_dir = Path(data_dir)
 
         self._state_path = self._data_dir / "backtest_sweep_state.json"
+
+    # ── Cost estimation ──────────────────────────────────────────────────────
+
+    def estimate_cost(self) -> dict:
+        """Estimate ORATS calls needed given current cache state.
+
+        Returns ``{'cold_estimate': int, 'warm_estimate': int, 'by_symbol': dict}``.
+
+        Cold estimate: assumes no cache hits (~2,170 calls per (symbol × strategy)
+        pair, consistent with the 2026-04-17 forensic report).
+
+        Warm estimate: credits ``hist/summaries`` cache hits (fresh within the
+        7-day TTL) as a proxy for fully-cached days; strikes and cores are
+        not modeled separately — the estimate rounds up pessimistically.
+
+        Lookback: ``RESEARCH_BACKTEST_LOOKBACK_YEARS × 252`` trading days.
+        """
+        from config import settings
+
+        lookback_days = settings.RESEARCH_BACKTEST_LOOKBACK_YEARS * 252
+        cold_cost_per_pair = 2170  # per forensic report 2026-04-17
+
+        # Determine symbol list (mirror run_sweep logic)
+        mode = settings.RESEARCH_BACKTEST_SWEEP_MODE
+        if mode == "watchlist":
+            symbols = sorted(set(
+                list(settings.WATCHLIST)
+                + list(settings.IRON_CONDOR_WATCHLIST)
+                + list(settings.SPREAD_WATCHLIST)
+            ))
+        else:
+            try:
+                self._universe.load()
+                symbols = self._universe.all_symbols()
+            except Exception:
+                logger.warning("estimate_cost: universe.all_symbols() failed; using watchlist")
+                symbols = sorted(set(
+                    list(settings.WATCHLIST)
+                    + list(settings.IRON_CONDOR_WATCHLIST)
+                    + list(settings.SPREAD_WATCHLIST)
+                ))
+
+        strategies = list(_STRATEGY_PARAMS.keys())
+        n_strategies = len(strategies)
+
+        cold_total = len(symbols) * n_strategies * cold_cost_per_pair
+
+        # Query the ORATS cache to credit already-cached hist/summaries days
+        from data.orats_cache import ORATSCache
+        import time as _time
+
+        _cache = ORATSCache()
+        by_symbol: dict = {}
+        warm_total = 0
+
+        for sym in symbols:
+            fresh = _count_hist_summaries_cached(_cache, sym.upper(), lookback_days)
+            cached_frac = min(fresh / lookback_days, 1.0) if lookback_days > 0 else 0.0
+            warm_per_pair = int(cold_cost_per_pair * (1.0 - cached_frac))
+            sym_warm = warm_per_pair * n_strategies
+            by_symbol[sym] = {
+                "cold": cold_cost_per_pair * n_strategies,
+                "warm": sym_warm,
+                "cached_summary_days": fresh,
+                "cached_fraction": round(cached_frac, 3),
+            }
+            warm_total += sym_warm
+
+        return {
+            "cold_estimate": cold_total,
+            "warm_estimate": warm_total,
+            "by_symbol": by_symbol,
+        }
 
     # ── State file helpers ────────────────────────────────────────────────
 
