@@ -450,6 +450,22 @@ def main() -> None:
         return
 
     # ── Scheduler mode: start the loop ──────────────────────
+    # Require explicit opt-in so the scheduler never starts on a local dev
+    # machine by accident (e.g. leftover terminal, VS Code run button).
+    # Set ALLOW_SCHEDULER=1 in Render's environment variables only.
+    if not os.environ.get("ALLOW_SCHEDULER"):
+        logger.error(
+            "Scheduler refused to start: ALLOW_SCHEDULER env var is not set. "
+            "Set ALLOW_SCHEDULER=1 in production (Render). "
+            "To run a single job locally use: python main.py --job <name>"
+        )
+        print(
+            "ERROR: ALLOW_SCHEDULER=1 is required to start the scheduler.\n"
+            "To run a single job: python main.py --job <name>",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
     from utils.process_lock import ProcessLock, ProcessLockHeld
     from scheduler import register_jobs, is_weekday, safe_run
     from jobs import pre_market

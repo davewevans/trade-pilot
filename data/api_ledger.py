@@ -158,6 +158,17 @@ class ApiLedger:
                 "Remove DATA_DIR/ORATS_DISABLED.lock or POST /api/admin/orats/enable to re-enable."
             )
 
+        # Local guard: block ORATS calls when not running on Render unless
+        # explicitly opted in.  Prevents accidental quota spend from a local
+        # dev machine running alongside production.
+        if api.startswith("orats"):
+            from config import settings as _s
+            if not getattr(_s, "RENDER", False) and not os.environ.get("ALLOW_ORATS_LOCAL"):
+                raise OratsDisabled(
+                    f"ORATS calls are blocked on local dev machines. "
+                    "Set ALLOW_ORATS_LOCAL=1 in your .env to enable local ORATS calls."
+                )
+
         caps = self._caps_for(api)
         if caps is None:
             return  # not a capped API
