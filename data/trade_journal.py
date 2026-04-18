@@ -9,15 +9,14 @@ from version import VERSION
 
 logger = logging.getLogger(__name__)
 
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent
-_DEFAULT_PATH = _PROJECT_ROOT / "data" / "journal.jsonl"
-
-
 class TradeJournal:
     """Append-only trade journal stored as JSONL (one JSON object per line)."""
 
     def __init__(self, path: Path | None = None):
-        self.path = path or _DEFAULT_PATH
+        if path is None:
+            from config import settings
+            path = settings.JOURNAL_PATH
+        self.path = path
         self.path.parent.mkdir(parents=True, exist_ok=True)
 
     def append(self, entry: dict) -> None:

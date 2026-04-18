@@ -5,11 +5,11 @@ import os
 from datetime import datetime, timedelta
 from pathlib import Path
 
-DEFAULT_PATH = "data/orats_usage.jsonl"
-
-
 class ORATSUsageTracker:
-    def __init__(self, path: str = DEFAULT_PATH):
+    def __init__(self, path: str | None = None):
+        if path is None:
+            from config import settings
+            path = str(settings.DATA_DIR / "orats_usage.jsonl")
         self.path = Path(path)
 
     def record_run(

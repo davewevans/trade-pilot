@@ -60,7 +60,8 @@ def get_snapshot_dir() -> Path:
         from config import settings
         return settings.SNAPSHOTS_DIR
     except Exception:
-        return Path("data/snapshots")
+        _render = os.getenv("RENDER", "false").lower() == "true"
+        return Path(os.getenv("DATA_DIR", "/data" if _render else "data")).resolve() / "snapshots"
 
 
 class StateWriter:

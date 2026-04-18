@@ -84,9 +84,9 @@ class Settings:
         self.RENDER: bool = os.getenv("RENDER", "false").lower() == "true"
 
         if self.RENDER:
-            self.DATA_DIR: Path = Path(os.getenv("DATA_DIR", "/data"))
+            self.DATA_DIR: Path = Path(os.getenv("DATA_DIR", "/data")).resolve()
         else:
-            self.DATA_DIR: Path = Path("data")
+            self.DATA_DIR: Path = Path("data").resolve()
 
         self.REPORTS_DIR: Path = self.DATA_DIR / "reports"
         self.JOURNAL_PATH: Path = self.DATA_DIR / "journal.jsonl"
@@ -216,6 +216,7 @@ class Settings:
         self.DATA_DIR.mkdir(parents=True, exist_ok=True)
         self.LOG_DIR.mkdir(parents=True, exist_ok=True)
         self.SNAPSHOTS_DIR.mkdir(parents=True, exist_ok=True)
+        (self.DATA_DIR / "locks").mkdir(parents=True, exist_ok=True)
         for sub in ("daily", "weekly", "positions", "strategies"):
             (self.REPORTS_DIR / sub).mkdir(parents=True, exist_ok=True)
 
