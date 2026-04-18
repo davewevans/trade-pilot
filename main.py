@@ -31,7 +31,7 @@ JOB_MODULES = {
 }
 
 # Jobs handled inline (not via a module's run()):
-_INLINE_JOBS = {"score_programmatic"}
+_INLINE_JOBS = {"score_programmatic", "score_judge"}
 
 
 # ── CLI ────────────────────────────────��────────────────────
@@ -432,6 +432,75 @@ def _run_score_programmatic(args, settings) -> None:
     db.close()
 
 
+# ── score_judge inline job ───────────────────────────────────
+
+
+def _run_score_judge(args, settings) -> None:
+    """Run the LLM-judge decision scorer for a date range.
+
+    Controlled by EVALUATION_JUDGE_ENABLED feature flag.  When the flag is
+    off the job logs an info message and exits cleanly without error.
+
+    Pass --dry-run to print scores without writing to the database.
+    """
+    if not settings.EVALUATION_JUDGE_ENABLED:
+        logger.info(
+            "score_judge: EVALUATION_JUDGE_ENABLED is false — "
+            "nothing to do. Set EVALUATION_JUDGE_ENABLED=true to enable."
+        )
+        return
+
+    from datetime import date, timedelta
+
+    end_date = args.end_date or date.today().isoformat()
+    start_date = args.start_date or (date.today() - timedelta(days=30)).isoformat()
+
+    start_iso = f"{start_date}T00:00:00"
+    end_iso = f"{end_date}T23:59:59"
+
+    dry_run = getattr(args, "dry_run", False) or settings.DRY_RUN
+
+    logger.info(
+        "score_judge: scoring decisions from %s to %s "
+        "(model=%s, rate_limit_ms=%d, dry_run=%s)",
+        start_iso,
+        end_iso,
+        settings.JUDGE_MODEL,
+        settings.JUDGE_RATE_LIMIT_MS,
+        dry_run,
+    )
+
+    import anthropic as _anthropic
+    from database.db import Database
+    from database.repositories.decision_scores_repository import DecisionScoresRepository
+    from evaluation.scorer_judge import JudgeScorer
+    from evaluation.scoring_orchestrator import score_decisions_with_judge
+
+    db = Database(path=str(settings.DATABASE_PATH))
+    db.init_schema()
+    conn = db.get_connection()
+    scores_repo = DecisionScoresRepository(conn)
+    scorer = JudgeScorer(
+        model=settings.JUDGE_MODEL,
+        client=_anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY),
+    )
+
+    count = score_decisions_with_judge(
+        start_iso,
+        end_iso,
+        scorer,
+        scores_repo,
+        rate_limit_ms=settings.JUDGE_RATE_LIMIT_MS,
+        dry_run=dry_run,
+    )
+    logger.info(
+        "score_judge: %s %d score rows",
+        "would write" if dry_run else "wrote",
+        count,
+    )
+    db.close()
+
+
 # ── main ────────────────────────────────────────────────────
 
 
@@ -529,6 +598,8 @@ def main() -> None:
 
             if args.job == "score_programmatic":
                 _run_score_programmatic(args, settings)
+            elif args.job == "score_judge":
+                _run_score_judge(args, settings)
             else:
                 module = importlib.import_module(JOB_MODULES[args.job])
                 module.run()

@@ -1,6 +1,6 @@
 """Orchestrator that fetches decisions in a date range, scores them, and persists results.
 
-Entry point::
+Entry point (programmatic)::
 
     from evaluation.scoring_orchestrator import score_decisions_in_range
     from evaluation.scorer_programmatic import ProgrammaticScorer
@@ -12,12 +12,27 @@ Entry point::
         ProgrammaticScorer(),
         scores_repo,
     )
+
+Entry point (LLM judge)::
+
+    from evaluation.scoring_orchestrator import score_decisions_with_judge
+    from evaluation.scorer_judge import JudgeScorer
+    from database.repositories.decision_scores_repository import DecisionScoresRepository
+
+    count = score_decisions_with_judge(
+        "2026-04-01T00:00:00",
+        "2026-04-30T23:59:59",
+        JudgeScorer(),
+        scores_repo,
+        rate_limit_ms=200,
+    )
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import time
 from datetime import datetime, timezone
 
 from evaluation import RUBRIC_VERSION
@@ -90,6 +105,115 @@ def score_decisions_in_range(
     logger.info(
         "Scoring complete: %d written, %d already scored (idempotency skip)",
         written, skipped,
+    )
+    return written
+
+
+def score_decisions_with_judge(
+    start_iso: str,
+    end_iso: str,
+    scorer,
+    repo,
+    rate_limit_ms: int = 200,
+    dry_run: bool = False,
+) -> int:
+    """Fetch decisions in [start_iso, end_iso] and score them with the LLM judge.
+
+    Identical flow to :func:`score_decisions_in_range` but sleeps
+    ``rate_limit_ms`` milliseconds between each API call to avoid hammering
+    the Anthropic API.
+
+    Args:
+        start_iso: ISO-format start timestamp (inclusive).
+        end_iso:   ISO-format end timestamp (inclusive).
+        scorer:    A ``JudgeScorer`` instance (or any scorer with
+                   ``SCORER_TYPE`` and ``score_decision``).
+        repo:      A ``DecisionScoresRepository`` instance.
+        rate_limit_ms: Milliseconds to sleep between API calls (default 200).
+        dry_run:   When ``True``, scores are computed and logged but **not**
+                   written to the database.
+
+    Returns:
+        Number of decisions successfully scored (and written, unless dry_run).
+    """
+    conn = repo._conn
+    decision_repo = DecisionRepository(conn)
+
+    decisions = decision_repo.get_in_range(start_iso, end_iso)
+    logger.info(
+        "Judge scoring %d decisions in range %s – %s "
+        "(rubric=%s, scorer=%s, model=%s, dry_run=%s)",
+        len(decisions),
+        start_iso,
+        end_iso,
+        RUBRIC_VERSION,
+        scorer.SCORER_TYPE,
+        getattr(scorer, "model", "unknown"),
+        dry_run,
+    )
+
+    written = 0
+    skipped = 0
+    rate_limit_s = rate_limit_ms / 1_000.0
+
+    for i, decision in enumerate(decisions):
+        decision_id = decision.get("id")
+
+        if _already_scored(repo, decision_id, scorer.SCORER_TYPE):
+            skipped += 1
+            continue
+
+        # Rate limiting: sleep before every call except the very first.
+        if i > 0 and rate_limit_s > 0:
+            time.sleep(rate_limit_s)
+
+        try:
+            dimension_dicts = scorer.score_decision(decision)
+        except Exception:
+            logger.exception(
+                "Judge scorer raised on decision_id=%s — skipping", decision_id
+            )
+            continue
+
+        if not dimension_dicts:
+            # Empty list signals refusal / max_tokens / network / validation error.
+            # scorer.score_decision already logged the specific reason.
+            continue
+
+        row = _build_score_row(decision_id, scorer.SCORER_TYPE, dimension_dicts)
+
+        # Embed scorer_model in notes for traceability
+        model_tag = getattr(scorer, "model", None)
+        if model_tag:
+            row["notes"] = f"scorer_model={model_tag}"
+
+        if dry_run:
+            logger.info(
+                "[dry-run] decision_id=%s judge scores: %s",
+                decision_id,
+                json.dumps(
+                    [
+                        {"dimension": d["dimension"], "score": d["score"]}
+                        for d in dimension_dicts
+                    ]
+                ),
+            )
+            written += 1
+            continue
+
+        try:
+            repo.insert(row)
+            written += 1
+        except Exception:
+            logger.exception(
+                "Failed to write judge score row for decision_id=%s", decision_id
+            )
+
+    logger.info(
+        "Judge scoring complete: %d written%s, %d already scored (idempotency skip)",
+        written,
+        " (dry-run, not persisted)" if dry_run else "",
+        skipped,
     )
     return written
 

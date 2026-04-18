@@ -213,6 +213,16 @@ class Settings:
             os.getenv("EVALUATION_SCORER_ENABLED", "false").lower() == "true"
         )
 
+        # ── LLM judge scorer ───────────────────────────────────
+        # Off by default; turn on once the judge prompt has been reviewed and
+        # ANTHROPIC_API_KEY is confirmed to have Opus access.
+        # --job=score_judge logs and exits cleanly when false.
+        self.EVALUATION_JUDGE_ENABLED: bool = (
+            os.getenv("EVALUATION_JUDGE_ENABLED", "false").lower() == "true"
+        )
+        self.JUDGE_MODEL: str = os.getenv("JUDGE_MODEL", "claude-opus-4-7")
+        self.JUDGE_RATE_LIMIT_MS: int = int(os.getenv("JUDGE_RATE_LIMIT_MS", "200"))
+
         # Circuit breaker thresholds (percentages)
         self.DAILY_LOSS_HALT_PCT: float = float(os.getenv("DAILY_LOSS_HALT_PCT", "3.0"))
         self.DAILY_LOSS_REDUCE_PCT: float = float(os.getenv("DAILY_LOSS_REDUCE_PCT", "1.5"))
