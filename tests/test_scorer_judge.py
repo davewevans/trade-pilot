@@ -482,3 +482,55 @@ class TestDryRun:
             )
 
         assert any("dry-run" in r.message.lower() for r in caplog.records)
+
+
+# ── Feature flag ──────────────────────────────────────────────────────────────
+
+
+class TestFeatureFlag:
+
+    def test_feature_flag_off_does_not_call_orchestrator(self, caplog):
+        """When EVALUATION_JUDGE_ENABLED is False _run_score_judge exits immediately."""
+        from main import _run_score_judge
+
+        fake_settings = SimpleNamespace(EVALUATION_JUDGE_ENABLED=False)
+        fake_args = SimpleNamespace(start_date=None, end_date=None, dry_run=False)
+
+        with patch("evaluation.scoring_orchestrator.score_decisions_with_judge") as mock_orch:
+            with caplog.at_level(logging.INFO):
+                _run_score_judge(fake_args, fake_settings)
+
+        mock_orch.assert_not_called()
+        assert any(
+            "EVALUATION_JUDGE_ENABLED" in r.message for r in caplog.records
+        )
+
+    def test_feature_flag_on_calls_orchestrator(self, tmp_path, caplog):
+        """When EVALUATION_JUDGE_ENABLED is True the orchestrator is invoked."""
+        from main import _run_score_judge
+
+        fake_settings = SimpleNamespace(
+            EVALUATION_JUDGE_ENABLED=True,
+            JUDGE_MODEL="claude-opus-4-7",
+            JUDGE_RATE_LIMIT_MS=0,
+            ANTHROPIC_API_KEY="test-key",
+            DATABASE_PATH=tmp_path / "flag_test.db",
+            DRY_RUN=True,  # avoid real DB writes
+        )
+        fake_args = SimpleNamespace(
+            start_date="2026-04-10",
+            end_date="2026-04-10",
+            dry_run=True,
+        )
+
+        # _run_score_judge uses local imports, so patch at the source modules.
+        with patch("evaluation.scoring_orchestrator.score_decisions_with_judge") as mock_orch, \
+             patch("database.db.Database") as mock_db, \
+             patch("database.repositories.decision_scores_repository.DecisionScoresRepository"), \
+             patch("evaluation.scorer_judge.JudgeScorer"), \
+             patch("anthropic.Anthropic"):
+            mock_db.return_value.get_connection.return_value = MagicMock()
+            mock_orch.return_value = 0
+            _run_score_judge(fake_args, fake_settings)
+
+        mock_orch.assert_called_once()
