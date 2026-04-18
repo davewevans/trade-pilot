@@ -307,6 +307,57 @@ export interface MarkReviewedResponse {
   action_note: string | null
 }
 
+// ── Spot-check queue ──────────────────────────────────────────────────────────
+
+export interface SpotCheckDimensionScore {
+  dimension: string
+  score: number
+  justification?: string
+}
+
+export interface SpotCheckScore {
+  id: number
+  decision_id: number
+  scorer_type: string
+  total_score: number | null
+  dimension_scores: SpotCheckDimensionScore[] | null
+  scored_at: string
+  prompt_version: string | null
+  [key: string]: unknown
+}
+
+export interface SpotCheckDecision {
+  id: number
+  timestamp: string
+  underlying: string | null
+  action: string | null
+  reasoning: Record<string, unknown> | null
+  context: Record<string, unknown> | null
+  [key: string]: unknown
+}
+
+export interface SpotCheckQueueItem {
+  decision: SpotCheckDecision
+  score: SpotCheckScore
+}
+
+export interface SpotCheckQueueResponse {
+  month: string
+  queue: SpotCheckQueueItem[]
+}
+
+export interface SpotCheckSubmitResponse {
+  spot_check: {
+    id: number
+    decision_score_id: number
+    submitted_at: string
+    judge_score: number | null
+    operator_verdict: 'agree' | 'disagree' | 'unclear'
+    verdict_notes: string | null
+    checked_at: string
+  }
+}
+
 export const api = {
   health: () => get<HealthStatus>('/api/health'),
 
@@ -505,6 +556,36 @@ export const api = {
 
   getFlaggedDecisions: (month: string): Promise<FlaggedDecisionsResponse> =>
     get<FlaggedDecisionsResponse>(`/api/evaluations/${encodeURIComponent(month)}/flagged-decisions`),
+
+  getSpotCheckQueue: (month: string, limit = 100): Promise<SpotCheckQueueResponse> => {
+    const q = new URLSearchParams()
+    q.set('limit', String(limit))
+    return get<SpotCheckQueueResponse>(`/api/evaluations/${encodeURIComponent(month)}/spot-check-queue?${q.toString()}`)
+  },
+
+  submitSpotCheck: async (
+    month: string,
+    decisionScoreId: number,
+    verdict: 'agree' | 'disagree' | 'unclear',
+    note?: string,
+  ): Promise<SpotCheckSubmitResponse> => {
+    const res = await fetchWithRetry(`${BASE}/api/evaluations/${encodeURIComponent(month)}/spot-checks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({
+        decision_score_id: decisionScoreId,
+        operator_verdict: verdict,
+        note: note ?? null,
+      }),
+    })
+    if (res.status === 401) { _handleUnauthorized(); throw new Error('Unauthorized') }
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }))
+      throw new Error(err.error ?? `API error ${res.status}`)
+    }
+    return res.json() as Promise<SpotCheckSubmitResponse>
+  },
 
   markReviewed: async (month: string, actionNote: string | null): Promise<MarkReviewedResponse> => {
     const res = await fetchWithRetry(`${BASE}/api/evaluations/${encodeURIComponent(month)}/mark-reviewed`, {

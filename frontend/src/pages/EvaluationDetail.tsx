@@ -20,27 +20,11 @@ import {
   type MarkReviewedResponse,
 } from '../api/client'
 import { FlaggedDimensionCard } from '../components/evaluation/FlaggedDimensionCard'
+import { SpotCheckQueue } from '../components/evaluation/SpotCheckQueue'
 import { InsufficientSampleBanner } from '../components/evaluation/InsufficientSampleBanner'
 import { ReviewStatusBadge } from '../components/evaluation/ReviewStatusBadge'
 import { LoadingSpinner } from '../components/shared/LoadingSpinner'
 import { StatCard } from '../components/shared/StatCard'
-
-// ── Placeholder for P9 ────────────────────────────────────────────────────────
-
-function SpotCheckQueue({ month }: { month: string }) {
-  return (
-    <div
-      className="rounded-md px-4 py-6 text-center text-sm"
-      style={{
-        backgroundColor: 'var(--bg-secondary)',
-        border: '1px dashed var(--border)',
-        color: 'var(--text-muted)',
-      }}
-    >
-      Spot-check queue for {month} — coming in P9
-    </div>
-  )
-}
 
 // ── Colour palette for prompt version bars ────────────────────────────────────
 
