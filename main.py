@@ -12,6 +12,7 @@ import importlib
 import json
 import logging
 import logging.handlers
+import os
 import sys
 import time
 
@@ -382,16 +383,59 @@ def main() -> None:
 
     # ── Job mode: run once and exit ─────────────────────────
     if args.job:
-        logger.info("Running job: %s", args.job)
-        module = importlib.import_module(JOB_MODULES[args.job])
-        module.run()
-        logger.info("Job %s finished — exiting", args.job)
+        from utils.process_lock import ProcessLock, ProcessLockHeld
+
+        # Expose job name so the API ledger (Phase 2) can tag each ORATS call.
+        os.environ["TRADE_PILOT_JOB_NAME"] = args.job
+
+        _lock_dir = settings.DATA_DIR / "locks"
+        _job_lock = ProcessLock(f"job-{args.job}", _lock_dir)
+        try:
+            _job_lock.acquire()
+        except ProcessLockHeld as _e:
+            logger.error(
+                "Job '%s' is already running (held by PID %d, lock: %s) — exiting",
+                args.job,
+                _e.holder_pid,
+                _lock_dir / f"job-{args.job}.lock",
+            )
+            print(
+                f"ERROR: job '{args.job}' is already running "
+                f"(PID {_e.holder_pid}). Exiting.",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+
+        try:
+            logger.info("Running job: %s", args.job)
+            module = importlib.import_module(JOB_MODULES[args.job])
+            module.run()
+            logger.info("Job %s finished — exiting", args.job)
+        finally:
+            _job_lock.release()
         return
 
     # ── Scheduler mode: start the loop ──────────────────────
+    from utils.process_lock import ProcessLock, ProcessLockHeld
     from scheduler import register_jobs, is_weekday, safe_run
     from jobs import pre_market
     import schedule
+
+    _lock_dir = settings.DATA_DIR / "locks"
+    _sched_lock = ProcessLock("scheduler", _lock_dir)
+    try:
+        _sched_lock.acquire()
+    except ProcessLockHeld as _e:
+        logger.error(
+            "Scheduler is already running (held by PID %d, lock: %s) — exiting",
+            _e.holder_pid,
+            _lock_dir / "scheduler.lock",
+        )
+        print(
+            f"ERROR: scheduler is already running (PID {_e.holder_pid}). Exiting.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
 
     logger.info("=== trade-pilot scheduler starting ===")
 
