@@ -11,9 +11,10 @@ from __future__ import annotations
 import json
 import logging
 import math
+import time
 import uuid
 from dataclasses import asdict
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -55,6 +56,34 @@ _STRATEGY_PARAMS: dict[str, dict] = {
 }
 
 
+def _count_hist_summaries_cached(cache, symbol: str, max_days: int) -> int:
+    """Count fresh hist/summaries cache entries for *symbol* in the ORATS cache table.
+
+    Returns the number of distinct (symbol, date) summary rows that are still
+    within their TTL — used by :meth:`BacktestSweep.estimate_cost` to compute
+    the warm-cache call estimate.
+    """
+    if cache._conn is None:
+        return 0
+    import time as _time
+
+    now = _time.time()
+    try:
+        row = cache._conn.execute(
+            """
+            SELECT COUNT(*) FROM orats_cache
+            WHERE endpoint = 'hist/summaries'
+              AND cache_key LIKE ?
+              AND (? - fetched_at) < ttl_seconds
+            """,
+            (f"{symbol}|%", now),
+        ).fetchone()
+        return min(int(row[0]) if row else 0, max_days)
+    except Exception:
+        logger.warning("_count_hist_summaries_cached failed for %s", symbol, exc_info=True)
+        return 0
+
+
 class BacktestSweep:
     """Orchestrates weekly backtest sweeps and aggregated stats computation.
 
@@ -77,6 +106,79 @@ class BacktestSweep:
             self._data_dir = Path(data_dir)
 
         self._state_path = self._data_dir / "backtest_sweep_state.json"
+
+    # ── Cost estimation ──────────────────────────────────────────────────────
+
+    def estimate_cost(self) -> dict:
+        """Estimate ORATS calls needed given current cache state.
+
+        Returns ``{'cold_estimate': int, 'warm_estimate': int, 'by_symbol': dict}``.
+
+        Cold estimate: assumes no cache hits (~2,170 calls per (symbol × strategy)
+        pair, consistent with the 2026-04-17 forensic report).
+
+        Warm estimate: credits ``hist/summaries`` cache hits (fresh within the
+        7-day TTL) as a proxy for fully-cached days; strikes and cores are
+        not modeled separately — the estimate rounds up pessimistically.
+
+        Lookback: ``RESEARCH_BACKTEST_LOOKBACK_YEARS × 252`` trading days.
+        """
+        from config import settings
+
+        lookback_days = settings.RESEARCH_BACKTEST_LOOKBACK_YEARS * 252
+        cold_cost_per_pair = 2170  # per forensic report 2026-04-17
+
+        # Determine symbol list (mirror run_sweep logic)
+        mode = settings.RESEARCH_BACKTEST_SWEEP_MODE
+        if mode == "watchlist":
+            symbols = sorted(set(
+                list(settings.WATCHLIST)
+                + list(settings.IRON_CONDOR_WATCHLIST)
+                + list(settings.SPREAD_WATCHLIST)
+            ))
+        else:
+            try:
+                self._universe.load()
+                symbols = self._universe.all_symbols()
+            except Exception:
+                logger.warning("estimate_cost: universe.all_symbols() failed; using watchlist")
+                symbols = sorted(set(
+                    list(settings.WATCHLIST)
+                    + list(settings.IRON_CONDOR_WATCHLIST)
+                    + list(settings.SPREAD_WATCHLIST)
+                ))
+
+        strategies = list(_STRATEGY_PARAMS.keys())
+        n_strategies = len(strategies)
+
+        cold_total = len(symbols) * n_strategies * cold_cost_per_pair
+
+        # Query the ORATS cache to credit already-cached hist/summaries days
+        from data.orats_cache import ORATSCache
+        import time as _time
+
+        _cache = ORATSCache()
+        by_symbol: dict = {}
+        warm_total = 0
+
+        for sym in symbols:
+            fresh = _count_hist_summaries_cached(_cache, sym.upper(), lookback_days)
+            cached_frac = min(fresh / lookback_days, 1.0) if lookback_days > 0 else 0.0
+            warm_per_pair = int(cold_cost_per_pair * (1.0 - cached_frac))
+            sym_warm = warm_per_pair * n_strategies
+            by_symbol[sym] = {
+                "cold": cold_cost_per_pair * n_strategies,
+                "warm": sym_warm,
+                "cached_summary_days": fresh,
+                "cached_fraction": round(cached_frac, 3),
+            }
+            warm_total += sym_warm
+
+        return {
+            "cold_estimate": cold_total,
+            "warm_estimate": warm_total,
+            "by_symbol": by_symbol,
+        }
 
     # ── State file helpers ────────────────────────────────────────────────
 
@@ -287,8 +389,17 @@ class BacktestSweep:
         self,
         mode: str,
         progress_cb: Optional[Callable[[str], None]] = None,
+        force_restart: bool = False,
     ) -> dict:
         """Orchestrate one Sunday sweep chunk.
+
+        Args:
+            mode:          ``'watchlist'`` or ``'universe'``.
+            progress_cb:   Optional callback called with a progress message
+                           after each symbol completes.
+            force_restart: When True, discard any in-progress state and start
+                           fresh.  Pass when FORCE_RESTART_SWEEP env var is
+                           set or ``--force-restart-sweep`` CLI flag is used.
 
         Returns a summary dict including run_id, mode, symbols processed,
         and whether stats were recomputed.
@@ -321,13 +432,47 @@ class BacktestSweep:
             except ValueError:
                 stale = True
 
+        # ── Stale in-progress detection ───────────────────────────────────
+        # If a prior run started but never wrote completed_at (i.e. it
+        # crashed mid-sweep), and the state file hasn't been touched in
+        # >1 hour, the state is "stale in-progress".  We automatically
+        # reset it rather than resuming potentially double-counted work.
+        stale_in_progress = False
+        if (
+            state.get("current_run_id") is not None
+            and state.get("last_completed_at") is None
+            and self._state_path.exists()
+        ):
+            age_seconds = time.time() - self._state_path.stat().st_mtime
+            if age_seconds > 3600:  # >1 hour
+                stale_in_progress = True
+
+        if stale_in_progress:
+            if force_restart:
+                logger.info(
+                    "Stale in-progress sweep detected (state file age >1 h) — "
+                    "force_restart=True, discarding and starting fresh"
+                )
+            else:
+                logger.warning(
+                    "Stale in-progress sweep detected (run_id=%s, state file age >1 h). "
+                    "Resetting state to avoid double-counting. "
+                    "Pass force_restart=True / set FORCE_RESTART_SWEEP=1 to suppress this warning.",
+                    state.get("current_run_id"),
+                )
+            stale = True  # triggers fresh start below
+
         mode_changed = state.get("mode") != mode
 
-        if mode_changed or stale or state.get("current_run_id") is None:
+        if force_restart or mode_changed or stale or state.get("current_run_id") is None:
             run_id = str(uuid.uuid4())
             state["current_run_id"] = run_id
             state["completed_symbols"] = {s: [] for s in SUPPORTED_STRATEGIES}
             state["mode"] = mode
+            # Record when this run was started so stale detection works next time
+            state["run_started_at"] = datetime.utcnow().isoformat()
+            state.pop("last_completed_at", None)  # clear so stale check works on next load
+            self._save_state(state)
             logger.info("Starting new backtest sweep run %s (mode=%s)", run_id, mode)
         else:
             run_id = state["current_run_id"]

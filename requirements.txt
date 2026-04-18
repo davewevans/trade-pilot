@@ -13,3 +13,4 @@ fredapi
 schedule
 fastapi
 uvicorn[standard]>=0.29.0
+psutil

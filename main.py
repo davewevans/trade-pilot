@@ -12,6 +12,7 @@ import importlib
 import json
 import logging
 import logging.handlers
+import os
 import sys
 import time
 
@@ -59,6 +60,15 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         default=False,
         help="Override DRY_RUN to True — log decisions but do not trade",
+    )
+    parser.add_argument(
+        "--force-restart-sweep",
+        action="store_true",
+        default=False,
+        help=(
+            "Discard stale in-progress sweep state and start fresh "
+            "(sets FORCE_RESTART_SWEEP=1)"
+        ),
     )
     return parser.parse_args()
 
@@ -353,6 +363,9 @@ def main() -> None:
     if args.symbol:
         settings.WATCHLIST = [args.symbol.upper()]
 
+    if args.force_restart_sweep:
+        os.environ["FORCE_RESTART_SWEEP"] = "1"
+
     # Configure logging
     log_format = "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
     date_fmt = "%Y-%m-%d %H:%M:%S"
@@ -373,6 +386,28 @@ def main() -> None:
         handlers=[stream_handler, file_handler],
     )
 
+    # ── Structured API call log (api_calls.jsonl) ────────────────────
+    # One JSON line per outbound API call.  propagate=False so these
+    # lines do NOT bleed into trade-pilot.log.
+    from utils.json_log_formatter import JsonFormatter
+
+    _api_calls_handler = logging.handlers.TimedRotatingFileHandler(
+        filename=settings.LOG_DIR / "api_calls.jsonl",
+        when="midnight",
+        backupCount=14,
+        encoding="utf-8",
+    )
+    _api_calls_handler.setFormatter(JsonFormatter())
+    _api_calls_logger = logging.getLogger("api_calls")
+    _api_calls_logger.setLevel(logging.INFO)
+    _api_calls_logger.addHandler(_api_calls_handler)
+    _api_calls_logger.propagate = False
+
+    # Silence per-request INFO noise from ORATS modules so trade-pilot.log
+    # is not flooded by individual API call lines (moved to api_calls.jsonl).
+    logging.getLogger("data.orats_historical").setLevel(logging.WARNING)
+    logging.getLogger("data.orats_client").setLevel(logging.WARNING)
+
     logger.info("Mode: %s", "PRODUCTION" if settings.RENDER else "LOCAL")
     logger.info("Dry Run: %s", settings.DRY_RUN)
     logger.info("Watchlist: %s", settings.WATCHLIST)
@@ -382,16 +417,59 @@ def main() -> None:
 
     # ── Job mode: run once and exit ─────────────────────────
     if args.job:
-        logger.info("Running job: %s", args.job)
-        module = importlib.import_module(JOB_MODULES[args.job])
-        module.run()
-        logger.info("Job %s finished — exiting", args.job)
+        from utils.process_lock import ProcessLock, ProcessLockHeld
+
+        # Expose job name so the API ledger (Phase 2) can tag each ORATS call.
+        os.environ["TRADE_PILOT_JOB_NAME"] = args.job
+
+        _lock_dir = settings.DATA_DIR / "locks"
+        _job_lock = ProcessLock(f"job-{args.job}", _lock_dir)
+        try:
+            _job_lock.acquire()
+        except ProcessLockHeld as _e:
+            logger.error(
+                "Job '%s' is already running (held by PID %d, lock: %s) — exiting",
+                args.job,
+                _e.holder_pid,
+                _lock_dir / f"job-{args.job}.lock",
+            )
+            print(
+                f"ERROR: job '{args.job}' is already running "
+                f"(PID {_e.holder_pid}). Exiting.",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+
+        try:
+            logger.info("Running job: %s", args.job)
+            module = importlib.import_module(JOB_MODULES[args.job])
+            module.run()
+            logger.info("Job %s finished — exiting", args.job)
+        finally:
+            _job_lock.release()
         return
 
     # ── Scheduler mode: start the loop ──────────────────────
+    from utils.process_lock import ProcessLock, ProcessLockHeld
     from scheduler import register_jobs, is_weekday, safe_run
     from jobs import pre_market
     import schedule
+
+    _lock_dir = settings.DATA_DIR / "locks"
+    _sched_lock = ProcessLock("scheduler", _lock_dir)
+    try:
+        _sched_lock.acquire()
+    except ProcessLockHeld as _e:
+        logger.error(
+            "Scheduler is already running (held by PID %d, lock: %s) — exiting",
+            _e.holder_pid,
+            _lock_dir / "scheduler.lock",
+        )
+        print(
+            f"ERROR: scheduler is already running (PID {_e.holder_pid}). Exiting.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
 
     logger.info("=== trade-pilot scheduler starting ===")
 

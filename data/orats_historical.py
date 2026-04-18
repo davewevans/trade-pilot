@@ -7,7 +7,7 @@ A simple rate-limiter keeps requests under 1000/minute (ORATS limit).
 
 import logging
 import math
-import threading
+import os
 import time
 from typing import Optional
 
@@ -20,36 +20,6 @@ logger = logging.getLogger(__name__)
 
 BASE_URL = "https://api.orats.io/datav2"
 _TIMEOUT = 15
-
-# ── Rate limiter (1000 req / 60 s) ──────────────────────────────────────────
-
-_RATE_LOCK = threading.Lock()
-_CALL_TIMES: list[float] = []
-_MAX_CALLS_PER_MINUTE = 900  # stay a little under the hard limit
-
-
-def _rate_limit() -> None:
-    """Block until we are below the per-minute call limit."""
-    with _RATE_LOCK:
-        now = time.monotonic()
-        # Remove timestamps older than 60 s
-        cutoff = now - 60.0
-        while _CALL_TIMES and _CALL_TIMES[0] < cutoff:
-            _CALL_TIMES.pop(0)
-
-        if len(_CALL_TIMES) >= _MAX_CALLS_PER_MINUTE:
-            # Wait until the oldest call falls off the window
-            wait = 60.0 - (now - _CALL_TIMES[0]) + 0.05
-            if wait > 0:
-                logger.debug("ORATS historical rate limit — sleeping %.1fs", wait)
-                time.sleep(wait)
-            # Refresh after sleep
-            now = time.monotonic()
-            cutoff = now - 60.0
-            while _CALL_TIMES and _CALL_TIMES[0] < cutoff:
-                _CALL_TIMES.pop(0)
-
-        _CALL_TIMES.append(time.monotonic())
 
 
 # ── SQLite cache ─────────────────────────────────────────────────────────────
@@ -111,10 +81,17 @@ class ORATSHistorical:
 
         params_key = f"{symbol.upper()}|{trade_date}|{dte_min}|{dte_max}|{d_lo}|{d_hi}"
         cached = _cache_get("hist/strikes", params_key)
+        _job_name = os.environ.get("TRADE_PILOT_JOB_NAME")
         if cached is not None:
+            from data.api_ledger import get_ledger
+            get_ledger().record("orats_historical", "hist/strikes", symbol, True, None, None, _job_name)
             return self._project_strikes(cached, side)
 
-        _rate_limit()
+        from data.api_ledger import get_ledger
+        get_ledger().check_and_reserve("orats_historical", "hist/strikes", symbol, _job_name)
+        _t0 = time.monotonic()
+        _status_code: Optional[int] = None
+        rows: list = []
         try:
             resp = requests.get(
                 f"{BASE_URL}/hist/strikes",
@@ -128,12 +105,17 @@ class ORATSHistorical:
                 timeout=_TIMEOUT,
             )
             resp.raise_for_status()
+            _status_code = resp.status_code
             rows = resp.json().get("data", []) or []
         except Exception:
             logger.warning(
                 "ORATS hist/strikes failed for %s on %s", symbol, trade_date,
                 exc_info=True,
             )
+        finally:
+            get_ledger().record("orats_historical", "hist/strikes", symbol, False, _status_code, int((time.monotonic() - _t0) * 1000), _job_name)
+
+        if not rows and _status_code is None:
             return []
 
         _cache_set("hist/strikes", params_key, rows)
@@ -147,10 +129,17 @@ class ORATSHistorical:
         """
         params_key = f"{symbol.upper()}|{trade_date}"
         cached = _cache_get("hist/summaries", params_key)
+        _job_name = os.environ.get("TRADE_PILOT_JOB_NAME")
         if cached is not None:
+            from data.api_ledger import get_ledger
+            get_ledger().record("orats_historical", "hist/summaries", symbol, True, None, None, _job_name)
             return cached[0] if cached else None
 
-        _rate_limit()
+        from data.api_ledger import get_ledger
+        get_ledger().check_and_reserve("orats_historical", "hist/summaries", symbol, _job_name)
+        _t0 = time.monotonic()
+        _status_code: Optional[int] = None
+        rows: list = []
         try:
             resp = requests.get(
                 f"{BASE_URL}/hist/summaries",
@@ -162,12 +151,17 @@ class ORATSHistorical:
                 timeout=_TIMEOUT,
             )
             resp.raise_for_status()
+            _status_code = resp.status_code
             rows = resp.json().get("data", []) or []
         except Exception:
             logger.warning(
                 "ORATS hist/summaries failed for %s on %s", symbol, trade_date,
                 exc_info=True,
             )
+        finally:
+            get_ledger().record("orats_historical", "hist/summaries", symbol, False, _status_code, int((time.monotonic() - _t0) * 1000), _job_name)
+
+        if _status_code is None:
             return None
 
         _cache_set("hist/summaries", params_key, rows)
@@ -179,10 +173,17 @@ class ORATSHistorical:
         """Fetch historical /cores data for a specific date."""
         params_key = f"{symbol.upper()}|{trade_date}"
         cached = _cache_get("hist/cores", params_key)
+        _job_name = os.environ.get("TRADE_PILOT_JOB_NAME")
         if cached is not None:
+            from data.api_ledger import get_ledger
+            get_ledger().record("orats_historical", "hist/cores", symbol, True, None, None, _job_name)
             return cached[0] if cached else None
 
-        _rate_limit()
+        from data.api_ledger import get_ledger
+        get_ledger().check_and_reserve("orats_historical", "hist/cores", symbol, _job_name)
+        _t0 = time.monotonic()
+        _status_code: Optional[int] = None
+        rows: list = []
         try:
             resp = requests.get(
                 f"{BASE_URL}/hist/cores",
@@ -194,12 +195,17 @@ class ORATSHistorical:
                 timeout=_TIMEOUT,
             )
             resp.raise_for_status()
+            _status_code = resp.status_code
             rows = resp.json().get("data", []) or []
         except Exception:
             logger.warning(
                 "ORATS hist/cores failed for %s on %s", symbol, trade_date,
                 exc_info=True,
             )
+        finally:
+            get_ledger().record("orats_historical", "hist/cores", symbol, False, _status_code, int((time.monotonic() - _t0) * 1000), _job_name)
+
+        if _status_code is None:
             return None
 
         _cache_set("hist/cores", params_key, rows)
@@ -219,14 +225,21 @@ class ORATSHistorical:
         """
         params_key = f"{symbol.upper()}|{start_date or ''}|{end_date or ''}"
         cached = _cache_get("hist/ivrank", params_key)
+        _job_name = os.environ.get("TRADE_PILOT_JOB_NAME")
         if cached is not None:
+            from data.api_ledger import get_ledger
+            get_ledger().record("orats_historical", "hist/ivrank", symbol, True, None, None, _job_name)
             return cached
 
         params: dict = {"token": self.api_key, "ticker": symbol.upper()}
         if start_date:
             params["tradeDate"] = f"{start_date},{end_date or ''}"
 
-        _rate_limit()
+        from data.api_ledger import get_ledger
+        get_ledger().check_and_reserve("orats_historical", "hist/ivrank", symbol, _job_name)
+        _t0 = time.monotonic()
+        _status_code: Optional[int] = None
+        rows: list = []
         try:
             resp = requests.get(
                 f"{BASE_URL}/hist/ivrank",
@@ -234,11 +247,16 @@ class ORATSHistorical:
                 timeout=_TIMEOUT,
             )
             resp.raise_for_status()
+            _status_code = resp.status_code
             rows = resp.json().get("data", []) or []
         except Exception:
             logger.warning(
                 "ORATS hist/ivrank failed for %s", symbol, exc_info=True,
             )
+        finally:
+            get_ledger().record("orats_historical", "hist/ivrank", symbol, False, _status_code, int((time.monotonic() - _t0) * 1000), _job_name)
+
+        if _status_code is None:
             return []
 
         _cache_set("hist/ivrank", params_key, rows)
@@ -279,8 +297,12 @@ class ORATSHistorical:
 
         params_key = f"{symbol.upper()}|{trade_date}|{dte_lo}|{dte_hi}|{d_lo}|{d_hi}|wide"
         cached = _cache_get("hist/strikes", params_key)
+        _job_name = os.environ.get("TRADE_PILOT_JOB_NAME")
         if cached is None:
-            _rate_limit()
+            from data.api_ledger import get_ledger
+            get_ledger().check_and_reserve("orats_historical", "hist/strikes", symbol, _job_name)
+            _t0 = time.monotonic()
+            _status_code: Optional[int] = None
             try:
                 resp = requests.get(
                     f"{BASE_URL}/hist/strikes",
@@ -294,14 +316,21 @@ class ORATSHistorical:
                     timeout=_TIMEOUT,
                 )
                 resp.raise_for_status()
+                _status_code = resp.status_code
                 cached = resp.json().get("data", []) or []
             except Exception:
                 logger.warning(
                     "ORATS hist/strikes (wide) failed for %s on %s",
                     symbol, trade_date, exc_info=True,
                 )
+            finally:
+                get_ledger().record("orats_historical", "hist/strikes", symbol, False, _status_code, int((time.monotonic() - _t0) * 1000), _job_name)
+            if _status_code is None:
                 return None
             _cache_set("hist/strikes", params_key, cached)
+        else:
+            from data.api_ledger import get_ledger
+            get_ledger().record("orats_historical", "hist/strikes", symbol, True, None, None, _job_name)
 
         side = option_type.lower()
         for row in cached:
