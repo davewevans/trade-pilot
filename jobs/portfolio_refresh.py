@@ -87,6 +87,36 @@ def run() -> None:
     except Exception as e:
         logger.warning("Failed to reconcile spreads: %s", e)
 
+    # ── MAE (max-adverse-excursion) update ──────────────────────
+    try:
+        from datetime import datetime as _mae_dt
+        from data.trade_journal import TradeJournal
+        _mae_now = _mae_dt.now().isoformat(timespec="seconds")
+
+        _position_pl: dict[str, float] = {}
+        for _p in positions:
+            _sym = (_p.get("symbol") or "").upper()
+            if _sym:
+                try:
+                    _position_pl[_sym] = float(_p.get("unrealized_pl") or 0)
+                except (TypeError, ValueError):
+                    pass
+
+        # Spread MAE: sum leg unrealized_pl for each open spread
+        for _spread in tracker.get_open_spreads():
+            _spread_pl = sum(
+                _position_pl.get((_leg.get("symbol") or "").upper(), 0.0)
+                for _leg in _spread.get("legs", [])
+            )
+            tracker.update_mae(_spread["spread_id"], _spread_pl, _mae_now)
+
+        # Journal MAE: one read/write for all open wheel entries
+        _journal = TradeJournal()
+        _sym_pl_map = {sym: (pl, _mae_now) for sym, pl in _position_pl.items()}
+        _journal.bulk_update_mae(_sym_pl_map)
+    except Exception as _mae_err:
+        logger.warning("MAE update failed (non-fatal): %s", _mae_err)
+
     # ── Portfolio snapshot (includes spreads) ────────────────
     try:
         from config import settings

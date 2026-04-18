@@ -103,6 +103,8 @@ class SpreadTracker:
             "pnl": None,
             "closed_at": None,
             "registered_at": datetime.now().isoformat(timespec="seconds"),
+            "max_adverse_value": None,
+            "max_adverse_timestamp": None,
         }
         self._spreads.append(spread)
         self._save()
@@ -360,3 +362,25 @@ class SpreadTracker:
                 if sym:
                     symbols.add(sym.upper())
         return symbols
+
+    def update_mae(self, spread_id: str, current_value: float, timestamp: str) -> None:
+        """Update max-adverse-excursion for an open spread.
+
+        current_value is the combined unrealized P&L across all legs (already
+        signed by Alpaca — positive = profit, negative = loss). Records the
+        worst (most negative) value observed. Backward-compat: spreads loaded
+        from disk without these keys treat missing as None.
+        """
+        s = self._find(spread_id)
+        if not s:
+            logger.warning("update_mae: spread %s not found", spread_id)
+            return
+        stored = s.get("max_adverse_value")
+        if stored is None or current_value < stored:
+            s["max_adverse_value"] = current_value
+            s["max_adverse_timestamp"] = timestamp
+            self._save()
+            logger.debug(
+                "MAE updated spread=%s value=%.4f ts=%s",
+                spread_id, current_value, timestamp,
+            )
