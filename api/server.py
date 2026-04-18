@@ -3186,6 +3186,353 @@ def claude_agreement(window: str = Query(default="30d")):
         conn.close()
 
 
+# ── Evaluations endpoints ────────────────────────────────────────────────────
+
+_VALID_SPOT_CHECK_VERDICTS = frozenset({"agree", "disagree", "unclear"})
+
+
+def _parse_json_field(raw: str | None) -> list | dict | None:
+    """Parse a JSON text field, returning None on failure."""
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+
+def _eval_review_status(row: dict) -> str:
+    """Derive review_status from reviewed_at + action_note."""
+    if row.get("reviewed_at"):
+        return "reviewed-with-action" if row.get("action_note") else "reviewed"
+    return "pending"
+
+
+def _format_eval_summary(row: dict, disagree_rate: float | None) -> dict:
+    """Serialise a monthly_evaluations row for the list endpoint."""
+    flags = _parse_json_field(row.get("flags_json")) or []
+    score_dist = _parse_json_field(row.get("score_distribution_json")) or {}
+    overall = score_dist.get("overall", {}) if isinstance(score_dist, dict) else {}
+    return {
+        "month": row["month"],
+        "generated_at": row["created_at"],
+        "decisions_scored": row.get("decisions_evaluated", 0),
+        "closed_trades_in_window": overall.get("closed_trades_in_window"),
+        "insufficient_sample": None,  # not persisted; see monthly_evaluation.py
+        "flag_count": len(flags) if isinstance(flags, list) else 0,
+        "review_status": _eval_review_status(row),
+        "judge_operator_disagreement": disagree_rate,
+    }
+
+
+@app.get("/api/evaluations")
+def evaluations_list(
+    limit: int = Query(default=20, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+):
+    """List monthly evaluation summaries, newest first."""
+    conn = _open_db()
+    if conn is None:
+        return JSONResponse(status_code=503, content={"error": "database unavailable"})
+    try:
+        from database.repositories.judge_spot_checks_repository import JudgeSpotChecksRepository
+        from database.repositories.monthly_evaluations_repository import MonthlyEvaluationsRepository
+
+        evals_repo = MonthlyEvaluationsRepository(conn)
+        spot_repo = JudgeSpotChecksRepository(conn)
+
+        rows = evals_repo.get_list(limit=limit, offset=offset)
+        total = conn.execute("SELECT COUNT(*) FROM monthly_evaluations").fetchone()[0]
+
+        evaluations = [
+            _format_eval_summary(row, spot_repo.get_disagreement_rate(row["month"]))
+            for row in rows
+        ]
+        return {"evaluations": evaluations, "total": total}
+    except Exception:
+        logger.exception("evaluations list query failed")
+        return JSONResponse(status_code=500, content={"error": "query failed"})
+    finally:
+        conn.close()
+
+
+@app.get("/api/evaluations/{month}/flagged-decisions")
+def evaluations_flagged_decisions(month: str):
+    """Per-flag: the 5 lowest-scoring decisions with full context and score rows."""
+    conn = _open_db()
+    if conn is None:
+        return JSONResponse(status_code=503, content={"error": "database unavailable"})
+    try:
+        from database.repositories.decision_scores_repository import DecisionScoresRepository
+        from database.repositories.monthly_evaluations_repository import MonthlyEvaluationsRepository
+
+        evals_repo = MonthlyEvaluationsRepository(conn)
+        scores_repo = DecisionScoresRepository(conn)
+
+        row = evals_repo.get_by_month(month)
+        if row is None:
+            return JSONResponse(status_code=404, content={"error": f"evaluation for {month!r} not found"})
+
+        flags = _parse_json_field(row.get("flags_json")) or []
+        if not isinstance(flags, list):
+            flags = []
+
+        result_flags = []
+        for flag in flags:
+            decision_ids = flag.get("lowest_scoring_decisions") or []
+            decisions = []
+            if decision_ids:
+                placeholders = ",".join(["?"] * len(decision_ids))
+                decision_rows = conn.execute(
+                    f"SELECT * FROM decisions WHERE id IN ({placeholders})",
+                    decision_ids,
+                ).fetchall()
+                decision_map = {r["id"]: dict(r) for r in decision_rows}
+
+                for did in decision_ids:
+                    d = decision_map.get(did)
+                    if d is None:
+                        continue
+                    if d.get("context_json"):
+                        try:
+                            d["context"] = json.loads(d["context_json"])
+                        except (json.JSONDecodeError, TypeError):
+                            d["context"] = None
+                    if isinstance(d.get("reasoning"), str):
+                        try:
+                            d["reasoning"] = json.loads(d["reasoning"])
+                        except (json.JSONDecodeError, TypeError):
+                            pass
+                    d["scores"] = scores_repo.get_by_decision(did)
+                    decisions.append(d)
+
+            result_flags.append({
+                "strategy": flag.get("strategy"),
+                "dimension": flag.get("dimension"),
+                "severity": flag.get("severity"),
+                "reason": flag.get("reason"),
+                "decisions": decisions,
+            })
+
+        return {"month": month, "flags": result_flags}
+    except Exception:
+        logger.exception("evaluations flagged-decisions query failed for %s", month)
+        return JSONResponse(status_code=500, content={"error": "query failed"})
+    finally:
+        conn.close()
+
+
+@app.get("/api/evaluations/{month}/spot-check-queue")
+def evaluations_spot_check_queue(
+    month: str,
+    limit: int = Query(default=20, ge=1, le=100),
+):
+    """Return pending spot-check items for the month with full decision context."""
+    conn = _open_db()
+    if conn is None:
+        return JSONResponse(status_code=503, content={"error": "database unavailable"})
+    try:
+        from database.repositories.decision_scores_repository import DecisionScoresRepository
+        from database.repositories.monthly_evaluations_repository import MonthlyEvaluationsRepository
+
+        evals_repo = MonthlyEvaluationsRepository(conn)
+        scores_repo = DecisionScoresRepository(conn)
+
+        if evals_repo.get_by_month(month) is None:
+            return JSONResponse(status_code=404, content={"error": f"evaluation for {month!r} not found"})
+
+        score_rows = scores_repo.get_spot_check_queue(month, limit=limit)
+
+        queue = []
+        for score in score_rows:
+            decision_row = conn.execute(
+                "SELECT * FROM decisions WHERE id = ?", (score["decision_id"],)
+            ).fetchone()
+            decision = dict(decision_row) if decision_row else None
+            if decision:
+                if decision.get("context_json"):
+                    try:
+                        decision["context"] = json.loads(decision["context_json"])
+                    except (json.JSONDecodeError, TypeError):
+                        decision["context"] = None
+                if isinstance(decision.get("reasoning"), str):
+                    try:
+                        decision["reasoning"] = json.loads(decision["reasoning"])
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+
+            score_out = dict(score)
+            if score_out.get("dimension_scores_json"):
+                try:
+                    score_out["dimension_scores"] = json.loads(score_out["dimension_scores_json"])
+                except (json.JSONDecodeError, TypeError):
+                    score_out["dimension_scores"] = None
+
+            queue.append({"decision": decision, "score": score_out})
+
+        return {"month": month, "queue": queue}
+    except Exception:
+        logger.exception("evaluations spot-check-queue query failed for %s", month)
+        return JSONResponse(status_code=500, content={"error": "query failed"})
+    finally:
+        conn.close()
+
+
+@app.get("/api/evaluations/{month}")
+def evaluations_detail(month: str):
+    """Return the full monthly evaluation row with parsed flags and score distribution."""
+    conn = _open_db()
+    if conn is None:
+        return JSONResponse(status_code=503, content={"error": "database unavailable"})
+    try:
+        from database.repositories.judge_spot_checks_repository import JudgeSpotChecksRepository
+        from database.repositories.monthly_evaluations_repository import MonthlyEvaluationsRepository
+
+        evals_repo = MonthlyEvaluationsRepository(conn)
+        spot_repo = JudgeSpotChecksRepository(conn)
+
+        row = evals_repo.get_by_month(month)
+        if row is None:
+            return JSONResponse(status_code=404, content={"error": f"evaluation for {month!r} not found"})
+
+        return {
+            "month": row["month"],
+            "generated_at": row["created_at"],
+            "decisions_scored": row.get("decisions_evaluated", 0),
+            "avg_score": row.get("avg_score"),
+            "pct_pass": row.get("pct_pass"),
+            "reviewed_at": row.get("reviewed_at"),
+            "action_note": row.get("action_note"),
+            "review_status": _eval_review_status(row),
+            "flag_summary": _parse_json_field(row.get("flags_json")) or [],
+            "score_distribution": _parse_json_field(row.get("score_distribution_json")) or {},
+            "judge_operator_disagreement": spot_repo.get_disagreement_rate(month),
+        }
+    except Exception:
+        logger.exception("evaluations detail query failed for %s", month)
+        return JSONResponse(status_code=500, content={"error": "query failed"})
+    finally:
+        conn.close()
+
+
+@app.post("/api/evaluations/{month}/spot-checks")
+async def evaluations_submit_spot_check(month: str, request: Request):
+    """Submit an operator spot-check verdict for a decision score."""
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(status_code=400, content={"error": "invalid JSON body"})
+
+    decision_score_id = body.get("decision_score_id")
+    operator_verdict = body.get("operator_verdict")
+    note = body.get("note")
+
+    if not isinstance(decision_score_id, int):
+        return JSONResponse(status_code=400, content={"error": "'decision_score_id' must be an integer"})
+    if operator_verdict not in _VALID_SPOT_CHECK_VERDICTS:
+        return JSONResponse(
+            status_code=400,
+            content={"error": f"'operator_verdict' must be one of: {sorted(_VALID_SPOT_CHECK_VERDICTS)}"},
+        )
+    if note is not None and not isinstance(note, str):
+        return JSONResponse(status_code=400, content={"error": "'note' must be a string or null"})
+
+    conn = _open_db()
+    if conn is None:
+        return JSONResponse(status_code=503, content={"error": "database unavailable"})
+    try:
+        from database.repositories.decision_scores_repository import DecisionScoresRepository
+        from database.repositories.judge_spot_checks_repository import JudgeSpotChecksRepository
+        from database.repositories.monthly_evaluations_repository import MonthlyEvaluationsRepository
+
+        evals_repo = MonthlyEvaluationsRepository(conn)
+        scores_repo = DecisionScoresRepository(conn)
+        spot_repo = JudgeSpotChecksRepository(conn)
+
+        if evals_repo.get_by_month(month) is None:
+            return JSONResponse(status_code=404, content={"error": f"evaluation for {month!r} not found"})
+
+        score_row = conn.execute(
+            "SELECT * FROM decision_scores WHERE id = ?", (decision_score_id,)
+        ).fetchone()
+        if score_row is None:
+            return JSONResponse(
+                status_code=404,
+                content={"error": f"decision_score {decision_score_id} not found"},
+            )
+        score_dict = dict(score_row)
+        if not score_dict.get("scored_at", "").startswith(month):
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": (
+                        f"decision_score {decision_score_id} does not belong to month {month!r}"
+                    )
+                },
+            )
+
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        check_id = spot_repo.insert({
+            "decision_score_id": decision_score_id,
+            "submitted_at": now,
+            "judge_score": score_dict.get("total_score"),
+            "operator_verdict": operator_verdict,
+            "verdict_notes": note,
+            "checked_at": now,
+        })
+        scores_repo.mark_spot_check_submitted(decision_score_id)
+
+        created = conn.execute(
+            "SELECT * FROM judge_spot_checks WHERE id = ?", (check_id,)
+        ).fetchone()
+        return {"spot_check": dict(created) if created else {"id": check_id}}
+    except Exception:
+        logger.exception("evaluations spot-checks POST failed for %s", month)
+        return JSONResponse(status_code=500, content={"error": "submit failed"})
+    finally:
+        conn.close()
+
+
+@app.post("/api/evaluations/{month}/mark-reviewed")
+async def evaluations_mark_reviewed(month: str, request: Request):
+    """Mark a monthly evaluation as reviewed, optionally with an action note."""
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(status_code=400, content={"error": "invalid JSON body"})
+
+    action_note = body.get("action_note")
+    if action_note is not None and not isinstance(action_note, str):
+        return JSONResponse(status_code=400, content={"error": "'action_note' must be a string or null"})
+
+    conn = _open_db()
+    if conn is None:
+        return JSONResponse(status_code=503, content={"error": "database unavailable"})
+    try:
+        from database.repositories.monthly_evaluations_repository import MonthlyEvaluationsRepository
+
+        evals_repo = MonthlyEvaluationsRepository(conn)
+
+        if evals_repo.get_by_month(month) is None:
+            return JSONResponse(status_code=404, content={"error": f"evaluation for {month!r} not found"})
+
+        note = action_note.strip() if action_note else None
+        evals_repo.mark_reviewed(month, note or None)
+
+        updated = evals_repo.get_by_month(month)
+        return {
+            "month": updated["month"],
+            "review_status": _eval_review_status(updated),
+            "reviewed_at": updated["reviewed_at"],
+            "action_note": updated["action_note"],
+        }
+    except Exception:
+        logger.exception("evaluations mark-reviewed POST failed for %s", month)
+        return JSONResponse(status_code=500, content={"error": "mark-reviewed failed"})
+    finally:
+        conn.close()
+
+
 # ── Static frontend (SPA catch-all) ────────────────────────
 # Defined as a route (not a mount) so that unknown paths like
 # /reasoning fall back to index.html instead of 404-ing.
