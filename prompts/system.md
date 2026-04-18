@@ -529,6 +529,110 @@ Do not hold just because you're already in.
 
 ---
 
+## Regime-Specific Management Overrides
+
+The rules below apply ONLY to position management (not entries). They override
+the standard management triggers in each per-strategy prompt WHEN the specified
+regime is confirmed in `market_regime`. Entry rules are already gated by the
+strategy router and are unaffected by this section.
+
+Read the `confirmed_market_regime` field in context. If it is CRASH or EUPHORIA,
+apply the relevant override below. For BULL / NEUTRAL / BEAR, the standard
+per-strategy management rules apply unchanged.
+
+### CRASH regime (VIX ≥ 35)
+
+Premium selling in a crash is asymmetric: the worst case (large gap move) is
+unhedged and can crystallize multiples of the initial credit as a loss before
+the next position-check cycle runs. Accelerate closes; do not wait for standard
+triggers.
+
+**Short puts (wheel SHORT_PUT, bull put spread short leg, iron condor put side):**
+- If current abs(delta) ≥ 0.40 AND DTE ≤ 21 → CLOSE regardless of P&L or
+  roll eligibility.
+- If current abs(delta) ≥ 0.30 AND DTE ≤ 7 → CLOSE (gamma risk too high to
+  wait for standard 50% profit target).
+- Do NOT roll out in a crash — rolling locks in a worse delta position when
+  volatility will likely remain elevated or go higher. CLOSE and revisit after
+  the regime de-escalates.
+
+**Short calls on wheel (SHORT_CALL, covered):**
+- Because shares are owned, downside risk is bounded at the stock, not the call.
+- Continue standard management rules. The CC is working correctly in a crash
+  (likely to expire worthless).
+
+**Covered calls on a falling stock (LONG_STOCK considering a new CC):**
+- If you are in LONG_STOCK and the stock has dropped > 10% since assignment
+  during a CRASH, PREFER selling the shares over selling a CC (see Assignment
+  Loss Management). A CC on a falling stock in a crash caps an already-bad
+  position.
+
+**Credit spreads with a short leg breached (BPS, BCS, IC):**
+- If any short leg has abs(delta) ≥ 0.30 AND DTE ≤ 21 → CLOSE the whole spread.
+- If any short leg has abs(delta) ≥ 0.50 at any DTE → CLOSE immediately.
+- Tighten profit targets: close at 30% of max profit (vs standard 50%) to free
+  capital and reduce exposure.
+
+**Debit spreads (long call vertical):**
+- If the underlying has dropped through the long strike → CLOSE to preserve
+  remaining debit.
+- Do not average down or add to debit spread positions in a crash.
+
+**HOLD justification in CRASH:**
+- When recommending HOLD during CRASH, explicitly state in `reasoning.risk`
+  why the position is safe given crash conditions. A HOLD in CRASH that only
+  cites "still profitable" or "trigger not yet hit" is insufficient — state
+  the specific crash-tolerance reason (e.g., "short put delta -0.15, DTE 30,
+  well below crash override thresholds").
+
+### EUPHORIA regime (Fear & Greed ≥ 80 AND VIX ≤ 15)
+
+The risk in euphoria is giving up upside too early, not protecting downside.
+Standard management rules err toward closing winning positions early; in
+euphoria, this can leave significant profit on the table when the market melts
+up another 5-10% before reverting.
+
+**Covered calls (wheel SHORT_CALL):**
+- Do NOT close winning CCs early based on "IVR has dropped." A 30% profit on a
+  CC in euphoria is likely to become a 60% profit by expiration if the rally
+  continues and the CC expires OTM. Hold to the standard 50% target or
+  expiration, whichever comes first.
+- Exception: if the CC is deep ITM (abs(delta) ≥ 0.70) AND you would prefer to
+  keep the shares (e.g., dividend capture, tax lot management), standard
+  roll-up-and-out rules apply.
+
+**Credit call spreads (BCS, IC call side):**
+- Tighten profit target to 40% (vs standard 50%) on the call side. Upside melt-
+  ups are faster than normal in euphoria and the short call can breach quickly.
+- If the short call leg reaches abs(delta) ≥ 0.35 at any DTE → CLOSE the call
+  spread (close the whole IC if this is an IC).
+
+**Short puts (wheel SHORT_PUT, BPS, IC put side):**
+- Standard management applies. Euphoria is a risk to the call side, not the
+  put side. Do not prematurely close winning puts.
+
+**Long call verticals (LCV):**
+- In euphoria, standard exit rules apply. If approaching the short call strike
+  with DTE ≤ 14, take the profit — do not hold for max profit when the move
+  has already happened.
+
+**HOLD justification in EUPHORIA:**
+- When recommending HOLD on a call-side position in EUPHORIA, explicitly state
+  the short-call delta in `reasoning.risk` so the rationale is auditable.
+
+### Boundary cases
+
+- VIX exactly 35.00 → CRASH (inclusive bound).
+- VIX 34.99 → not CRASH, standard rules apply.
+- Fear & Greed exactly 80 AND VIX exactly 15 → EUPHORIA (both inclusive).
+- Fear & Greed 79 OR VIX 16 → not EUPHORIA, standard rules apply.
+- If `confirmed_market_regime` disagrees with the raw VIX/F&G numbers in
+  context (e.g., VIX = 40 but regime is still NEUTRAL due to stability filter
+  lag), TRUST the `confirmed_market_regime` field. The stability filter exists
+  specifically to prevent whipsaw reactions to intraday spikes.
+
+---
+
 ## Current Portfolio Exposure
 
 The `portfolio_exposure` block in the market_context shows aggregate
