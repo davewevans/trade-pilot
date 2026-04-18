@@ -11,9 +11,10 @@ from __future__ import annotations
 import json
 import logging
 import math
+import time
 import uuid
 from dataclasses import asdict
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -388,8 +389,17 @@ class BacktestSweep:
         self,
         mode: str,
         progress_cb: Optional[Callable[[str], None]] = None,
+        force_restart: bool = False,
     ) -> dict:
         """Orchestrate one Sunday sweep chunk.
+
+        Args:
+            mode:          ``'watchlist'`` or ``'universe'``.
+            progress_cb:   Optional callback called with a progress message
+                           after each symbol completes.
+            force_restart: When True, discard any in-progress state and start
+                           fresh.  Pass when FORCE_RESTART_SWEEP env var is
+                           set or ``--force-restart-sweep`` CLI flag is used.
 
         Returns a summary dict including run_id, mode, symbols processed,
         and whether stats were recomputed.
@@ -422,13 +432,47 @@ class BacktestSweep:
             except ValueError:
                 stale = True
 
+        # ── Stale in-progress detection ───────────────────────────────────
+        # If a prior run started but never wrote completed_at (i.e. it
+        # crashed mid-sweep), and the state file hasn't been touched in
+        # >1 hour, the state is "stale in-progress".  We automatically
+        # reset it rather than resuming potentially double-counted work.
+        stale_in_progress = False
+        if (
+            state.get("current_run_id") is not None
+            and state.get("last_completed_at") is None
+            and self._state_path.exists()
+        ):
+            age_seconds = time.time() - self._state_path.stat().st_mtime
+            if age_seconds > 3600:  # >1 hour
+                stale_in_progress = True
+
+        if stale_in_progress:
+            if force_restart:
+                logger.info(
+                    "Stale in-progress sweep detected (state file age >1 h) — "
+                    "force_restart=True, discarding and starting fresh"
+                )
+            else:
+                logger.warning(
+                    "Stale in-progress sweep detected (run_id=%s, state file age >1 h). "
+                    "Resetting state to avoid double-counting. "
+                    "Pass force_restart=True / set FORCE_RESTART_SWEEP=1 to suppress this warning.",
+                    state.get("current_run_id"),
+                )
+            stale = True  # triggers fresh start below
+
         mode_changed = state.get("mode") != mode
 
-        if mode_changed or stale or state.get("current_run_id") is None:
+        if force_restart or mode_changed or stale or state.get("current_run_id") is None:
             run_id = str(uuid.uuid4())
             state["current_run_id"] = run_id
             state["completed_symbols"] = {s: [] for s in SUPPORTED_STRATEGIES}
             state["mode"] = mode
+            # Record when this run was started so stale detection works next time
+            state["run_started_at"] = datetime.utcnow().isoformat()
+            state.pop("last_completed_at", None)  # clear so stale check works on next load
+            self._save_state(state)
             logger.info("Starting new backtest sweep run %s (mode=%s)", run_id, mode)
         else:
             run_id = state["current_run_id"]

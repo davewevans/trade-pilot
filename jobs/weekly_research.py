@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -178,9 +179,11 @@ def run() -> None:
         except Exception:
             logger.warning("Pre-flight check failed (non-fatal) — proceeding", exc_info=True)
 
+        _force_restart = os.environ.get("FORCE_RESTART_SWEEP", "0") == "1"
         sweep_stats = sweep.run_sweep(
             mode=settings.RESEARCH_BACKTEST_SWEEP_MODE,
             progress_cb=lambda msg: logger.info("bt_sweep: %s", msg),
+            force_restart=_force_restart,
         )
         logger.info("Backtest sweep complete: %s", sweep_stats)
         # Record phase 2 ORATS usage if engine exposes an orats client

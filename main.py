@@ -61,6 +61,15 @@ def parse_args() -> argparse.Namespace:
         default=False,
         help="Override DRY_RUN to True — log decisions but do not trade",
     )
+    parser.add_argument(
+        "--force-restart-sweep",
+        action="store_true",
+        default=False,
+        help=(
+            "Discard stale in-progress sweep state and start fresh "
+            "(sets FORCE_RESTART_SWEEP=1)"
+        ),
+    )
     return parser.parse_args()
 
 
@@ -353,6 +362,9 @@ def main() -> None:
 
     if args.symbol:
         settings.WATCHLIST = [args.symbol.upper()]
+
+    if args.force_restart_sweep:
+        os.environ["FORCE_RESTART_SWEEP"] = "1"
 
     # Configure logging
     log_format = "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
