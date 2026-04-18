@@ -843,6 +843,24 @@ def portfolio_by_account(account_name: str):
     return data
 
 
+@app.get("/api/portfolio-greeks")
+def portfolio_greeks(account: str | None = Query(default=None)):
+    """Aggregate Greek exposure across open positions.
+
+    account: optional account_id (e.g. "wheel", "spreads").  Omit for
+    portfolio-wide aggregation from the primary account snapshot.
+
+    Returns the output of compute_portfolio_greeks() which reads from
+    the most recent portfolio_refresh snapshot file — no live API calls.
+    """
+    try:
+        from data.context_builder import compute_portfolio_greeks
+        return compute_portfolio_greeks(account_id=account or None)
+    except Exception:
+        logger.exception("portfolio-greeks failed")
+        return JSONResponse(status_code=500, content={"error": "aggregation failed"})
+
+
 @app.get("/api/account-portfolios")
 def all_account_portfolios():
     """Return a summary of all accounts for the dashboard cards.

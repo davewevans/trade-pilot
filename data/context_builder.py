@@ -78,11 +78,20 @@ def _fetch_news(symbol: str, limit: int = 5) -> list[dict]:
 class ContextBuilder:
     """Assembles all market data into a single context dict for Claude."""
 
-    def __init__(self, broker: BaseBroker, data_client=None, journal: TradeJournal | None = None):
+    def __init__(
+        self,
+        broker: BaseBroker,
+        data_client=None,
+        journal: TradeJournal | None = None,
+        account_id: str | None = None,
+    ):
         self.broker = broker
         self.data_client = data_client
         self.journal = journal or TradeJournal()
         self._regime_filter = RegimeStabilityFilter()
+        # account_id scopes portfolio_exposure to this account's snapshot file.
+        # Pass e.g. "wheel" or "spreads" from the job; None = main portfolio.json.
+        self._account_id = account_id
 
     def build(self, symbol: str, wheel_state: str) -> dict:
         """Assemble the full context for Claude's decision-making.
@@ -402,6 +411,14 @@ class ContextBuilder:
         except Exception:
             logger.warning("Failed to build rejections for %s", symbol, exc_info=True)
             context["guardrail_rejections"] = None
+
+        # Portfolio-level Greek exposure (from most recent portfolio_refresh snapshot)
+        # account_id scopes to this account; None falls back to main portfolio.json.
+        try:
+            context["portfolio_exposure"] = compute_portfolio_greeks(self._account_id)
+        except Exception:
+            logger.warning("Failed to compute portfolio Greeks", exc_info=True)
+            context["portfolio_exposure"] = None
 
         # Portfolio-level pattern summary (written weekly)
         try:
@@ -1615,6 +1632,242 @@ class ContextBuilder:
             f"DTE Earnings: {dte_str} | VIX: {vix_str} | "
             f"F&G: {fg_str} | RFR: {rfr_str}"
         )
+
+
+# ── Portfolio-level Greeks aggregation ────────────────────────────────────────
+
+
+def _dte_bucket(dte: int | None) -> str:
+    """Map a DTE value to the spec's four DTE bucket keys."""
+    if dte is None:
+        return "46_plus"
+    if dte <= 7:
+        return "0_7"
+    if dte <= 21:
+        return "8_21"
+    if dte <= 45:
+        return "22_45"
+    return "46_plus"
+
+
+def _empty_greeks_result(now_iso: str) -> dict:
+    buckets = {
+        b: {"theta": 0.0, "vega": 0.0, "position_count": 0}
+        for b in ("0_7", "8_21", "22_45", "46_plus")
+    }
+    return {
+        "net_delta": 0.0,
+        "net_theta": 0.0,
+        "net_vega": 0.0,
+        "net_gamma": 0.0,
+        "total_defined_risk_usd": 0.0,
+        "position_count": 0,
+        "by_dte_bucket": buckets,
+        "by_strategy": {},
+        "freshness": {
+            "oldest_contract_age_seconds": 0,
+            "newest_contract_age_seconds": 0,
+            "max_skew_seconds": 0,
+            "contracts_from_fallback_source": 0,
+            "computed_at": now_iso,
+        },
+    }
+
+
+def compute_portfolio_greeks(account_id: str | None = None) -> dict:
+    """Aggregate Greeks across open positions from the most recent portfolio snapshot.
+
+    Sign convention (Alpaca buyer-perspective Greeks × signed qty × multiplier):
+      - Short option (qty positive from Alpaca, side="short"):
+          signed_qty = -qty  →  short put (delta=-0.25): net_delta = -0.25 * -1 * 100 = +25
+      - Long equity (LONG_STOCK phase, 100 shares, side="long"):
+          signed_qty = +100  →  net_delta = 1.0 * 100 = +100 (per $1 stock move)
+      - theta: positive = earns per day (short option),  negative = costs per day (long)
+      - vega:  positive = gains on IV rise (long), negative = loses (short)
+      All values are in dollars, assuming the standard 100-shares-per-contract multiplier.
+      Long equity positions contribute delta only (theta = vega = gamma = 0).
+
+    ORATS is never called here.  All data comes from the most recent portfolio
+    snapshot written by jobs/portfolio_refresh.py (runs every 5 min during
+    market hours).  Greeks are sourced from Alpaca option snapshots fetched
+    during that refresh cycle.
+
+    Args:
+        account_id: If provided, reads portfolio_{account_id}.json.
+                    If None, reads portfolio.json (primary account).
+
+    Returns a dict with the shape documented in prompts/system.md under
+    "Current Portfolio Exposure".
+    """
+    import json
+    from datetime import datetime, timezone
+
+    try:
+        # Use the module-level settings binding so tests can patch it cleanly.
+        snap_dir = settings.SNAPSHOTS_DIR
+    except Exception:
+        import os
+        from pathlib import Path
+        snap_dir = Path(os.getenv("DATA_DIR", "data")) / "snapshots"
+
+    now = datetime.now(timezone.utc)
+    now_iso = now.isoformat(timespec="seconds")
+
+    if account_id is not None:
+        snap_path = snap_dir / f"portfolio_{account_id}.json"
+    else:
+        snap_path = snap_dir / "portfolio.json"
+
+    if not snap_path.exists():
+        return _empty_greeks_result(now_iso)
+
+    try:
+        snapshot = json.loads(snap_path.read_text(encoding="utf-8"))
+    except Exception:
+        logger.warning("compute_portfolio_greeks: failed to read %s", snap_path, exc_info=True)
+        return _empty_greeks_result(now_iso)
+
+    positions = snapshot.get("positions") or []
+    open_spreads = snapshot.get("open_spreads") or []
+
+    # ── Freshness ───────────────────────────────────────────────────────────
+    # All Greeks were fetched at greeks_fetched_at (or snapshot timestamp if None).
+    gfa_str = snapshot.get("greeks_fetched_at") or snapshot.get("timestamp") or ""
+    try:
+        gfa_dt = datetime.fromisoformat(gfa_str.replace("Z", "+00:00"))
+        if gfa_dt.tzinfo is None:
+            gfa_dt = gfa_dt.replace(tzinfo=timezone.utc)
+        snap_age_secs = int((now - gfa_dt).total_seconds())
+    except (ValueError, TypeError):
+        snap_age_secs = 0
+
+    # ── Defined risk from open spreads ──────────────────────────────────────
+    # Only count OPEN or PENDING_CLOSE spreads (not PENDING_OPEN or terminal).
+    live_spread_statuses = {"open", "pending_close"}
+    total_defined_risk = sum(
+        float(s.get("max_loss") or 0)
+        for s in open_spreads
+        if (s.get("status") or "").lower() in live_spread_statuses
+    )
+
+    # ── Build symbol → spread strategy_type lookup ─────────────────────────
+    # SpreadTracker's strategy_type is more specific than the "spread" tag in
+    # portfolio.json (e.g., "bull_put_spread" vs "spread").
+    leg_to_strategy: dict[str, str] = {}
+    for spread in open_spreads:
+        st = spread.get("strategy_type") or "spread"
+        for leg in spread.get("legs") or []:
+            sym = (leg.get("symbol") or "").upper()
+            if sym:
+                leg_to_strategy[sym] = st
+
+    # ── Aggregate Greeks ────────────────────────────────────────────────────
+    net_delta = 0.0
+    net_theta = 0.0
+    net_vega  = 0.0
+    net_gamma = 0.0
+    position_count = 0
+    contracts_from_fallback = 0
+
+    by_dte_bucket: dict[str, dict] = {
+        b: {"theta": 0.0, "vega": 0.0, "position_count": 0}
+        for b in ("0_7", "8_21", "22_45", "46_plus")
+    }
+    by_strategy: dict[str, dict] = {}
+
+    for pos in positions:
+        qty_raw = float(pos.get("quantity") or 0)
+        if qty_raw == 0:
+            continue
+
+        side = (pos.get("side") or "long").lower()
+        # signed_qty: negative for short positions
+        signed_qty = qty_raw if side == "long" else -qty_raw
+
+        expiration = pos.get("expiration")
+        is_equity = expiration is None  # LONG_STOCK has no expiration date
+
+        delta = pos.get("delta")
+        theta = pos.get("theta")
+        vega  = pos.get("vega")
+        gamma = pos.get("gamma")
+
+        has_greeks = any(v is not None for v in (delta, theta, vega, gamma))
+
+        if is_equity:
+            # Equity (LONG_STOCK): delta = $1 per share per $1 stock move.
+            # theta = vega = gamma = 0.
+            d_contrib = signed_qty  # one share → delta 1.0; signed_qty shares
+            t_contrib = 0.0
+            v_contrib = 0.0
+            g_contrib = 0.0
+        else:
+            # Option: scale by 100-share multiplier.
+            if not has_greeks:
+                contracts_from_fallback += 1
+            multiplier = 100.0
+            d_contrib = float(delta or 0) * signed_qty * multiplier
+            t_contrib = float(theta or 0) * signed_qty * multiplier
+            v_contrib = float(vega  or 0) * signed_qty * multiplier
+            g_contrib = float(gamma or 0) * signed_qty * multiplier
+
+        net_delta += d_contrib
+        net_theta += t_contrib
+        net_vega  += v_contrib
+        net_gamma += g_contrib
+        position_count += 1
+
+        # ── DTE bucket (options only) ─────────────────────────────────────
+        if not is_equity:
+            dte = pos.get("dte")
+            bkt = _dte_bucket(dte)
+            by_dte_bucket[bkt]["theta"]          += t_contrib
+            by_dte_bucket[bkt]["vega"]           += v_contrib
+            by_dte_bucket[bkt]["position_count"] += 1
+
+        # ── Strategy breakdown ─────────────────────────────────────────────
+        sym_upper = (pos.get("symbol") or "").upper()
+        strat = leg_to_strategy.get(sym_upper) or (pos.get("strategy_type") or "unknown")
+        if strat not in by_strategy:
+            by_strategy[strat] = {
+                "net_delta": 0.0, "net_theta": 0.0, "net_vega": 0.0,
+                "position_count": 0,
+            }
+        by_strategy[strat]["net_delta"]      += d_contrib
+        by_strategy[strat]["net_theta"]      += t_contrib
+        by_strategy[strat]["net_vega"]       += v_contrib
+        by_strategy[strat]["position_count"] += 1
+
+    # Round to 4 dp to avoid FP noise in JSON
+    def _r(v: float) -> float:
+        return round(v, 4)
+
+    for bkt in by_dte_bucket.values():
+        bkt["theta"] = _r(bkt["theta"])
+        bkt["vega"]  = _r(bkt["vega"])
+
+    for st in by_strategy.values():
+        st["net_delta"] = _r(st["net_delta"])
+        st["net_theta"] = _r(st["net_theta"])
+        st["net_vega"]  = _r(st["net_vega"])
+
+    return {
+        "net_delta":             _r(net_delta),
+        "net_theta":             _r(net_theta),
+        "net_vega":              _r(net_vega),
+        "net_gamma":             _r(net_gamma),
+        "total_defined_risk_usd": round(total_defined_risk, 2),
+        "position_count":        position_count,
+        "by_dte_bucket":         by_dte_bucket,
+        "by_strategy":           by_strategy,
+        "freshness": {
+            "oldest_contract_age_seconds":    snap_age_secs,
+            "newest_contract_age_seconds":    snap_age_secs,
+            "max_skew_seconds":               0,
+            "contracts_from_fallback_source": contracts_from_fallback,
+            "computed_at":                    now_iso,
+        },
+    }
 
 
 # ── Earnings volatility helpers ───────────────────────────────────────────────

@@ -19,6 +19,7 @@ import type {
   Decision,
   FillQualityResponse,
   Portfolio,
+  PortfolioGreeks,
   TokenUsageDaily,
   TokenUsageSummary,
   TokenUsageToday,
@@ -1022,6 +1023,136 @@ function ClaudeAgreementCard() {
   )
 }
 
+// ── PortfolioGreeksCard ─────────────────────────────────────────────────────
+
+const fmtSigned = (n: number | null | undefined, decimals = 2) => {
+  if (n == null) return '—'
+  const sign = n >= 0 ? '+' : ''
+  return `${sign}${n.toLocaleString(undefined, { maximumFractionDigits: decimals, minimumFractionDigits: decimals })}`
+}
+
+const DTE_BUCKET_LABELS: Record<string, string> = {
+  '0_7': '0–7 DTE',
+  '8_21': '8–21 DTE',
+  '22_45': '22–45 DTE',
+  '46_plus': '46+ DTE',
+}
+
+function PortfolioGreeksCardContent({ data }: { data: PortfolioGreeks }) {
+  const [dteOpen, setDteOpen] = useState(false)
+  const fr = data.freshness
+  const ageSeconds = fr.newest_contract_age_seconds
+  const ageLabel = ageSeconds < 120 ? `${ageSeconds}s` : `${Math.round(ageSeconds / 60)}m`
+  const stale = fr.max_skew_seconds > 300 || fr.contracts_from_fallback_source > 0
+
+  return (
+    <div>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-3">
+        {(
+          [
+            { label: 'Net Delta', value: fmtSigned(data.net_delta, 2) },
+            { label: 'Net Theta', value: `${fmtSigned(data.net_theta, 2)}/day` },
+            { label: 'Net Vega', value: fmtSigned(data.net_vega, 2) },
+            { label: 'Defined Risk', value: data.total_defined_risk_usd ? `$${data.total_defined_risk_usd.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : '—' },
+          ] as { label: string; value: string }[]
+        ).map(({ label, value }) => (
+          <div key={label}>
+            <div className="text-xs mb-1" style={{ color: 'var(--text-muted)' }}>{label}</div>
+            <div className="text-xl font-mono tabular" style={{ color: 'var(--text-primary)' }}>{value}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* By DTE collapsible */}
+      <button
+        onClick={() => setDteOpen((o) => !o)}
+        className="text-xs flex items-center gap-1 mb-2"
+        style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--text-muted)' }}
+      >
+        <span style={{ transform: dteOpen ? 'rotate(90deg)' : 'rotate(0deg)', display: 'inline-block', transition: 'transform 0.15s ease', lineHeight: 1 }}>▶</span>
+        By DTE
+      </button>
+      {dteOpen && (
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3 text-xs">
+          {(['0_7', '8_21', '22_45', '46_plus'] as const).map((bkt) => {
+            const b = data.by_dte_bucket[bkt]
+            return (
+              <div
+                key={bkt}
+                className="rounded p-2"
+                style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)' }}
+              >
+                <div className="font-semibold mb-1" style={{ color: 'var(--text-secondary)' }}>
+                  {DTE_BUCKET_LABELS[bkt]}
+                </div>
+                <div style={{ color: 'var(--text-muted)' }}>θ {fmtSigned(b.theta, 2)}/day</div>
+                <div style={{ color: 'var(--text-muted)' }}>ν {fmtSigned(b.vega, 2)}</div>
+                <div style={{ color: 'var(--text-muted)' }}>{b.position_count} pos</div>
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      {/* Freshness */}
+      <div className="flex items-center gap-2 text-xs" style={{ color: 'var(--text-muted)' }}>
+        <span>Computed {ageLabel} ago · skew {fr.max_skew_seconds}s</span>
+        {stale && (
+          <span
+            className="px-1.5 py-0.5 rounded text-[10px] font-semibold"
+            style={{
+              backgroundColor: 'color-mix(in srgb, var(--yellow) 20%, var(--bg-card))',
+              color: 'var(--yellow)',
+              border: '1px solid var(--yellow)',
+            }}
+          >
+            {fr.contracts_from_fallback_source > 0
+              ? `${fr.contracts_from_fallback_source} leg${fr.contracts_from_fallback_source > 1 ? 's' : ''} missing Greeks`
+              : 'stale data'}
+          </span>
+        )}
+      </div>
+    </div>
+  )
+}
+
+export function PortfolioGreeksCard({ account }: { account?: string }) {
+  const [data, setData] = useState<PortfolioGreeks | null>(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    api.portfolioGreeks(account)
+      .then((d) => { if (!cancelled) { setData(d); setLoading(false) } })
+      .catch(() => { if (!cancelled) setLoading(false) })
+    const id = setInterval(() => {
+      api.portfolioGreeks(account)
+        .then((d) => { if (!cancelled) setData(d) })
+        .catch(() => {})
+    }, 5 * 60_000)
+    return () => { cancelled = true; clearInterval(id) }
+  }, [account])
+
+  return (
+    <div
+      className="rounded p-4"
+      style={{ backgroundColor: 'var(--bg-card)', border: '1px solid var(--border)' }}
+    >
+      <div className="text-sm font-semibold mb-3" style={{ color: 'var(--text-secondary)' }}>
+        Portfolio Greeks{account ? ` — ${account}` : ''}
+      </div>
+      {loading ? (
+        <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Loading…</div>
+      ) : !data ? (
+        <div className="text-xs" style={{ color: 'var(--text-muted)' }}>No data yet</div>
+      ) : (
+        <PortfolioGreeksCardContent data={data} />
+      )}
+    </div>
+  )
+}
+
 export function Dashboard() {
   const { data, loading } = useDecisions({ limit: 20 })
   const { accounts: accountList } = useAccounts()
@@ -1126,6 +1257,8 @@ export function Dashboard() {
         <TodaysCycleCard />
         <ClaudeAgreementCard />
       </div>
+
+      <PortfolioGreeksCard />
 
       <DataHealthPanel />
 

@@ -286,6 +286,42 @@ export interface CycleSummaryResponse {
   orders_details: CycleSummaryOrder[]
 }
 
+export interface PortfolioGreeksBucket {
+  theta: number
+  vega: number
+  position_count: number
+}
+
+export interface PortfolioGreeksByStrategy {
+  net_delta: number
+  net_theta: number
+  net_vega: number
+  position_count: number
+}
+
+export interface PortfolioGreeks {
+  net_delta: number
+  net_theta: number
+  net_vega: number
+  net_gamma: number
+  total_defined_risk_usd: number
+  position_count: number
+  by_dte_bucket: {
+    '0_7': PortfolioGreeksBucket
+    '8_21': PortfolioGreeksBucket
+    '22_45': PortfolioGreeksBucket
+    '46_plus': PortfolioGreeksBucket
+  }
+  by_strategy: Record<string, PortfolioGreeksByStrategy>
+  freshness: {
+    oldest_contract_age_seconds: number
+    newest_contract_age_seconds: number
+    max_skew_seconds: number
+    contracts_from_fallback_source: number
+    computed_at: string
+  }
+}
+
 export interface ClaudeAgreementDailyPoint {
   date: string
   skip_when_open_rate: number | null

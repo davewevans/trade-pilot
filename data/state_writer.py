@@ -112,6 +112,7 @@ class StateWriter:
         open_spreads: list[dict] | None = None,
         wheel_symbols: list[str] | None = None,
         spread_leg_symbols: set[str] | None = None,
+        greeks_fetched_at: str | None = None,
     ) -> None:
         """Write ``snapshots/portfolio.json``.
 
@@ -146,6 +147,12 @@ class StateWriter:
                 # only if it's a non-empty string.
                 existing = p.get("strategy_type") or ""
                 strategy_type = existing if existing else tagged
+                # side: "long" or "short" — needed for correct Greek sign in
+                # compute_portfolio_greeks.  Alpaca reports qty as a positive
+                # number for both long and short positions; side disambiguates.
+                side = str(p.get("side") or "long").lower()
+                if side not in ("long", "short"):
+                    side = "long"
                 pos_list.append({
                     "underlying": p.get("underlying", p.get("root_symbol", "")),
                     "strategy_type": strategy_type,
@@ -154,11 +161,14 @@ class StateWriter:
                     "expiration": p.get("expiration_date"),
                     "dte": p.get("dte"),
                     "quantity": p.get("qty"),
+                    "side": side,
                     "entry_credit": self._safe_float(p.get("avg_entry_price")),
                     "current_value": self._safe_float(p.get("current_price", p.get("market_value"))),
                     "unrealized_pnl": self._safe_float(p.get("unrealized_pl")),
                     "delta": self._safe_float(p.get("delta")),
                     "theta": self._safe_float(p.get("theta")),
+                    "vega": self._safe_float(p.get("vega")),
+                    "gamma": self._safe_float(p.get("gamma")),
                 })
 
             last_equity = self._safe_float(account_data.get("last_equity"), 0)
@@ -169,6 +179,10 @@ class StateWriter:
 
             snapshot = {
                 "timestamp": self._now_iso(),
+                # greeks_fetched_at records when the option snapshot call that
+                # enriched delta/theta/vega/gamma was made.  Set by portfolio_refresh
+                # after calling broker.get_option_snapshots(); None if not enriched.
+                "greeks_fetched_at": greeks_fetched_at,
                 "account": {
                     "total_equity": equity,
                     "last_equity": last_equity,
@@ -237,6 +251,7 @@ class StateWriter:
         account_name: str,
         account_data: dict,
         positions: list[dict],
+        greeks_fetched_at: str | None = None,
     ) -> None:
         """Write a per-account portfolio snapshot.
 
@@ -261,8 +276,9 @@ class StateWriter:
             )
 
             snapshot = {
-                "timestamp":    self._now_iso(),
-                "account_name": account_name,
+                "timestamp":         self._now_iso(),
+                "greeks_fetched_at": greeks_fetched_at,
+                "account_name":      account_name,
                 "account": {
                     "total_equity":          equity,
                     "last_equity":           last_equity,
@@ -280,6 +296,7 @@ class StateWriter:
                         "expiration":    p.get("expiration_date"),
                         "dte":           p.get("dte"),
                         "quantity":      p.get("qty"),
+                        "side":          str(p.get("side") or "long").lower(),
                         "entry_credit":  self._safe_float(p.get("avg_entry_price")),
                         "current_value": self._safe_float(
                             p.get("current_price", p.get("market_value"))
@@ -287,6 +304,8 @@ class StateWriter:
                         "unrealized_pnl": self._safe_float(p.get("unrealized_pl")),
                         "delta":          self._safe_float(p.get("delta")),
                         "theta":          self._safe_float(p.get("theta")),
+                        "vega":           self._safe_float(p.get("vega")),
+                        "gamma":          self._safe_float(p.get("gamma")),
                     }
                     for p in positions
                 ],

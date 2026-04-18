@@ -12,6 +12,7 @@ import type {
   NtaEventsResponse,
   Performance,
   Portfolio,
+  PortfolioGreeks,
   TokenUsageDaily,
   TokenUsageSummary,
   TokenUsageToday,
@@ -402,6 +403,11 @@ export const api = {
 
   claudeAgreement: (window: '7d' | '30d' | '90d' | 'all' = '30d'): Promise<ClaudeAgreementResponse> => {
     return get<ClaudeAgreementResponse>(`/api/claude-agreement?window=${window}`)
+  },
+
+  portfolioGreeks: (account?: string): Promise<PortfolioGreeks> => {
+    const qs = account ? `?account=${encodeURIComponent(account)}` : ''
+    return get<PortfolioGreeks>(`/api/portfolio-greeks${qs}`)
   },
 
   haltStatus: () => get<HaltInfo>('/api/halt-status'),

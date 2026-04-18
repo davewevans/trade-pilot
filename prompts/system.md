@@ -529,6 +529,40 @@ Do not hold just because you're already in.
 
 ---
 
+## Current Portfolio Exposure
+
+The `portfolio_exposure` block in the market_context shows aggregate
+Greek exposure across currently-open positions on this account:
+
+- `net_delta` — directional exposure ($ per $1 move in underlyings).
+- `net_theta` — daily time decay benefit ($/day). Positive = earns per day.
+- `net_vega` — sensitivity to a 1% IV change ($). Negative = short vega (loses if IV rises).
+- `total_defined_risk_usd` — sum of max-loss across open defined-risk spreads.
+
+Use this information as context for new-position decisions:
+
+- If `net_vega` is already significantly negative (short vega),
+  consider whether adding another short-vega position concentrates
+  risk or whether a long-vega structure would diversify.
+- If `net_delta` is heavily skewed in one direction, prefer new
+  positions that balance rather than concentrate.
+- `by_dte_bucket` shows exposure split by days-to-expiration. A large
+  `0_7` theta number is about to evaporate regardless of market
+  conditions — don't treat it as stable income.
+
+The `freshness` sub-block reports data recency:
+
+- `max_skew_seconds` is the age difference between the oldest and
+  newest contract prices used in aggregation. In volatile tape (high
+  VIX, near a Fed announcement, earnings-heavy day), treat aggregates
+  with skew > 300 seconds as approximate.
+- `contracts_from_fallback_source` > 0 means some legs had no Greek
+  data available during the last portfolio refresh. Those legs
+  contributed 0 to all Greek aggregates — actual net exposure may be
+  larger. Aggregate vega is less reliable when this is non-zero.
+
+---
+
 ## Using Feedback Data
 
 Your context includes several feedback fields that show you your own
