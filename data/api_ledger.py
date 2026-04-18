@@ -63,6 +63,12 @@ class ApiLedger:
     # How many billable (non-cache, non-blocked) calls between auto-snapshots.
     _SNAPSHOT_INTERVAL = 50
 
+    # Monthly usage thresholds that trigger ntfy alerts (50%, 75%, 90%, 95%).
+    _MONTHLY_ALERT_THRESHOLDS = (0.50, 0.75, 0.90, 0.95)
+
+    # Minimum seconds between consecutive minute_cap ntfy alerts (rate-limit).
+    _MINUTE_CAP_ALERT_COOLDOWN = 300  # 5 minutes
+
     def __init__(self, db_path: Path) -> None:
         self._db_path = Path(db_path)
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -72,6 +78,11 @@ class ApiLedger:
         self._conn.commit()
         self._lock = threading.RLock()  # RLock so check_and_reserve can call _insert while holding it
         self._billable_since_snapshot = 0
+        # Tracks which monthly threshold pct has already fired this month.
+        # Key: (api, threshold_pct_int e.g. 50/75/90/95), Value: month_start_ts when it fired.
+        self._alerted_thresholds: dict[tuple, float] = {}
+        # Tracks last ntfy time for minute_cap alerts to rate-limit them.
+        self._last_minute_cap_alert: dict[str, float] = {}
         self._init_schema()
         atexit.register(self._atexit_snapshot)
 
@@ -143,9 +154,10 @@ class ApiLedger:
                     quota_exc = OratsQuotaExceeded(reason=reason, usage=usage)
                     break  # only raise on the first exceeded cap
 
-        # Snapshot and raise outside the lock
+        # Snapshot, notify, and raise outside the lock
         if quota_exc is not None:
             self.write_snapshot()
+            self._notify_quota_exceeded(api, quota_exc)
             raise quota_exc
 
     # ── structured api_calls log ──────────────────────────────────────────
@@ -236,6 +248,9 @@ class ApiLedger:
         self._emit_api_log(api, endpoint, symbol, cache_hit, status_code, duration_ms, None, job_name)
         if do_snapshot:
             self.write_snapshot()
+        # Threshold alerts — only for billable calls on capped APIs
+        if not cache_hit and self._caps_for(api) is not None:
+            self._check_monthly_thresholds(api)
 
     def get_usage(self, api: str) -> dict:
         """Return current usage counters and caps for *api*.
@@ -291,6 +306,81 @@ class ApiLedger:
     def _atexit_snapshot(self) -> None:
         """Write a final snapshot on process exit (atexit hook)."""
         self.write_snapshot()
+
+    def _check_monthly_thresholds(self, api: str) -> None:
+        """Fire ntfy alerts when monthly usage crosses configured thresholds.
+
+        Fires at most once per threshold per calendar month, determined by
+        comparing the current month-start timestamp against the one stored
+        when the threshold last fired.  Never raises.
+        """
+        try:
+            usage = self.get_usage(api)
+            cap = usage["month_cap"]
+            if cap <= 0:
+                return
+            used = usage["month_used"]
+            pct_used = used / cap
+            now = time.time()
+            month_start = self._month_start_ts(now)
+
+            for threshold in self._MONTHLY_ALERT_THRESHOLDS:
+                if pct_used < threshold:
+                    continue
+                key = (api, int(threshold * 100))
+                last_fired_month = self._alerted_thresholds.get(key, 0.0)
+                if last_fired_month >= month_start:
+                    continue  # already fired this month
+                self._alerted_thresholds[key] = month_start
+                try:
+                    from notifications import notify
+                    pct_label = int(threshold * 100)
+                    notify(
+                        "critical",
+                        f"ORATS quota {pct_label}% — {api}",
+                        (
+                            f"{api} monthly quota at {pct_label}%: "
+                            f"{used}/{cap} calls used, "
+                            f"{usage['month_remaining']} remaining."
+                        ),
+                        tags=["orats", "quota"],
+                    )
+                except Exception:
+                    pass
+        except Exception:
+            pass  # threshold check must never affect calling code
+
+    def _notify_quota_exceeded(self, api: str, exc: "OratsQuotaExceeded") -> None:
+        """Fire an immediate ntfy critical alert when a cap is exceeded.
+
+        Rate-limited to one alert per 5 minutes for minute_cap hits to
+        avoid ntfy flooding during rapid-fire retries.  Never raises.
+        """
+        try:
+            reason = exc.reason
+            usage = exc.usage
+
+            if reason == "minute_cap":
+                now = time.time()
+                last = self._last_minute_cap_alert.get(api, 0.0)
+                if now - last < self._MINUTE_CAP_ALERT_COOLDOWN:
+                    return
+                self._last_minute_cap_alert[api] = now
+
+            from notifications import notify
+            notify(
+                "critical",
+                f"ORATS quota exceeded — {reason} ({api})",
+                (
+                    f"{api} blocked by {reason}: "
+                    f"month={usage.get('month_used')}/{usage.get('month_cap')}, "
+                    f"day={usage.get('day_used')}/{usage.get('day_cap')}, "
+                    f"minute={usage.get('minute_used')}/{usage.get('minute_cap')}."
+                ),
+                tags=["orats", "quota", "blocked"],
+            )
+        except Exception:
+            pass  # notification failure must never affect the caller
 
     # ── internals ─────────────────────────────────────────────────────────
 
