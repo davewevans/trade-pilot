@@ -224,6 +224,51 @@ class BacktestEngine:
         self._custom_slippage_pct: float = 0.0
         self._total_slippage_cost: float = 0.0
 
+    def estimate_cost(
+        self,
+        symbols: list,
+        strategy: str,
+        start_date: str,
+        end_date: str,
+    ) -> int:
+        """Estimate ORATS API calls for a backtest given current cache state.
+
+        Uses a ~2-calls-per-trading-day model (hist/summaries + hist/strikes on
+        entry-eligible days) and credits existing cache hits.
+
+        Args:
+            symbols:    List of ticker symbols.
+            strategy:   Strategy name (not currently used — call pattern is the same
+                        per-day regardless of strategy).
+            start_date: ISO date "YYYY-MM-DD".
+            end_date:   ISO date "YYYY-MM-DD".
+
+        Returns:
+            Estimated number of non-cached ORATS historical API calls.
+        """
+        from datetime import date as _date
+        from research.backtesting.sweep import _count_hist_summaries_cached
+        from data.orats_cache import ORATSCache
+
+        d1 = _date.fromisoformat(start_date)
+        d2 = _date.fromisoformat(end_date)
+        calendar_days = max(1, (d2 - d1).days)
+        # Approximate 252 trading days per year
+        est_trading_days = max(1, int(calendar_days * 252 / 365))
+
+        # Each cold day costs ~2 calls: 1 hist/summaries (every day) +
+        # ~1 hist/strikes (on entry-eligible days, roughly half of trading days).
+        calls_per_cold_day = 2
+
+        cache = ORATSCache()
+        total = 0
+        for sym in symbols:
+            fresh = _count_hist_summaries_cached(cache, sym.upper(), est_trading_days)
+            cold_days = max(0, est_trading_days - fresh)
+            total += cold_days * calls_per_cold_day
+
+        return total
+
     def run(
         self,
         params: BacktestParams,

@@ -37,13 +37,18 @@ def _run_preflight_check(sweep, ledger) -> None:
     estimate = sweep.estimate_cost()
     usage = ledger.get_usage("orats_historical")
     month_remaining = usage["month_remaining"]
-    warm_estimate = estimate["warm_estimate"]
+
+    # Use the per-run budget (WEEKLY_SWEEP_BUDGET_CALLS) as the operative estimate;
+    # it reflects what we actually plan to spend this run, not the full cold-cache cost.
+    run_budget = settings.WEEKLY_SWEEP_BUDGET_CALLS
+    warm_estimate = min(run_budget, estimate["warm_estimate"])
 
     logger.info(
-        "ORATS pre-flight: cold_estimate=%d warm_estimate=%d "
+        "ORATS pre-flight: cold_estimate=%d warm_estimate=%d run_budget=%d "
         "month_used=%d month_cap=%d month_remaining=%d day_remaining=%d",
         estimate["cold_estimate"],
         warm_estimate,
+        run_budget,
         usage["month_used"],
         usage["month_cap"],
         month_remaining,

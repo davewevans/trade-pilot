@@ -169,6 +169,12 @@ async function postJson(path: string, body: unknown): Promise<Response> {
 
 // ── Main component ────────────────────────────────────────────────────────────
 
+interface ConfirmHeavy {
+  estimate: number
+  remaining: number
+  message: string
+}
+
 export function Backtest() {
   const [params, setParams] = useState<BacktestParams>(DEFAULT_PARAMS)
   const [symbolInput, setSymbolInput] = useState('SPY')
@@ -177,6 +183,8 @@ export function Backtest() {
   const [error, setError] = useState<string | null>(null)
   const [history, setHistory] = useState<BacktestRunSummary[]>([])
   const [historyResult, setHistoryResult] = useState<BacktestResult | null>(null)
+  const [confirmHeavy, setConfirmHeavy] = useState<ConfirmHeavy | null>(null)
+  const [alreadyRunning, setAlreadyRunning] = useState<string | null>(null)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   // ── Load history on mount ─────────────────────────────────────────────────
@@ -232,25 +240,50 @@ export function Backtest() {
     set('symbols', syms)
   }
 
-  async function handleRun() {
+  async function handleRun(confirmHeavyFlag = false) {
     setError(null)
     setJob(null)
     setJobId(null)
     setHistoryResult(null)
+    setConfirmHeavy(null)
+    setAlreadyRunning(null)
     if (pollRef.current) clearInterval(pollRef.current)
 
     try {
-      const res = await postJson('/api/backtest', params)
+      const body = confirmHeavyFlag ? { ...params, confirm_heavy: true } : params
+      const res = await postJson('/api/backtest', body)
+      const j = await res.json().catch(() => ({}))
+
+      if (res.status === 202 && j.status === 'confirm_required') {
+        // Server wants confirmation before proceeding with a heavy backtest
+        setConfirmHeavy({ estimate: j.estimate, remaining: j.remaining, message: j.message })
+        return
+      }
+
+      if (res.status === 409) {
+        // Another backtest is already running
+        setAlreadyRunning(j.since ?? 'unknown time')
+        return
+      }
+
+      if (res.status === 400) {
+        setError(j.message ?? j.error ?? `HTTP ${res.status}`)
+        return
+      }
+
       if (!res.ok) {
-        const j = await res.json().catch(() => ({}))
         setError(j.error ?? `HTTP ${res.status}`)
         return
       }
-      const data = await res.json()
-      setJobId(data.job_id)
+
+      setJobId(j.job_id)
     } catch (e: unknown) {
       setError(String(e))
     }
+  }
+
+  async function handleConfirmAndRun() {
+    await handleRun(true)
   }
 
   async function handleLoadHistoryRun(id: string) {
@@ -578,22 +611,71 @@ export function Backtest() {
         </div>
 
         {/* Run button */}
-        <div className="flex items-center gap-3">
-          <button
-            onClick={handleRun}
-            disabled={running || params.symbols.length === 0}
-            className="px-6 py-2 rounded font-semibold text-sm transition-all"
-            style={{
-              backgroundColor: running ? 'var(--bg-secondary)' : 'var(--accent)',
-              color: running ? 'var(--text-muted)' : 'white',
-              cursor: running ? 'not-allowed' : 'pointer',
-              opacity: running ? 0.6 : 1,
-            }}
-          >
-            {running ? 'Running...' : 'Run Backtest'}
-          </button>
-          {error && (
-            <span className="text-sm" style={{ color: 'var(--red)' }}>{error}</span>
+        <div className="flex flex-col gap-3">
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => handleRun()}
+              disabled={running || params.symbols.length === 0}
+              className="px-6 py-2 rounded font-semibold text-sm transition-all"
+              style={{
+                backgroundColor: running ? 'var(--bg-secondary)' : 'var(--accent)',
+                color: running ? 'var(--text-muted)' : 'white',
+                cursor: running ? 'not-allowed' : 'pointer',
+                opacity: running ? 0.6 : 1,
+              }}
+            >
+              {running ? 'Running...' : 'Run Backtest'}
+            </button>
+            {error && (
+              <span className="text-sm" style={{ color: 'var(--red)' }}>{error}</span>
+            )}
+          </div>
+
+          {/* 202 confirm_required dialog */}
+          {confirmHeavy && (
+            <div
+              className="rounded-lg p-4 space-y-3"
+              style={{ backgroundColor: 'var(--bg-card)', border: '1px solid var(--yellow, #f59e0b)' }}
+            >
+              <p className="text-sm font-semibold" style={{ color: 'var(--yellow, #f59e0b)' }}>
+                Heavy ORATS usage — confirm before proceeding
+              </p>
+              <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>
+                {confirmHeavy.message}
+              </p>
+              <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                Estimated calls: <strong>{confirmHeavy.estimate.toLocaleString()}</strong> of{' '}
+                <strong>{confirmHeavy.remaining.toLocaleString()}</strong> remaining this month.
+              </p>
+              <div className="flex gap-2">
+                <button
+                  onClick={handleConfirmAndRun}
+                  className="px-4 py-1.5 rounded text-sm font-semibold"
+                  style={{ backgroundColor: 'var(--accent)', color: 'white' }}
+                >
+                  Confirm and run
+                </button>
+                <button
+                  onClick={() => setConfirmHeavy(null)}
+                  className="px-4 py-1.5 rounded text-sm"
+                  style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* 409 already running banner */}
+          {alreadyRunning && (
+            <div
+              className="rounded-lg p-4"
+              style={{ backgroundColor: 'var(--bg-card)', border: '1px solid var(--border)' }}
+            >
+              <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>
+                A backtest is already running (started {alreadyRunning}). Please wait for it to complete before submitting a new one.
+              </p>
+            </div>
           )}
         </div>
       </div>

@@ -25,6 +25,7 @@ and acceptable for this use-case.
 """
 
 import atexit
+import contextvars
 import json
 import logging
 import os
@@ -36,6 +37,13 @@ from pathlib import Path
 from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+# ContextVar for ambient job attribution — set by long-running callers (e.g. api_backtest)
+# so that all ORATS ledger records within that scope carry the right job_name without
+# needing every call site to look up the env var independently.
+current_job_source: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "current_job_source", default=None
+)
 
 
 class OratsQuotaExceeded(Exception):
@@ -151,6 +159,13 @@ class ApiLedger:
             symbol:    Underlying ticker, or None.
             job_name:  Value of ``TRADE_PILOT_JOB_NAME`` env var.
         """
+        # Resolve job attribution: contextvar > explicit param > env var
+        _ctx_source = current_job_source.get(None)
+        if _ctx_source:
+            job_name = _ctx_source
+        elif not job_name:
+            job_name = os.environ.get("TRADE_PILOT_JOB_NAME")
+
         # Kill switch: instant block regardless of caps
         if api.startswith("orats") and is_orats_disabled():
             raise OratsDisabled(
@@ -279,6 +294,13 @@ class ApiLedger:
             duration_ms: Request round-trip in ms; None for cache hits or blocks.
             job_name:    From ``TRADE_PILOT_JOB_NAME`` env var.
         """
+        # Resolve job attribution: contextvar > explicit param > env var
+        _ctx_source = current_job_source.get(None)
+        if _ctx_source:
+            job_name = _ctx_source
+        elif not job_name:
+            job_name = os.environ.get("TRADE_PILOT_JOB_NAME")
+
         with self._lock:
             self._insert(
                 api=api,

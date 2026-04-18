@@ -1396,10 +1396,17 @@ def iv_history(
 _BACKTEST_JOBS: dict[str, dict] = {}
 _BACKTEST_JOBS_LOCK = threading.Lock()
 
+# Single-flight concurrency control for the interactive backtest endpoint.
+# Only one backtest may run at a time to prevent accidental ORATS budget exhaustion.
+_api_backtest_lock_holder = None   # ProcessLock instance when a backtest is running
+_api_backtest_started_at: str | None = None  # ISO timestamp when the backtest started
+_api_backtest_ctrl_lock = threading.Lock()  # guards the two variables above
+
 
 def _run_backtest_job(job_id: str, params_dict: dict) -> None:
     """Background thread target: run the backtest and store result."""
     from backtesting.engine import BacktestEngine, BacktestParams
+    from data.api_ledger import current_job_source
     from dataclasses import asdict
 
     log_lines: list[str] = []
@@ -1414,6 +1421,8 @@ def _run_backtest_job(job_id: str, params_dict: dict) -> None:
     with _BACKTEST_JOBS_LOCK:
         _BACKTEST_JOBS[job_id]["status"] = "running"
 
+    # Tag all ORATS ledger records in this thread as "api_backtest"
+    _token = current_job_source.set("api_backtest")
     try:
         params = BacktestParams(
             strategy=params_dict.get("strategy", "bull_put_spread"),
@@ -1463,6 +1472,16 @@ def _run_backtest_job(job_id: str, params_dict: dict) -> None:
                 "error": str(exc),
             })
 
+    finally:
+        # Release source attribution and process lock regardless of outcome
+        current_job_source.reset(_token)
+        global _api_backtest_lock_holder, _api_backtest_started_at
+        with _api_backtest_ctrl_lock:
+            if _api_backtest_lock_holder is not None:
+                _api_backtest_lock_holder.release()
+                _api_backtest_lock_holder = None
+                _api_backtest_started_at = None
+
 
 @app.post("/api/backtest")
 async def start_backtest(request: Request):
@@ -1474,7 +1493,7 @@ async def start_backtest(request: Request):
 
     # Validate required fields
     strategy = body.get("strategy", "bull_put_spread")
-    from backtesting.engine import SUPPORTED_STRATEGIES
+    from backtesting.engine import SUPPORTED_STRATEGIES, BacktestEngine
     if strategy not in SUPPORTED_STRATEGIES:
         return JSONResponse(
             status_code=400,
@@ -1495,6 +1514,82 @@ async def start_backtest(request: Request):
             raise ValueError("start_date must be before end_date")
     except (KeyError, ValueError) as e:
         return JSONResponse(status_code=400, content={"error": f"Invalid date range: {e}"})
+
+    # ── Pre-flight ORATS budget check ─────────────────────────────────────────
+    try:
+        from data.api_ledger import get_ledger
+        _engine_for_estimate = BacktestEngine()
+        estimate = _engine_for_estimate.estimate_cost(symbols, strategy, start_date, end_date)
+        _usage = get_ledger().get_usage("orats_historical")
+        month_remaining = _usage["month_remaining"]
+
+        if estimate > month_remaining:
+            logger.warning(
+                "Backtest pre-flight BLOCKED: estimate=%d > month_remaining=%d",
+                estimate, month_remaining,
+            )
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": "budget_exceeded",
+                    "estimate": estimate,
+                    "remaining": month_remaining,
+                    "message": (
+                        f"This backtest would use ~{estimate:,} ORATS calls but only "
+                        f"{month_remaining:,} remain this month."
+                    ),
+                },
+            )
+
+        confirm_heavy = body.get("confirm_heavy", False)
+        if estimate > month_remaining * 0.7 and not confirm_heavy:
+            logger.info(
+                "Backtest pre-flight: confirm_required — estimate=%d, month_remaining=%d",
+                estimate, month_remaining,
+            )
+            return JSONResponse(
+                status_code=202,
+                content={
+                    "status": "confirm_required",
+                    "estimate": estimate,
+                    "remaining": month_remaining,
+                    "message": (
+                        f"This backtest would use ~{estimate:,} ORATS calls (>70% of the "
+                        f"{month_remaining:,} remaining this month). "
+                        "Resubmit with confirm_heavy=true to proceed."
+                    ),
+                },
+            )
+    except Exception:
+        logger.warning("Backtest pre-flight check failed (non-fatal) — proceeding", exc_info=True)
+
+    # ── Concurrency guard: one backtest at a time ─────────────────────────────
+    from utils.process_lock import ProcessLock, ProcessLockHeld
+    global _api_backtest_lock_holder, _api_backtest_started_at
+    with _api_backtest_ctrl_lock:
+        if _api_backtest_lock_holder is not None:
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "error": "backtest_already_running",
+                    "since": _api_backtest_started_at,
+                    "message": "A backtest is already running — please wait for it to complete.",
+                },
+            )
+        try:
+            _lock = ProcessLock("api_backtest", settings.DATA_DIR / "locks")
+            _lock.acquire()
+            _api_backtest_lock_holder = _lock
+            _api_backtest_started_at = datetime.now(timezone.utc).isoformat()
+        except ProcessLockHeld:
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "error": "backtest_already_running",
+                    "since": _api_backtest_started_at,
+                    "message": "A backtest is already running — please wait for it to complete.",
+                },
+            )
 
     job_id = str(uuid.uuid4())
     with _BACKTEST_JOBS_LOCK:

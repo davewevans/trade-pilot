@@ -139,6 +139,16 @@ class Settings:
         self.RESEARCH_BACKTEST_MAX_SYMBOLS_PER_RUN: int = int(
             os.getenv("RESEARCH_BACKTEST_MAX_SYMBOLS_PER_RUN", "50")
         )
+        # Max ORATS historical calls consumed by a single weekly_research sweep run.
+        # The rotating sweep stops when this budget or the monthly cap is exhausted.
+        self.WEEKLY_SWEEP_BUDGET_CALLS: int = int(
+            os.getenv("WEEKLY_SWEEP_BUDGET_CALLS", "3000")
+        )
+        # Weeks after which a primed (symbol, strategy) pair becomes eligible for
+        # re-priming to pick up recent backtest data.
+        self.SWEEP_REPRIME_WEEKS: int = int(
+            os.getenv("SWEEP_REPRIME_WEEKS", "4")
+        )
 
         # Research layer — watchlist recommendations
         self.RESEARCH_RECOMMENDATIONS_ENABLED: bool = (
@@ -179,6 +189,10 @@ class Settings:
         self.ORATS_ALLOW_BUDGET_HEAVY: int = int(
             os.getenv("ORATS_ALLOW_BUDGET_HEAVY", "0")
         )
+        # Set to "1" to allow ORATSCache to silently fall back to in-memory when
+        # SQLite init fails.  In production (RENDER=true) the default is to raise
+        # rather than degrade invisibly.  Dev always falls back with a CRITICAL log.
+        self.ORATS_CACHE_ALLOW_FALLBACK: str = os.getenv("ORATS_CACHE_ALLOW_FALLBACK", "0")
 
         # ── Notifications ──────────────────────────────────────
         # ntfy.sh topic name. When unset, ntfy notifications are silently dropped.

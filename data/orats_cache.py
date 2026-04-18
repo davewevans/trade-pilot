@@ -25,9 +25,12 @@ class ORATSCache:
     don't want to share connections across modules.
     """
 
+    # Safety cap: prevent unbounded memory growth when running in fallback mode.
+    _FALLBACK_MAX_ENTRIES = 500
+
     def __init__(self, db_path: Union[str, Path, None] = None):
+        from config import settings
         if db_path is None:
-            from config import settings
             db_path = settings.DATABASE_PATH
         self._db_path = str(db_path)
         self._conn: sqlite3.Connection | None = None
@@ -37,9 +40,15 @@ class ORATSCache:
             self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.execute("PRAGMA foreign_keys=ON")
             self._conn.commit()
-        except Exception:
-            logger.warning(
-                "ORATSCache: could not open SQLite at %s — using in-memory fallback",
+        except Exception as exc:
+            allow_fallback = settings.ORATS_CACHE_ALLOW_FALLBACK == "1"
+            if settings.RENDER and not allow_fallback:
+                raise RuntimeError(
+                    f"SQLite cache init failed at {self._db_path!r} — "
+                    "set ORATS_CACHE_ALLOW_FALLBACK=1 to allow in-memory fallback in production"
+                ) from exc
+            logger.critical(
+                "ORATSCache: could not open SQLite at %s — using in-memory fallback (DEGRADED MODE)",
                 self._db_path, exc_info=True,
             )
             self._conn = None
@@ -172,6 +181,12 @@ class ORATSCache:
         return data
 
     def _fallback_set(self, endpoint, cache_key, data, ttl_seconds):
+        if len(self._fallback) >= self._FALLBACK_MAX_ENTRIES:
+            logger.warning(
+                "ORATSCache in-memory fallback is at capacity (%d entries) — dropping write for %s/%s",
+                self._FALLBACK_MAX_ENTRIES, endpoint, cache_key,
+            )
+            return
         self._fallback[(endpoint, cache_key)] = (time.time(), ttl_seconds, data)
 
     def _fallback_clear_expired(self):

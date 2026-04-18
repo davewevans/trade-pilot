@@ -26,6 +26,54 @@ _MONIES_TTL = 30 * 60
 
 _cache = ORATSCache()
 
+# ── Canonical /strikes fetch parameters ───────────────────────────────────────
+# The cache key for strikes is (symbol, side) only — the same canonical range
+# is always fetched from ORATS, and callers filter the result in Python via
+# filter_strikes().  The canonical bounds must remain a strict superset of
+# every call site's actual delta/DTE requirements.
+#
+# Current call-site maxima (verify with grep get_strikes_by_delta):
+#   delta: 0.15–0.65   →  canonical: 0.10–0.70
+#   DTE:   20–45       →  canonical: 14–60
+_CANONICAL_STRIKES_DELTA_MIN: float = 0.10
+_CANONICAL_STRIKES_DELTA_MAX: float = 0.70
+_CANONICAL_STRIKES_DTE_MIN: int = 14
+_CANONICAL_STRIKES_DTE_MAX: int = 60
+
+
+def filter_strikes(
+    strikes: list[dict],
+    delta_min: float,
+    delta_max: float,
+    dte_min: int,
+    dte_max: int,
+) -> list[dict]:
+    """Filter a canonical-range strike list to a caller's narrow range.
+
+    Compares delta by absolute magnitude so put deltas (which ORATS returns as
+    negative values) work correctly alongside positive caller inputs.
+
+    Args:
+        strikes:   Full strike list as returned by get_strikes_by_delta().
+        delta_min: Minimum absolute delta (inclusive).
+        delta_max: Maximum absolute delta (inclusive).
+        dte_min:   Minimum DTE (inclusive).
+        dte_max:   Maximum DTE (inclusive).
+
+    Returns:
+        Filtered list preserving original ordering.
+    """
+    result = []
+    for s in strikes:
+        delta = s.get("delta")
+        dte = s.get("dte")
+        if delta is not None and not (delta_min <= abs(delta) <= delta_max):
+            continue
+        if dte is not None and not (dte_min <= dte <= dte_max):
+            continue
+        result.append(s)
+    return result
+
 # Module-level consecutive failure counters per endpoint.
 # Reset to 0 on success; fire a warning notification when threshold is hit.
 _consecutive_failures: dict[str, int] = {}
@@ -512,19 +560,25 @@ class ORATSClient:
         if side not in ("put", "call"):
             raise ValueError(f"option_type must be 'put' or 'call', got {option_type!r}")
 
-        cache_key = f"{symbol.upper()}|{side}|{delta_min}|{delta_max}|{dte_min}|{dte_max}"
+        # One canonical cache key per (symbol, side) — delta/DTE range is NOT part of
+        # the key.  We always fetch the canonical-wide range from ORATS and filter in
+        # Python, so any two callers with overlapping ranges share the same cache entry.
+        cache_key = f"{symbol.upper()}|{side}"
         cached = _cache.get("strikes", cache_key, _STRIKES_TTL)
         _job_name = os.environ.get("TRADE_PILOT_JOB_NAME")
         if cached is not None:
             from data.api_ledger import get_ledger
             get_ledger().record("orats_live", "strikes", symbol, True, None, None, _job_name)
-            return cached
+            return filter_strikes(cached, delta_min, delta_max, dte_min, dte_max)
 
+        # Fetch the full canonical range from ORATS.
         # Puts come back with negative deltas — invert and swap the bounds.
         if side == "put":
-            d_lo, d_hi = -abs(delta_max), -abs(delta_min)
+            d_lo = -abs(_CANONICAL_STRIKES_DELTA_MAX)
+            d_hi = -abs(_CANONICAL_STRIKES_DELTA_MIN)
         else:
-            d_lo, d_hi = abs(delta_min), abs(delta_max)
+            d_lo = abs(_CANONICAL_STRIKES_DELTA_MIN)
+            d_hi = abs(_CANONICAL_STRIKES_DELTA_MAX)
 
         from data.api_ledger import get_ledger
         get_ledger().check_and_reserve("orats_live", "strikes", symbol, _job_name)
@@ -539,7 +593,7 @@ class ORATSClient:
                     "token": self.api_key,
                     "ticker": symbol.upper(),
                     "delta": f"{d_lo},{d_hi}",
-                    "dte": f"{dte_min},{dte_max}",
+                    "dte": f"{_CANONICAL_STRIKES_DTE_MIN},{_CANONICAL_STRIKES_DTE_MAX}",
                 },
                 timeout=self.TIMEOUT,
             )
@@ -548,8 +602,9 @@ class ORATSClient:
             rows = resp.json().get("data", []) or []
         except Exception:
             logger.warning(
-                "ORATS /strikes failed for %s %s d=%s,%s dte=%s,%s",
-                symbol, side, d_lo, d_hi, dte_min, dte_max, exc_info=True,
+                "ORATS /strikes failed for %s %s canonical d=%s,%s dte=%s,%s",
+                symbol, side, d_lo, d_hi,
+                _CANONICAL_STRIKES_DTE_MIN, _CANONICAL_STRIKES_DTE_MAX, exc_info=True,
             )
         finally:
             get_ledger().record("orats_live", "strikes", symbol, False, _status_code, int((time.monotonic() - _t0) * 1000), _job_name)
@@ -594,8 +649,9 @@ class ORATSClient:
                 "opt_value": opt_value,
             })
 
+        # Cache the full canonical set; callers filter via filter_strikes().
         _cache.set("strikes", cache_key, contracts, _STRIKES_TTL)
-        return contracts
+        return filter_strikes(contracts, delta_min, delta_max, dte_min, dte_max)
 
     def get_snapshots_by_strike(
         self,

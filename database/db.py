@@ -335,6 +335,21 @@ _SCHEMA_STATEMENTS: tuple[str, ...] = (
     """,
     "CREATE INDEX IF NOT EXISTS idx_ledger_api_ts ON api_usage_ledger(api, ts)",
     "CREATE INDEX IF NOT EXISTS idx_ledger_ts ON api_usage_ledger(ts)",
+    # ── sweep_progress ────────────────────────────────────────────────────
+    # Tracks which (symbol, strategy) pairs have been primed by the rotating
+    # weekly backtest sweep.  Used by BacktestSweep.run_sweep() to prioritise
+    # unprimed pairs and skip recently-primed ones.
+    """
+    CREATE TABLE IF NOT EXISTS sweep_progress (
+        symbol            TEXT    NOT NULL,
+        strategy          TEXT    NOT NULL,
+        lookback_years    INTEGER NOT NULL,
+        last_primed_at    REAL,        -- unix epoch; NULL if never primed
+        prime_cost_calls  INTEGER,     -- estimated ORATS calls used during last prime
+        last_error        TEXT,        -- error message if last prime failed; NULL on success
+        PRIMARY KEY (symbol, strategy, lookback_years)
+    )
+    """,
 )
 
 
