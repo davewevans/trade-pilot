@@ -374,6 +374,28 @@ def main() -> None:
         handlers=[stream_handler, file_handler],
     )
 
+    # ── Structured API call log (api_calls.jsonl) ────────────────────
+    # One JSON line per outbound API call.  propagate=False so these
+    # lines do NOT bleed into trade-pilot.log.
+    from utils.json_log_formatter import JsonFormatter
+
+    _api_calls_handler = logging.handlers.TimedRotatingFileHandler(
+        filename=settings.LOG_DIR / "api_calls.jsonl",
+        when="midnight",
+        backupCount=14,
+        encoding="utf-8",
+    )
+    _api_calls_handler.setFormatter(JsonFormatter())
+    _api_calls_logger = logging.getLogger("api_calls")
+    _api_calls_logger.setLevel(logging.INFO)
+    _api_calls_logger.addHandler(_api_calls_handler)
+    _api_calls_logger.propagate = False
+
+    # Silence per-request INFO noise from ORATS modules so trade-pilot.log
+    # is not flooded by individual API call lines (moved to api_calls.jsonl).
+    logging.getLogger("data.orats_historical").setLevel(logging.WARNING)
+    logging.getLogger("data.orats_client").setLevel(logging.WARNING)
+
     logger.info("Mode: %s", "PRODUCTION" if settings.RENDER else "LOCAL")
     logger.info("Dry Run: %s", settings.DRY_RUN)
     logger.info("Watchlist: %s", settings.WATCHLIST)

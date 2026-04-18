@@ -131,7 +131,46 @@ class ApiLedger:
                         job_name=job_name,
                         blocked_reason=reason,
                     )
+                    self._emit_api_log(api, endpoint, symbol, False, None, None, reason, job_name)
                     raise OratsQuotaExceeded(reason=reason, usage=usage)
+
+    # ── structured api_calls log ──────────────────────────────────────────
+
+    def _emit_api_log(
+        self,
+        api: str,
+        endpoint: str,
+        symbol: Optional[str],
+        cache_hit: bool,
+        status_code: Optional[int],
+        duration_ms: Optional[int],
+        blocked_reason: Optional[str],
+        job_name: Optional[str],
+    ) -> None:
+        """Emit one line to the api_calls structured logger.
+
+        Safe to call even if the logger has no handlers (NullHandler default).
+        Never raises.
+        """
+        try:
+            _api_log = logging.getLogger("api_calls")
+            if _api_log.hasHandlers() or _api_log.propagate:
+                _api_log.info(
+                    "",
+                    extra={
+                        "api": api,
+                        "endpoint": endpoint,
+                        "symbol": symbol,
+                        "status": status_code,
+                        "cache_hit": cache_hit,
+                        "duration_ms": duration_ms,
+                        "blocked_reason": blocked_reason,
+                        "pid": os.getpid(),
+                        "job_name": job_name,
+                    },
+                )
+        except Exception:
+            pass  # logging failure must never affect the caller
 
     def record(
         self,
@@ -169,6 +208,7 @@ class ApiLedger:
                 job_name=job_name,
                 blocked_reason=None,
             )
+        self._emit_api_log(api, endpoint, symbol, cache_hit, status_code, duration_ms, None, job_name)
 
     def get_usage(self, api: str) -> dict:
         """Return current usage counters and caps for *api*.
