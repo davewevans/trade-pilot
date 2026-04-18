@@ -647,7 +647,40 @@ def run() -> None:
                         symbols = settings.IRON_CONDOR_WATCHLIST or settings.WATCHLIST
                     else:
                         symbols = settings.SPREAD_WATCHLIST or settings.WATCHLIST
-                    for sym in symbols:
+
+                    # ── Pre-filter: cheap gates before expensive ctx_builder.build() calls ──
+                    from data.spread_screen import screen_spread_candidates
+                    from data.orats_client import ORATSClient as _ORATSClient
+                    from data import market_data as _mkt
+                    _regime = (shared_context or {}).get("confirmed_market_regime", "NEUTRAL")
+                    _iv_env = (shared_context or {}).get("iv_environment", "NORMAL")
+                    _screen_survivors, _screen_rejections = screen_spread_candidates(
+                        symbols=list(symbols),
+                        strategy_name=strategy_name,
+                        regime=_regime,
+                        iv_env=_iv_env,
+                        orats_client=_ORATSClient(),
+                        earnings_fn=_mkt.get_earnings_calendar,
+                    )
+                    _reason_counts: dict[str, int] = {}
+                    for _r in _screen_rejections:
+                        _reason_counts[_r["reason"]] = _reason_counts.get(_r["reason"], 0) + 1
+                    _reason_str = ", ".join(f"{v} {k}" for k, v in _reason_counts.items())
+                    logger.info(
+                        "Spread scan (%s): %d symbols → %d survivors. Rejected: %s",
+                        strategy_name, len(list(symbols)), len(_screen_survivors),
+                        _reason_str if _reason_str else "none",
+                    )
+                    try:
+                        _screen_path = settings.SNAPSHOTS_DIR / f"spread_screen_{strategy_name}.json"
+                        _screen_path.write_text(json.dumps(_screen_rejections, indent=2))
+                    except Exception:
+                        logger.warning(
+                            "Failed to write spread screen snapshot for %s",
+                            strategy_name, exc_info=True,
+                        )
+
+                    for sym in _screen_survivors:
                         try:
                             candidate_ctx = ctx_builder.build(sym, "IDLE")
                         except Exception:
