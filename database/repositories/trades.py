@@ -2,6 +2,8 @@
 
 import sqlite3
 
+from database.db import db_retry
+
 
 _SELL_TYPES = {"SELL_PUT", "SELL_CALL", "SELL_BULL_PUT_SPREAD", "SELL_BEAR_CALL_SPREAD",
                "SELL_IRON_CONDOR", "SELL_LONG_CALL_VERTICAL"}
@@ -37,6 +39,7 @@ class TradeRepository:
     def __init__(self, conn: sqlite3.Connection):
         self._conn = conn
 
+    @db_retry()
     def insert(self, trade: dict) -> int:
         """Insert a new trade row. Returns the new ``id``.
 
@@ -87,6 +90,7 @@ class TradeRepository:
         ).fetchall()
         return [dict(r) for r in rows]
 
+    @db_retry()
     def update_fill(self, alpaca_order_id: str, fill_data: dict) -> None:
         """Update fill fields for a single order. Silently no-ops
         if the order_id does not exist.

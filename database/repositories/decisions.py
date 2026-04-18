@@ -3,6 +3,8 @@
 import json
 import sqlite3
 
+from database.db import db_retry
+
 
 def _row_to_dict(row: sqlite3.Row) -> dict:
     d = dict(row)
@@ -28,6 +30,7 @@ class DecisionRepository:
     def __init__(self, conn: sqlite3.Connection):
         self._conn = conn
 
+    @db_retry()
     def insert(self, decision: dict) -> int:
         """Insert a new decision row. Returns the new ``id``.
 

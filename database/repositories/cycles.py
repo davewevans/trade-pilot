@@ -4,6 +4,8 @@ import sqlite3
 import uuid
 from datetime import datetime, timezone
 
+from database.db import db_retry
+
 
 class CycleRepository:
     """Persistence for income cycles (wheel + spread)."""
@@ -11,6 +13,7 @@ class CycleRepository:
     def __init__(self, conn: sqlite3.Connection):
         self._conn = conn
 
+    @db_retry()
     def insert(self, cycle: dict) -> str:
         """Insert a new cycle row. Returns the ``cycle_id``.
 
@@ -55,6 +58,7 @@ class CycleRepository:
         ).fetchone()
         return dict(row) if row else None
 
+    @db_retry()
     def close_cycle(
         self, cycle_id: str, outcome: str, total_premium: float,
     ) -> None:

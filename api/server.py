@@ -300,9 +300,7 @@ def _open_db() -> sqlite3.Connection | None:
         return None
 
 
-_HEARTBEAT_PATH = DATA_DIR / "heartbeat.json"
-_HB_CHECK_STATE_PATH = DATA_DIR / "heartbeat_check_state.json"
-
+# Heartbeat paths — defined after DATA_DIR below.
 # Market-hours window for heartbeat checks (America/New_York).
 _HB_MARKET_OPEN_H = 6       # 6:00 AM ET
 _HB_MARKET_CLOSE_H = 16     # 4:00 PM ET
@@ -473,6 +471,8 @@ DATA_DIR = settings.DATA_DIR
 JOURNAL_PATH = settings.JOURNAL_PATH
 LOCK_PATH = DATA_DIR / "HALTED.lock"
 HALT_AUDIT_PATH = DATA_DIR / "halt_audit.jsonl"
+_HEARTBEAT_PATH = DATA_DIR / "heartbeat.json"
+_HB_CHECK_STATE_PATH = DATA_DIR / "heartbeat_check_state.json"
 DB_PATH = settings.DATABASE_PATH
 
 
@@ -2440,6 +2440,14 @@ async def research_recommendations_apply(request: Request):
                             )
                         },
                     )
+
+        # CROSS-PROCESS WRITE TARGET: watchlist_recommendations is the only
+        # table written by both the API process (operator decisions below, via
+        # repo.record_decision()) and the scheduler process (weekly_research.py
+        # batch inserts via insert_batch()). @db_retry() on both write methods
+        # handles SQLite WAL lock contention between the two writers. If you add
+        # new cross-process write paths, document them here and confirm
+        # @db_retry() coverage.
 
         # Apply accepted changes
         applied = 0
