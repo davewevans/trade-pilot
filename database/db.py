@@ -368,6 +368,7 @@ _MIGRATIONS: tuple[str, ...] = (
     "ALTER TABLE decisions ADD COLUMN research_metadata_json TEXT",
     "ALTER TABLE decisions ADD COLUMN skip_gate TEXT",
     "ALTER TABLE decisions ADD COLUMN skip_reason_code TEXT",
+    "ALTER TABLE trades ADD COLUMN is_recovery_order INTEGER NOT NULL DEFAULT 0",
     """UPDATE watchlist_recommendations
    SET operator_decision = 'expired'
    WHERE operator_decision IS NULL

@@ -172,6 +172,24 @@ class SpreadTracker:
             "Spread %s → PENDING_CLOSE order=%s", spread_id, close_order_id,
         )
 
+    def set_recovery_close_order_id(self, spread_id: str, order_id: str) -> None:
+        """Tag a spread with a recovery close order ID for idempotency.
+
+        Called by the startup reconciler when it places a sell-to-close order
+        for an orphaned long leg.  If the reconciler restarts before the order
+        fills, the tagged ID is detected on the next run so the order is not
+        double-placed.
+        """
+        s = self._find(spread_id)
+        if not s:
+            logger.warning("set_recovery_close_order_id: spread %s not found", spread_id)
+            return
+        s["recovery_close_order_id"] = order_id
+        self._save()
+        logger.info(
+            "Spread %s tagged with recovery_close_order_id=%s", spread_id, order_id
+        )
+
     def revert_to_open(self, spread_id: str, reason: str = "") -> None:
         """Roll PENDING_CLOSE back to OPEN if the close order was canceled."""
         s = self._find(spread_id)

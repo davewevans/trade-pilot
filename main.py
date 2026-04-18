@@ -330,6 +330,13 @@ def validate_startup() -> None:
     except Exception:
         logger.exception("Startup reconciler failed — continuing without reconciliation")
 
+    if reconciler_summary.get("halted"):
+        logger.critical(
+            "Startup reconciler wrote HALTED.lock — aborting bot startup. "
+            "Investigate partial fills and delete HALTED.lock manually to resume."
+        )
+        sys.exit(1)
+
     # Liveness notification — fire after startup reconciler so we can
     # include the reconciler summary in the message.
     try:
