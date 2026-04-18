@@ -245,6 +245,13 @@ class Settings:
             os.getenv("FORCE_CLOSE_ENABLED", "true").lower() == "true"
         )
 
+        # Strategy health dashboard page. Read-only; defaults on.
+        # Set STRATEGY_HEALTH_PAGE_ENABLED=false to hide the sidebar link
+        # and 404 the API endpoint. Does not affect any strategy logic.
+        self.STRATEGY_HEALTH_PAGE_ENABLED: bool = (
+            os.getenv("STRATEGY_HEALTH_PAGE_ENABLED", "true").lower() == "true"
+        )
+
         # Create required directories
         self.DATA_DIR.mkdir(parents=True, exist_ok=True)
         self.LOG_DIR.mkdir(parents=True, exist_ok=True)

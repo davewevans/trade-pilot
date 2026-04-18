@@ -639,6 +639,8 @@ def health():
         # populates the version badge without needing a separate fetch.
         "version": settings.VERSION,
         "version_date": settings.VERSION_DATE,
+        # Feature flags — read by the frontend on each 30s health poll.
+        "strategy_health_enabled": settings.STRATEGY_HEALTH_PAGE_ENABLED,
     }
 
 
@@ -3529,6 +3531,53 @@ async def evaluations_mark_reviewed(month: str, request: Request):
     except Exception:
         logger.exception("evaluations mark-reviewed POST failed for %s", month)
         return JSONResponse(status_code=500, content={"error": "mark-reviewed failed"})
+    finally:
+        conn.close()
+
+
+# ── Strategy health funnel ───────────────────────────────────────────────────
+
+
+@app.get("/api/strategy-health")
+def strategy_health(
+    weeks: int = Query(12, ge=1, le=52),
+    strategy: str | None = Query(None),
+):
+    """Weekly funnel per strategy for the last N weeks.
+
+    Paper-trading context: the returned counts reflect Claude decision quality
+    and guardrail behaviour. They do NOT reflect strategy profitability —
+    paper fills are unrealistic (mid-price, no slippage, no fees).
+
+    Returns:
+        {
+          "weeks": [...],          # list of funnel rows (see StrategyHealthRepository)
+          "generated_at": "<iso>",
+          "paper_mode": true
+        }
+    """
+    if not settings.STRATEGY_HEALTH_PAGE_ENABLED:
+        return JSONResponse(status_code=404, content={"error": "not found"})
+
+    conn = _open_db()
+    if conn is None:
+        return JSONResponse(status_code=503, content={"error": "database unavailable"})
+    try:
+        from database.repositories.strategy_health import StrategyHealthRepository
+        repo = StrategyHealthRepository(conn)
+        strategy_filter = [strategy] if strategy else None
+        rows = repo.get_strategy_health_funnel(
+            weeks_back=weeks,
+            strategy_types=strategy_filter,
+        )
+        return {
+            "weeks": rows,
+            "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "paper_mode": True,
+        }
+    except Exception:
+        logger.exception("strategy-health endpoint failed")
+        return JSONResponse(status_code=500, content={"error": "internal error"})
     finally:
         conn.close()
 

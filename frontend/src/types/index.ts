@@ -127,6 +127,7 @@ export interface HealthStatus {
   halted: boolean
   version?: string
   version_date?: string
+  strategy_health_enabled?: boolean
 }
 
 export interface HaltInfo {

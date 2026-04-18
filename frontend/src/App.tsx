@@ -27,6 +27,7 @@ import { Recommendations } from './pages/Recommendations'
 import { ResearchGuide } from './pages/ResearchGuide'
 import { Evaluations } from './pages/Evaluations'
 import { EvaluationDetail } from './pages/EvaluationDetail'
+import { StrategyHealth } from './pages/StrategyHealth'
 
 export function App() {
   return (
@@ -44,6 +45,7 @@ export function App() {
           <Route path="/account/:account" element={<AccountDetail />} />
           <Route path="/evaluations" element={<Evaluations />} />
           <Route path="/evaluations/:month" element={<EvaluationDetail />} />
+          <Route path="/strategy-health" element={<StrategyHealth />} />
           <Route path="/decisions" element={<DecisionLog />} />
           <Route path="/reasoning" element={<ReasoningExplorer />} />
           <Route path="/guardrails" element={<Guardrails />} />
