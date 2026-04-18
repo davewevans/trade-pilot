@@ -4,6 +4,7 @@ import type {
   DecisionsResponse,
   EquityHistory,
   FillQualityResponse,
+  HaltInfo,
   HealthStatus,
   NtaEventsResponse,
   Performance,
@@ -383,6 +384,30 @@ export const api = {
 
   oratsUsage: (): Promise<ORATSUsageResponse> =>
     get<ORATSUsageResponse>('/api/orats/usage'),
+
+  haltStatus: () => get<HaltInfo>('/api/halt-status'),
+
+  halt: async (reason?: string): Promise<HaltInfo> => {
+    const res = await fetchWithRetry(`${BASE}/api/halt`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ reason: reason ?? '' }),
+    })
+    if (res.status === 401) { _handleUnauthorized(); throw new Error('Unauthorized') }
+    // 200 = halted now, 409 = already halted — both return the current halt info
+    return (await res.json()) as HaltInfo
+  },
+
+  resume: async (): Promise<HaltInfo> => {
+    const res = await fetchWithRetry(`${BASE}/api/resume`, {
+      method: 'POST',
+      credentials: 'include',
+    })
+    if (res.status === 401) { _handleUnauthorized(); throw new Error('Unauthorized') }
+    if (!res.ok) throw new Error(`API error ${res.status}: resume`)
+    return (await res.json()) as HaltInfo
+  },
 
   watchlist: () =>
     get<{ wheel: string[]; iron_condor: string[]; spreads: string[]; updated_at: string | null }>('/api/watchlist'),

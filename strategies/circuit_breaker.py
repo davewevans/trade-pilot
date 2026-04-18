@@ -11,8 +11,9 @@ manual deletion to resume trading.
 
 import json
 import logging
+import os
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -301,11 +302,31 @@ class CircuitBreaker:
         except Exception:
             pass
         if self._lock_path.exists():
-            logger.warning(
-                "TRADING HALTED — lock file exists at %s. "
-                "Delete this file manually to resume trading.",
-                self._lock_path,
-            )
+            try:
+                text = self._lock_path.read_text(encoding="utf-8").strip()
+                if text:
+                    info = json.loads(text)
+                    source = info.get("source", "unknown")
+                    halted_at = info.get("halted_at") or info.get("timestamp", "unknown")
+                    reason = info.get("reason", "")
+                    logger.warning(
+                        "TRADING HALTED — lock file at %s. Source: %s, halted_at: %s%s. "
+                        "Use dashboard or delete this file manually to resume.",
+                        self._lock_path, source, halted_at,
+                        f", reason: {reason}" if reason else "",
+                    )
+                else:
+                    logger.warning(
+                        "TRADING HALTED — lock file exists at %s (empty). "
+                        "Use dashboard or delete this file manually to resume.",
+                        self._lock_path,
+                    )
+            except Exception:
+                logger.warning(
+                    "TRADING HALTED — lock file exists at %s (could not parse contents). "
+                    "Use dashboard or delete this file manually to resume.",
+                    self._lock_path,
+                )
             return True
         return False
 
@@ -393,24 +414,26 @@ class CircuitBreaker:
 
     # ── private helpers ─────────────────────────────────────
 
-    def _write_halt_lock(self, reason: str) -> None:
-        """Write the HALTED.lock file. This requires manual deletion to resume."""
+    def _write_halt_lock(self, reason: str, source: str = "circuit_breaker") -> None:
+        """Write the HALTED.lock file atomically. This requires manual deletion or
+        the dashboard Resume action to clear."""
         if self._lock_path.exists():
             return  # already locked
         self.halted_reason = reason
         self._lock_path.parent.mkdir(parents=True, exist_ok=True)
-        self._lock_path.write_text(
-            json.dumps({
-                "timestamp": datetime.now().isoformat(timespec="seconds"),
-                "reason": reason,
-                "equity_at_halt": self.current_equity,
-                "peak_equity": self.peak_equity,
-            }, indent=2),
-            encoding="utf-8",
-        )
+        payload = json.dumps({
+            "halted_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "source": source,
+            "reason": reason,
+            "equity_at_halt": self.current_equity,
+            "peak_equity": self.peak_equity,
+        }, indent=2)
+        tmp_path = self._lock_path.with_name("HALTED.lock.tmp")
+        tmp_path.write_text(payload, encoding="utf-8")
+        os.replace(str(tmp_path), str(self._lock_path))
         logger.critical(
-            "TRADING HALTED — lock file written: %s. Reason: %s",
-            self._lock_path, reason,
+            "TRADING HALTED — lock file written: %s. Source: %s. Reason: %s",
+            self._lock_path, source, reason,
         )
         try:
             from notifications import notify

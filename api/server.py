@@ -344,6 +344,7 @@ SNAPSHOTS = settings.SNAPSHOTS_DIR
 DATA_DIR = settings.DATA_DIR
 JOURNAL_PATH = settings.JOURNAL_PATH
 LOCK_PATH = DATA_DIR / "HALTED.lock"
+HALT_AUDIT_PATH = DATA_DIR / "halt_audit.jsonl"
 DB_PATH = settings.DATABASE_PATH
 
 
@@ -395,6 +396,48 @@ def _read_jsonl(path: Path) -> list[dict]:
     except Exception:
         logger.exception("Failed to read %s", path)
     return entries
+
+
+def _read_halt_info() -> dict:
+    """Parse HALTED.lock and return a halt-status dict.
+
+    File existence is the authoritative halt signal. Contents are informational.
+    Handles empty files (legacy) and the new JSON format transparently.
+    """
+    if not LOCK_PATH.exists():
+        return {"halted": False}
+    try:
+        text = LOCK_PATH.read_text(encoding="utf-8").strip()
+        if not text:
+            return {"halted": True, "halted_at": None, "source": "unknown", "reason": ""}
+        data = json.loads(text)
+        return {
+            "halted": True,
+            # Support old format (timestamp) and new format (halted_at)
+            "halted_at": data.get("halted_at") or data.get("timestamp"),
+            "source": data.get("source", "unknown"),
+            "reason": data.get("reason", ""),
+        }
+    except Exception:
+        logger.warning("Failed to parse HALTED.lock contents", exc_info=True)
+        return {"halted": True, "halted_at": None, "source": "unknown", "reason": ""}
+
+
+def _append_halt_audit(event: str, source: str, reason: str = "") -> None:
+    """Append a halt or resume event to the audit log."""
+    entry = {
+        "event": event,
+        "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "source": source,
+        "reason": reason,
+        "user": "dashboard",
+    }
+    try:
+        HALT_AUDIT_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with open(HALT_AUDIT_PATH, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry) + "\n")
+    except Exception:
+        logger.exception("Failed to append halt audit log")
 
 
 # ── endpoints ───────────────────────────────────────────────
@@ -469,6 +512,48 @@ def health():
         "version": settings.VERSION,
         "version_date": settings.VERSION_DATE,
     }
+
+
+@app.get("/api/halt-status")
+def halt_status():
+    """Return current halt state with metadata from HALTED.lock."""
+    return _read_halt_info()
+
+
+@app.post("/api/halt")
+async def halt_bot(request: Request):
+    """Write HALTED.lock and log the event. Returns 409 if already halted."""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    reason = (body.get("reason") or "").strip()
+
+    if LOCK_PATH.exists():
+        return JSONResponse(status_code=409, content=_read_halt_info())
+
+    payload = json.dumps({
+        "halted_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "source": "dashboard",
+        "reason": reason,
+    }, indent=2)
+    tmp_path = LOCK_PATH.with_name("HALTED.lock.tmp")
+    tmp_path.write_text(payload, encoding="utf-8")
+    os.replace(str(tmp_path), str(LOCK_PATH))
+
+    _append_halt_audit("halt", "dashboard", reason)
+    logger.warning("Bot halted via dashboard. Reason: %r", reason)
+    return JSONResponse(content=_read_halt_info())
+
+
+@app.post("/api/resume")
+def resume_bot():
+    """Delete HALTED.lock and log the event. Idempotent if already running."""
+    _append_halt_audit("resume", "dashboard")
+    if LOCK_PATH.exists():
+        LOCK_PATH.unlink()
+        logger.info("Bot resumed via dashboard.")
+    return {"halted": False}
 
 
 _CHANGELOG_PATH = Path(__file__).resolve().parent.parent / "CHANGELOG.md"

@@ -51,7 +51,7 @@ def _write_halted_lock(reason: str) -> None:
     """Write HALTED.lock via CircuitBreaker to gate all future trading."""
     try:
         from strategies.circuit_breaker import CircuitBreaker
-        CircuitBreaker()._write_halt_lock(reason)
+        CircuitBreaker()._write_halt_lock(reason, source="startup_reconcile")
     except Exception:
         logger.exception(
             "startup_reconciler: failed to write HALTED.lock — reason: %s", reason

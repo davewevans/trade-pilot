@@ -129,6 +129,13 @@ export interface HealthStatus {
   version_date?: string
 }
 
+export interface HaltInfo {
+  halted: boolean
+  halted_at?: string | null
+  source?: string
+  reason?: string
+}
+
 export interface FillQualityResponse {
   trades_analyzed: number
   avg_slippage: number
