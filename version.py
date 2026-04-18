@@ -5,10 +5,10 @@ section to CHANGELOG.md. Other modules read this via ``settings.VERSION``
 rather than importing this file directly.
 """
 
-VERSION = "1.5.0"
-VERSION_DATE = "2026-04-17"
+VERSION = "1.6.0"
+VERSION_DATE = "2026-04-18"
 VERSION_NOTES = (
-    "Notification backends (ntfy/email) with severity routing; recommendation accuracy scorecard with "
-    "live-outcome feedback loop; skip-reason telemetry with gate-breakdown dashboard; ORATS usage "
-    "tracking; SQLite db_retry for write contention; EV-gated win-rate multiplier."
+    "9-phase ORATS quota hardening: process singleton lock, API usage ledger with rolling caps, "
+    "pre-flight budget checks, structured call logging, ntfy threshold alerts, admin kill switch, "
+    "and sweep resume safety — following the 2026-04-17 incident that exhausted the monthly budget."
 )
