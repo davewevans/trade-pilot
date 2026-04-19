@@ -9,7 +9,7 @@ evaluate whether to sell a covered call against those shares.
 
 The equity position is in context under "positions".
 
-Your effective cost basis is in context under "turnover_wheel_cost_basis":
+Your effective cost basis is in context under "wheel_cost_basis":
 - effective_cost_basis: what you effectively paid per share (assignment
   strike − all premiums collected this cycle)
 - assignment_price: the strike price at which you were assigned

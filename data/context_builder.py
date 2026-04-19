@@ -136,7 +136,7 @@ class ContextBuilder:
         # Pass e.g. "wheel" or "spreads" from the job; None = main portfolio.json.
         self._account_id = account_id
 
-    def build(self, symbol: str, wheel_state: str) -> dict:
+    def build(self, symbol: str, wheel_state: str, strategy_name: str = "wheel") -> dict:
         """Assemble the full context for Claude's decision-making.
 
         Fetches all data sources in parallel where possible.
@@ -381,14 +381,27 @@ class ContextBuilder:
         context["open_orders"] = self._fetch_orders(symbol)
 
         # ── Wheel cost basis (LONG_STOCK / SHORT_CALL only) ─
-        # Surfaced from wheel_state.json so Claude can enforce the
+        # Surfaced from the appropriate state file so Claude can enforce the
         # "CC strike must be above effective cost basis" rule.
+        # strategy_name selects which state file to read:
+        #   "wheel"         → wheel_state.json (existing behaviour)
+        #   "turnover_wheel"→ turnover_wheel_state.json
         if wheel_state in ("LONG_STOCK", "SHORT_CALL"):
             try:
-                from strategies.wheel_strategy import STATE_FILE
                 import json as _json, os as _os
-                if _os.path.exists(STATE_FILE):
-                    with open(STATE_FILE, "r") as _f:
+                if strategy_name == "wheel":
+                    from strategies.wheel_strategy import STATE_FILE as _STATE_FILE
+                elif strategy_name == "turnover_wheel":
+                    from strategies.turnover_wheel_strategy import STATE_FILE as _STATE_FILE
+                else:
+                    logger.warning(
+                        "context_builder.build: unknown strategy_name=%r — "
+                        "skipping cost-basis injection for %s",
+                        strategy_name, symbol,
+                    )
+                    _STATE_FILE = None  # type: ignore[assignment]
+                if _STATE_FILE and _os.path.exists(_STATE_FILE):
+                    with open(_STATE_FILE, "r") as _f:
                         _wstate = _json.load(_f)
                     pos = (
                         next(
@@ -409,9 +422,14 @@ class ContextBuilder:
                         ),
                         "roll_count": int(_wstate.get("roll_count", 0) or 0),
                     }
+                    # ── Turnover Wheel extra: underlying_price_at_entry ──────
+                    if strategy_name == "turnover_wheel":
+                        upae = _wstate.get("underlying_price_at_entry")
+                        context["underlying_price_at_entry"] = upae
             except Exception:
                 logger.warning(
-                    "Failed to surface wheel cost basis for %s", symbol, exc_info=True,
+                    "Failed to surface wheel cost basis for %s (strategy=%s)",
+                    symbol, strategy_name, exc_info=True,
                 )
 
         # ── Option chain (depends on technicals for price) ──

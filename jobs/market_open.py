@@ -43,6 +43,7 @@ def run() -> None:
     from strategies.iron_condor_strategy import IronCondorStrategy
     from strategies.long_call_vertical_strategy import LongCallVerticalStrategy
     from strategies.strategy_router import StrategyRouter
+    from strategies.turnover_wheel_strategy import TurnoverWheelStrategy
     from strategies.wheel_strategy import WheelStrategy
 
     # Default broker for market-open check and circuit breaker
@@ -159,6 +160,32 @@ def run() -> None:
 
     wheel_strategy = WheelStrategy(wheel_broker, liquidity_repo=_wheel_liq_repo,
                                    backtest_stats_repo=_bt_stats_repo)
+
+    try:
+        turnover_wheel_broker = make_broker("turnover_wheel")
+    except ValueError:
+        logger.warning("Turnover wheel account credentials not set — using default")
+        turnover_wheel_broker = broker
+
+    _tw_liq_repo = None
+    _tw_bt_stats_repo = None
+    if _conn is not None:
+        try:
+            from database.repositories import LiquidityRepository as _TWLiqRepo
+            _tw_liq_repo = _TWLiqRepo(_conn)
+        except Exception:
+            logger.warning("Failed to init LiquidityRepository for turnover wheel — proceeding without liquidity gating")
+        try:
+            from database.repositories import BacktestStatsRepository as _TWBtRepo
+            _tw_bt_stats_repo = _TWBtRepo(_conn)
+        except Exception:
+            logger.warning("Failed to init BacktestStatsRepository for turnover wheel — proceeding without win-rate gating")
+
+    turnover_wheel_strategy = TurnoverWheelStrategy(
+        turnover_wheel_broker,
+        liquidity_repo=_tw_liq_repo,
+        backtest_stats_repo=_tw_bt_stats_repo,
+    )
 
     try:
         ic_broker = make_broker("iron_condor")
@@ -592,6 +619,314 @@ def run() -> None:
             report_lines.append(f"**{symbol}** -- ERROR (see logs)")
 
     wheel_strategy.save_state()
+
+    # ── Turnover Wheel strategy (runs when flag is enabled) ─────────────────
+    if settings.TURNOVER_WHEEL_ENABLED:
+        for symbol in settings.TURNOVER_WHEEL_WATCHLIST:
+            try:
+                from strategies.turnover_wheel_strategy import TurnoverWheelState as _TWState
+                tw_state = turnover_wheel_strategy.get_current_state(symbol)
+                _tw_pcv = "OPEN" if tw_state.value == "IDLE" else "MANAGE"
+                logger.info("%s turnover wheel state: %s", symbol, tw_state.value)
+
+                context = ctx_builder.build(symbol, tw_state.value, strategy_name="turnover_wheel")
+                logger.info(ContextBuilder.summarize_for_log(context))
+
+                try:
+                    sw.write_context_snapshot(context)
+                except Exception as e:
+                    logger.warning("Failed to write context snapshot for turnover wheel %s: %s", symbol, e)
+
+                # ── Liquidity gate ──────────────────────────────────────
+                _tw_liq_skip = turnover_wheel_strategy.evaluate_entry_liquidity(symbol, context, tw_state)
+                if _tw_liq_skip is not None:
+                    logger.info(
+                        "%s turnover wheel liquidity Tier D skip (%s): %s",
+                        symbol, tw_state.value, _tw_liq_skip.get("reasoning"),
+                    )
+                    journal.append({
+                        "symbol": None,
+                        "underlying": symbol,
+                        "wheel_state": tw_state.value,
+                        "action": "skip",
+                        "skip_reason": _tw_liq_skip.get("skip_reason", "below_liquidity_floor"),
+                        "reasoning": _tw_liq_skip.get("reasoning", ""),
+                        "confidence": None,
+                        "status": "skipped",
+                        "strategy_type": "turnover_wheel_csp" if tw_state.value == "IDLE" else "turnover_wheel_cc",
+                        "iv_rank": context.get("iv_rank"),
+                    })
+                    if recorder is not None:
+                        from strategies.skip_reasons import SkipGate, SkipReason
+                        recorder.record_decision(
+                            strategy_type="turnover_wheel",
+                            underlying=symbol,
+                            action="SKIP",
+                            wheel_state=tw_state.value,
+                            reasoning=_tw_liq_skip.get("reasoning"),
+                            context=context,
+                            research_metadata=_tw_liq_skip.get("_research"),
+                            skip_gate=SkipGate.LIQUIDITY_FLOOR,
+                            skip_reason_code=SkipReason.LIQUIDITY_TIER_D,
+                            job_run_id=job_run_id,
+                            pre_check_verdict="SKIP",
+                            prompt_version=None,
+                        )
+                    report_lines.append(
+                        f"**{symbol}** [TW] -- SKIPPED (liquidity floor: {_tw_liq_skip.get('skip_reason')})"
+                    )
+                    continue
+
+                import time as _time
+                _t0_ask = _time.monotonic()
+                decision = advisor.ask_turnover_wheel(context, tw_state)
+                _elapsed_ask_ms = int((_time.monotonic() - _t0_ask) * 1000)
+                if recorder is not None:
+                    recorder.record_token_usage(
+                        strategy_type="turnover_wheel",
+                        underlying=symbol,
+                        model=advisor.model,
+                        usage=advisor.prompt_cache_stats or {},
+                        response_time_ms=_elapsed_ask_ms,
+                        decision_action=decision.get("action"),
+                    )
+                logger.info(
+                    "%s turnover wheel Claude decision: %s (confidence: %s)",
+                    symbol, decision.get("action"), decision.get("confidence"),
+                )
+
+                if decision.get("action") in ("skip", "hold"):
+                    from strategies.skip_codes import normalize_skip_code
+                    journal.append({
+                        "symbol": None,
+                        "underlying": symbol,
+                        "wheel_state": tw_state.value,
+                        "action": decision.get("action"),
+                        "skip_reason": decision.get("skip_reason") or decision.get("reasoning", ""),
+                        "skip_code": normalize_skip_code(decision.get("skip_code")),
+                        "reasoning": decision.get("reasoning", ""),
+                        "confidence": decision.get("confidence"),
+                        "status": "skipped",
+                        "strategy_type": "turnover_wheel_csp" if tw_state.value == "IDLE" else "turnover_wheel_cc",
+                        "iv_rank": context.get("iv_rank"),
+                        "iv_environment": context.get("iv_environment"),
+                        "vix": (context.get("macro") or {}).get("vix"),
+                        "market_regime": context.get("confirmed_market_regime"),
+                    })
+                    if recorder is not None:
+                        from strategies.skip_reasons import SkipGate, SkipReason
+                        recorder.record_decision(
+                            strategy_type="turnover_wheel", underlying=symbol,
+                            action="SKIP",
+                            wheel_state=tw_state.value,
+                            reasoning=decision.get("reasoning"),
+                            confidence=decision.get("confidence"),
+                            context=context,
+                            research_metadata=context.get("_research"),
+                            skip_gate=SkipGate.CLAUDE_SKIP,
+                            skip_reason_code=SkipReason.CLAUDE_SKIP,
+                            job_run_id=job_run_id,
+                            pre_check_verdict=_tw_pcv,
+                            prompt_version=advisor.prompt_version,
+                        )
+                    report_lines.append(
+                        f"**{symbol}** [TW] -- {decision.get('action').upper()} "
+                        f"(Claude: {(decision.get('skip_reason') or decision.get('reasoning', ''))[:60]})"
+                    )
+                    continue
+
+                acct = context.get("account") or turnover_wheel_broker.get_account()
+                pos = context.get("positions") or []
+                is_valid, rejection = guardrails.validate(decision, acct, pos, context)
+
+                if not is_valid:
+                    logger.warning("%s [TW] GUARDRAIL REJECTED: %s", symbol, rejection)
+                    try:
+                        sw.write_decision(
+                            decision_dict=decision, reasoning=decision.get("reasoning", ""),
+                            action_taken=False, underlying=symbol, guardrail_rejection=rejection,
+                        )
+                    except Exception as e:
+                        logger.warning("Failed to write decision snapshot: %s", e)
+                    if recorder is not None:
+                        from strategies.skip_reasons import SkipGate, SkipReason
+                        recorder.record_decision(
+                            strategy_type="turnover_wheel", underlying=symbol,
+                            action="SKIP",
+                            wheel_state=tw_state.value,
+                            reasoning=f"Guardrail rejected: {rejection}",
+                            confidence=decision.get("confidence"),
+                            context=context,
+                            research_metadata=context.get("_research"),
+                            skip_gate=SkipGate.GUARDRAIL,
+                            skip_reason_code=SkipReason.GUARDRAIL_OTHER,
+                            job_run_id=job_run_id,
+                            pre_check_verdict=_tw_pcv,
+                            prompt_version=advisor.prompt_version,
+                        )
+                    from strategies.guardrails import Guardrails as _G
+                    journal.append({
+                        "symbol": decision.get("symbol"), "underlying": symbol,
+                        "wheel_state": tw_state.value,
+                        "action": "skip", "status": "rejected",
+                        "action_proposed": decision.get("action"),
+                        "rejection_reason": rejection,
+                        "skip_reason": rejection,
+                        "skip_code": _G.classify_rejection(rejection),
+                        "strategy_type": "turnover_wheel_csp" if tw_state.value == "IDLE" else "turnover_wheel_cc",
+                        "iv_rank": context.get("iv_rank"),
+                        "iv_environment": context.get("iv_environment"),
+                        "vix": (context.get("macro") or {}).get("vix"),
+                        "market_regime": context.get("confirmed_market_regime"),
+                        "delta": decision.get("delta"),
+                        "dte": decision.get("dte"),
+                    })
+                    report_lines.append(f"**{symbol}** [TW] -- SKIPPED (guardrail: {rejection})")
+                    continue
+
+                try:
+                    sw.write_decision(
+                        decision_dict=decision, reasoning=decision.get("reasoning", ""),
+                        action_taken=not settings.DRY_RUN, underlying=symbol,
+                    )
+                except Exception as e:
+                    logger.warning("Failed to write decision snapshot: %s", e)
+
+                tw_decision_id_db = None
+                tw_cycle_id_db = None
+                if recorder is not None:
+                    tw_decision_id_db, tw_cycle_id_db = recorder.record_decision(
+                        strategy_type="turnover_wheel", underlying=symbol,
+                        action=decision.get("action"),
+                        wheel_state=tw_state.value,
+                        reasoning=decision.get("reasoning"),
+                        confidence=decision.get("confidence"),
+                        context=context,
+                        research_metadata=context.get("_research"),
+                        job_run_id=job_run_id,
+                        pre_check_verdict=_tw_pcv,
+                        prompt_version=advisor.prompt_version,
+                    )
+
+                if settings.DRY_RUN:
+                    logger.info("DRY RUN - would execute (turnover_wheel): %s", json.dumps(decision, default=str))
+                    report_lines.append(f"**{symbol}** [TW] -- DRY RUN: {decision.get('action')}")
+                    continue
+
+                # ── Circuit-breaker entry gate ───────────────────────────
+                tw_decision_action = decision.get("action")
+                if tw_decision_action in WHEEL_ENTRY_ACTIONS:
+                    cb_skip_reason = None
+                    if block_all_new_entries:
+                        cb_skip_reason = "circuit breaker RED — new entries blocked"
+                    elif reduced_risk:
+                        conf = decision.get("confidence") or 0
+                        try:
+                            conf = float(conf)
+                        except (TypeError, ValueError):
+                            conf = 0
+                        if conf < WHEEL_YELLOW_CONFIDENCE_FLOOR:
+                            cb_skip_reason = (
+                                f"circuit breaker YELLOW — confidence {conf:.2f} "
+                                f"< {WHEEL_YELLOW_CONFIDENCE_FLOOR} required"
+                            )
+                    if cb_skip_reason:
+                        logger.warning("%s [TW] CB GATED: %s", symbol, cb_skip_reason)
+                        journal.append({
+                            "symbol": decision.get("symbol"), "underlying": symbol,
+                            "wheel_state": tw_state.value, "action": "skip",
+                            "reasoning": cb_skip_reason, "status": "skipped",
+                            "skip_reason": cb_skip_reason,
+                            "strategy_type": "turnover_wheel_csp" if tw_state.value == "IDLE" else "turnover_wheel_cc",
+                            "confidence": decision.get("confidence"),
+                        })
+                        if recorder is not None:
+                            from strategies.skip_reasons import SkipGate, SkipReason
+                            _cb_reason_code = (
+                                SkipReason.CIRCUIT_BREAKER_RED
+                                if block_all_new_entries
+                                else SkipReason.CIRCUIT_BREAKER_YELLOW
+                            )
+                            recorder.record_decision(
+                                strategy_type="turnover_wheel", underlying=symbol,
+                                action="SKIP",
+                                wheel_state=tw_state.value,
+                                reasoning=cb_skip_reason,
+                                confidence=decision.get("confidence"),
+                                context=context,
+                                skip_gate=SkipGate.CIRCUIT_BREAKER,
+                                skip_reason_code=_cb_reason_code,
+                                job_run_id=job_run_id,
+                                pre_check_verdict=_tw_pcv,
+                                prompt_version=advisor.prompt_version,
+                            )
+                        report_lines.append(f"**{symbol}** [TW] -- SKIPPED ({cb_skip_reason})")
+                        continue
+
+                result = execute_decision(turnover_wheel_broker, decision)
+                order_id = result.get("id") if result else None
+                if result:
+                    logger.info("%s [TW] order executed: %s", symbol, order_id)
+                else:
+                    logger.info("%s [TW] no order (action=%s)", symbol, decision.get("action"))
+
+                if (
+                    result
+                    and tw_decision_action in ("sell_put", "sell_call")
+                    and decision.get("limit_price") is not None
+                ):
+                    turnover_wheel_strategy.total_premium_collected += abs(
+                        float(decision.get("limit_price"))
+                    )
+                    turnover_wheel_strategy.save_state()
+                elif result and tw_decision_action == "roll":
+                    turnover_wheel_strategy.roll_count += 1
+                    lp = decision.get("limit_price")
+                    if lp is not None:
+                        turnover_wheel_strategy.total_premium_collected += float(lp)
+                    turnover_wheel_strategy.save_state()
+
+                if recorder is not None and order_id and tw_cycle_id_db:
+                    recorder.record_trade(
+                        cycle_id=tw_cycle_id_db,
+                        decision_id=tw_decision_id_db,
+                        alpaca_order_id=order_id,
+                        underlying=symbol,
+                        strategy_type="turnover_wheel",
+                        action=decision.get("action"),
+                        symbol=decision.get("symbol", ""),
+                        limit_price=decision.get("limit_price") or 0.0,
+                        contracts=int(decision.get("qty") or 1),
+                    )
+
+                journal.append({
+                    "symbol": decision.get("symbol"), "underlying": symbol,
+                    "wheel_state": tw_state.value, "action": decision.get("action"),
+                    "contract_symbol": decision.get("symbol"), "qty": decision.get("qty"),
+                    "limit_price": decision.get("limit_price"),
+                    "confidence": decision.get("confidence"),
+                    "reasoning": decision.get("reasoning"), "order_id": order_id,
+                    "status": "submitted" if result else decision.get("action"),
+                    "fill_status": "pending" if result else None,
+                    "strategy_type": "turnover_wheel_csp" if tw_state.value == "IDLE" else "turnover_wheel_cc",
+                    "iv_rank": context.get("iv_rank"),
+                    "iv_environment": context.get("iv_environment"),
+                    "vix": (context.get("macro") or {}).get("vix"),
+                    "market_regime": context.get("confirmed_market_regime"),
+                    "delta": decision.get("delta"),
+                    "dte": decision.get("dte"),
+                    "skip_reason": decision.get("skip_reason"),
+                })
+                report_lines.append(
+                    f"**{symbol}** [TW] -- {decision.get('action')} "
+                    f"(confidence: {decision.get('confidence')})"
+                )
+
+            except Exception:
+                logger.exception("Turnover wheel dispatch failed for %s", symbol)
+                report_lines.append(f"**{symbol}** [TW] -- ERROR (see logs)")
+
+        turnover_wheel_strategy.save_state()
 
     # ── Spread strategies (router-driven) ───────────────────
     # Build context once for routing (use first watchlist symbol)
