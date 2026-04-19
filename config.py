@@ -277,10 +277,7 @@ class Settings:
         return self._account_manager
 
     def _load_watchlist(self) -> None:
-        """Load WATCHLIST and SPREAD_WATCHLIST from data/watchlist.json.
-
-        # DEPRECATED: Watchlists now live in account_config.json per account.
-        """
+        """Load strategy watchlists from data/watchlist.json."""
         watchlist_path = self.DATA_DIR / "watchlist.json"
         if watchlist_path.exists():
             try:
@@ -289,10 +286,13 @@ class Settings:
                 self.CONSERVATIVE_WHEEL_WATCHLIST: list[str] = data.get("conservative_wheel", list(self.WATCHLIST))
                 self.SPREAD_WATCHLIST: list[str] = data.get("spreads", list(self.WATCHLIST))
                 self.IRON_CONDOR_WATCHLIST: list[str] = data.get("iron_condor", list(self.SPREAD_WATCHLIST))
+                self.IRON_BUTTERFLY_WATCHLIST: list[str] = data.get("iron_butterfly", list(self.IRON_CONDOR_WATCHLIST))
+                self.CALENDAR_SPREAD_WATCHLIST: list[str] = data.get("calendar_spread", list(self.SPREAD_WATCHLIST))
                 log.info(
-                    "Loaded watchlist from %s: %d wheel, %d conservative_wheel, %d iron_condor, %d spreads",
+                    "Loaded watchlist from %s: %d wheel, %d conservative_wheel, %d iron_condor, %d iron_butterfly, %d spreads, %d calendar_spread",
                     watchlist_path, len(self.WATCHLIST), len(self.CONSERVATIVE_WHEEL_WATCHLIST),
-                    len(self.IRON_CONDOR_WATCHLIST), len(self.SPREAD_WATCHLIST),
+                    len(self.IRON_CONDOR_WATCHLIST), len(self.IRON_BUTTERFLY_WATCHLIST),
+                    len(self.SPREAD_WATCHLIST), len(self.CALENDAR_SPREAD_WATCHLIST),
                 )
                 return
             except Exception:
@@ -303,12 +303,14 @@ class Settings:
         self.WATCHLIST = ["AAPL", "SPY", "MSFT", "AMD", "JPM", "XOM"]
         self.CONSERVATIVE_WHEEL_WATCHLIST = list(self.WATCHLIST)
         self.IRON_CONDOR_WATCHLIST = ["SPY", "QQQ", "IWM", "AAPL", "MSFT", "GOOGL", "AMZN", "JPM", "XOM", "META", "NVDA"]
+        self.IRON_BUTTERFLY_WATCHLIST = list(self.IRON_CONDOR_WATCHLIST)
         self.SPREAD_WATCHLIST = [
             "AAPL", "MSFT", "AMD", "GOOGL", "AMZN", "META", "NVDA", "TSLA",
             "JPM", "GS", "BAC", "XOM", "CVX", "JNJ", "UNH", "PFE",
             "SPY", "QQQ", "IWM", "DIS", "NFLX", "CRM", "ORCL", "ADBE",
             "HD", "LOW", "COST", "BA", "CAT", "DE",
         ]
+        self.CALENDAR_SPREAD_WATCHLIST = list(self.SPREAD_WATCHLIST)
 
     # Sector mapping for correlation awareness.
     # Used by the guardrails (sector concentration) and reporting to flag

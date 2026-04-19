@@ -648,21 +648,21 @@ export const api = {
   },
 
   watchlist: () =>
-    get<{ wheel: string[]; iron_condor: string[]; spreads: string[]; updated_at: string | null }>('/api/watchlist'),
+    get<{ wheel: string[]; iron_condor: string[]; iron_butterfly: string[]; spreads: string[]; calendar_spread: string[]; updated_at: string | null }>('/api/watchlist'),
 
-  updateWatchlist: async (wheel: string[], iron_condor: string[], spreads: string[]) => {
+  updateWatchlist: async (wheel: string[], iron_condor: string[], iron_butterfly: string[], spreads: string[], calendar_spread: string[]) => {
     const res = await fetch(`${BASE}/api/watchlist`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
-      body: JSON.stringify({ wheel, iron_condor, spreads }),
+      body: JSON.stringify({ wheel, iron_condor, iron_butterfly, spreads, calendar_spread }),
     })
     if (res.status === 401) { _handleUnauthorized(); throw new Error('Unauthorized') }
     if (!res.ok) {
       const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }))
       throw new Error(err.error ?? `API error ${res.status}`)
     }
-    return res.json() as Promise<{ wheel: string[]; iron_condor: string[]; spreads: string[]; updated_at: string | null }>
+    return res.json() as Promise<{ wheel: string[]; iron_condor: string[]; iron_butterfly: string[]; spreads: string[]; calendar_spread: string[]; updated_at: string | null }>
   },
 }
 

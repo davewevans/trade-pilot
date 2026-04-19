@@ -6,7 +6,30 @@
       "credentials_secret": "ALPACA_PAPER1_SECRET_KEY",
       "strategy": "adaptive_spreads",
       "status": "active",
-      "watchlist": ["AAPL", "MSFT", "AMD", "GOOGL", "AMZN", "META", "NVDA", "TSLA", "JPM", "GS", "BAC", "XOM", "CVX", "JNJ", "UNH", "SPY", "QQQ", "IWM", "DIS", "NFLX", "CRM", "ORCL"],
+      "watchlist": [
+        "AAPL",
+        "MSFT",
+        "AMD",
+        "GOOGL",
+        "AMZN",
+        "META",
+        "NVDA",
+        "TSLA",
+        "JPM",
+        "GS",
+        "BAC",
+        "XOM",
+        "CVX",
+        "JNJ",
+        "UNH",
+        "SPY",
+        "QQQ",
+        "IWM",
+        "DIS",
+        "NFLX",
+        "CRM",
+        "ORCL"
+      ],
       "screening_overrides": {}
     },
     "paper_2": {
@@ -15,7 +38,14 @@
       "credentials_secret": "ALPACA_PAPER2_SECRET_KEY",
       "strategy": "wheel",
       "status": "active",
-      "watchlist": ["AAPL", "SPY", "MSFT", "AMD", "JPM", "XOM"],
+      "watchlist": [
+        "AAPL",
+        "SPY",
+        "MSFT",
+        "AMD",
+        "JPM",
+        "XOM"
+      ],
       "screening_overrides": {}
     },
     "paper_3": {
@@ -24,7 +54,19 @@
       "credentials_secret": "ALPACA_PAPER3_SECRET_KEY",
       "strategy": "iron_condor",
       "status": "active",
-      "watchlist": ["SPY", "QQQ", "IWM", "AAPL", "MSFT", "GOOGL", "AMZN", "JPM", "XOM", "META", "NVDA"],
+      "watchlist": [
+        "SPY",
+        "QQQ",
+        "IWM",
+        "AAPL",
+        "MSFT",
+        "GOOGL",
+        "AMZN",
+        "JPM",
+        "XOM",
+        "META",
+        "NVDA"
+      ],
       "screening_overrides": {}
     },
     "paper_4": {
@@ -32,8 +74,15 @@
       "credentials_key": "ALPACA_PAPER4_API_KEY",
       "credentials_secret": "ALPACA_PAPER4_SECRET_KEY",
       "strategy": "iron_butterfly",
-      "status": "inactive",
-      "watchlist": ["SPY", "QQQ", "IWM", "AAPL", "MSFT", "GOOGL"],
+      "status": "active",
+      "watchlist": [
+        "SPY",
+        "QQQ",
+        "IWM",
+        "AAPL",
+        "MSFT",
+        "GOOGL"
+      ],
       "screening_overrides": {}
     },
     "paper_5": {
@@ -41,8 +90,15 @@
       "credentials_key": "ALPACA_PAPER5_API_KEY",
       "credentials_secret": "ALPACA_PAPER5_SECRET_KEY",
       "strategy": "calendar_spread",
-      "status": "inactive",
-      "watchlist": ["SPY", "QQQ", "AAPL", "MSFT", "GOOGL", "AMZN"],
+      "status": "active",
+      "watchlist": [
+        "SPY",
+        "QQQ",
+        "AAPL",
+        "MSFT",
+        "GOOGL",
+        "AMZN"
+      ],
       "screening_overrides": {}
     },
     "paper_6": {
@@ -55,5 +111,5 @@
       "screening_overrides": {}
     }
   },
-  "updated_at": null
+  "updated_at": "2026-04-19T12:34:47.251487+00:00"
 }

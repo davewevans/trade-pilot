@@ -193,7 +193,9 @@ function WatchlistSection({
 export function Watchlist() {
   const [wheel, setWheel] = useState<string[]>([])
   const [ironCondor, setIronCondor] = useState<string[]>([])
+  const [ironButterfly, setIronButterfly] = useState<string[]>([])
   const [spreads, setSpreads] = useState<string[]>([])
+  const [calendarSpread, setCalendarSpread] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
   const [saveError, setSaveError] = useState<string | null>(null)
@@ -205,7 +207,9 @@ export function Watchlist() {
       .then((data) => {
         setWheel(data.wheel)
         setIronCondor(data.iron_condor)
+        setIronButterfly(data.iron_butterfly ?? [])
         setSpreads(data.spreads)
+        setCalendarSpread(data.calendar_spread ?? [])
         initialized.current = true
       })
       .catch(() => setSaveError('Failed to load watchlist'))
@@ -219,7 +223,7 @@ export function Watchlist() {
     setSaveStatus('saving')
     debounceRef.current = setTimeout(async () => {
       try {
-        await api.updateWatchlist(wheel, ironCondor, spreads)
+        await api.updateWatchlist(wheel, ironCondor, ironButterfly, spreads, calendarSpread)
         setSaveStatus('saved')
         setSaveError(null)
         setTimeout(() => setSaveStatus('idle'), 2500)
@@ -231,7 +235,7 @@ export function Watchlist() {
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current)
     }
-  }, [wheel, ironCondor, spreads])
+  }, [wheel, ironCondor, ironButterfly, spreads, calendarSpread])
 
   if (loading) {
     return (
@@ -279,16 +283,30 @@ export function Watchlist() {
           onChange={setIronCondor}
         />
         <WatchlistSection
+          title="Iron Butterfly Watchlist"
+          note="Iron butterflies are like iron condors but with the short strikes at the same price. Best for highly liquid, range-bound underlyings like SPY and QQQ."
+          symbols={ironButterfly}
+          suggestedGroups={QUICK_ADD_GROUPS}
+          onChange={setIronButterfly}
+        />
+        <WatchlistSection
           title="Spread Watchlist"
-          note="The bot scans these for spread opportunities. You never own the stock — just the spread. Add any stock with a liquid options chain."
+          note="The bot scans these for spread opportunities (bull put, bear call, long call vertical). You never own the stock — just the spread. Add any stock with a liquid options chain."
           symbols={spreads}
           suggestedGroups={QUICK_ADD_GROUPS}
           onChange={setSpreads}
         />
+        <WatchlistSection
+          title="Calendar Spread Watchlist"
+          note="Calendar spreads sell a near-term option and buy a further-dated one at the same strike. Best for stocks with stable price action and rising IV in the front month."
+          symbols={calendarSpread}
+          suggestedGroups={QUICK_ADD_GROUPS}
+          onChange={setCalendarSpread}
+        />
       </div>
 
       <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
-        {wheel.length} wheel · {ironCondor.length} iron condor · {spreads.length} spreads
+        {wheel.length} wheel · {ironCondor.length} iron condor · {ironButterfly.length} iron butterfly · {spreads.length} spreads · {calendarSpread.length} calendar spread
       </p>
     </div>
   )

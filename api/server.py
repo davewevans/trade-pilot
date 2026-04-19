@@ -1531,7 +1531,7 @@ def regime_history():
 
 @app.get("/api/watchlist")
 def get_watchlist():
-    """Return the current wheel, iron_condor, and spreads watchlists."""
+    """Return the current strategy watchlists."""
     path = DATA_DIR / "watchlist.json"
     if path.exists():
         data = _read_json(path)
@@ -1540,7 +1540,9 @@ def get_watchlist():
     return {
         "wheel": list(settings.WATCHLIST),
         "iron_condor": list(settings.IRON_CONDOR_WATCHLIST),
+        "iron_butterfly": list(settings.IRON_BUTTERFLY_WATCHLIST),
         "spreads": list(settings.SPREAD_WATCHLIST),
+        "calendar_spread": list(settings.CALENDAR_SPREAD_WATCHLIST),
         "updated_at": None,
     }
 
@@ -1906,19 +1908,24 @@ async def update_watchlist(request: Request):
 
     wheel = body.get("wheel", [])
     iron_condor = body.get("iron_condor", [])
+    iron_butterfly = body.get("iron_butterfly", [])
     spreads = body.get("spreads", [])
+    calendar_spread = body.get("calendar_spread", [])
 
-    if not isinstance(wheel, list) or not isinstance(iron_condor, list) or not isinstance(spreads, list):
-        return JSONResponse(status_code=400, content={"error": "wheel, iron_condor, and spreads must be arrays"})
+    for key, val in [("wheel", wheel), ("iron_condor", iron_condor), ("iron_butterfly", iron_butterfly), ("spreads", spreads), ("calendar_spread", calendar_spread)]:
+        if not isinstance(val, list):
+            return JSONResponse(status_code=400, content={"error": f"{key} must be an array"})
 
-    for sym in wheel + iron_condor + spreads:
+    for sym in wheel + iron_condor + iron_butterfly + spreads + calendar_spread:
         if not isinstance(sym, str) or not sym.isalpha() or not sym.isupper() or len(sym) > 6:
             return JSONResponse(status_code=400, content={"error": f"Invalid symbol: {sym!r}"})
 
     data = {
         "wheel": wheel,
         "iron_condor": iron_condor,
+        "iron_butterfly": iron_butterfly,
         "spreads": spreads,
+        "calendar_spread": calendar_spread,
         "updated_at": datetime.now().isoformat(),
     }
     path = DATA_DIR / "watchlist.json"
@@ -1927,11 +1934,13 @@ async def update_watchlist(request: Request):
     # Hot-reload so the next scheduler cycle uses the new lists
     settings.WATCHLIST = wheel
     settings.IRON_CONDOR_WATCHLIST = iron_condor
+    settings.IRON_BUTTERFLY_WATCHLIST = iron_butterfly
     settings.SPREAD_WATCHLIST = spreads
+    settings.CALENDAR_SPREAD_WATCHLIST = calendar_spread
 
     logger.info(
-        "Watchlist updated: %d wheel, %d iron_condor, %d spreads",
-        len(wheel), len(iron_condor), len(spreads),
+        "Watchlist updated: %d wheel, %d iron_condor, %d iron_butterfly, %d spreads, %d calendar_spread",
+        len(wheel), len(iron_condor), len(iron_butterfly), len(spreads), len(calendar_spread),
     )
     return data
 

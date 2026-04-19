@@ -663,6 +663,10 @@ def run() -> None:
                     last_skip_reason = None
                     if strategy_name == "iron_condor":
                         symbols = settings.IRON_CONDOR_WATCHLIST or settings.WATCHLIST
+                    elif strategy_name == "iron_butterfly":
+                        symbols = settings.IRON_BUTTERFLY_WATCHLIST or settings.IRON_CONDOR_WATCHLIST or settings.WATCHLIST
+                    elif strategy_name == "calendar_spread":
+                        symbols = settings.CALENDAR_SPREAD_WATCHLIST or settings.SPREAD_WATCHLIST or settings.WATCHLIST
                     else:
                         symbols = settings.SPREAD_WATCHLIST or settings.WATCHLIST
 
@@ -723,7 +727,11 @@ def run() -> None:
                             last_skip_reason = skip_reason
 
                     if best_ctx is None:
-                        wl_name = "IRON_CONDOR_WATCHLIST" if strategy_name == "iron_condor" else "SPREAD_WATCHLIST"
+                        wl_name = {
+                            "iron_condor": "IRON_CONDOR_WATCHLIST",
+                            "iron_butterfly": "IRON_BUTTERFLY_WATCHLIST",
+                            "calendar_spread": "CALENDAR_SPREAD_WATCHLIST",
+                        }.get(strategy_name, "SPREAD_WATCHLIST")
                         reason = (
                             f"No qualifying candidates across {wl_name} "
                             f"(last skip: {last_skip_reason})"
