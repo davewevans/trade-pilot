@@ -9,6 +9,7 @@ import { Strategies } from './pages/Strategies'
 import { HowItWorks } from './pages/HowItWorks'
 import { ClaudesPlaybook } from './pages/ClaudesPlaybook'
 import { HowBacktestingWorks } from './pages/HowBacktestingWorks'
+import { HowEvaluationsWork } from './pages/HowEvaluationsWork'
 import { OptionsBasics } from './pages/OptionsBasics'
 import { TradeLifecycle } from './pages/TradeLifecycle'
 import { SkipReasons } from './pages/SkipReasons'
@@ -53,6 +54,7 @@ export function App() {
           <Route path="/how-it-works" element={<HowItWorks />} />
           <Route path="/playbook" element={<ClaudesPlaybook />} />
           <Route path="/how-backtesting-works" element={<HowBacktestingWorks />} />
+          <Route path="/how-evaluations-work" element={<HowEvaluationsWork />} />
           <Route path="/options-basics" element={<OptionsBasics />} />
           <Route path="/trade-lifecycle" element={<TradeLifecycle />} />
           <Route path="/skip-reasons" element={<SkipReasons />} />
