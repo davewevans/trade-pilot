@@ -105,11 +105,11 @@
       "label": "Paper Account 6",
       "credentials_key": "ALPACA_PAPER6_API_KEY",
       "credentials_secret": "ALPACA_PAPER6_SECRET_KEY",
-      "strategy": null,
-      "status": "inactive",
+      "strategy": "conservative_wheel",
+      "status": "active",
       "watchlist": [],
       "screening_overrides": {}
     }
   },
-  "updated_at": "2026-04-19T12:34:47.251487+00:00"
+  "updated_at": "2026-04-19T13:01:09.924900+00:00"
 }
