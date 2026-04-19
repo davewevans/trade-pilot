@@ -328,6 +328,11 @@ _REGISTRY: dict[str, dict] = {
     "wheel_short_put":   WHEEL_SHORT_PUT,
     "wheel_long_stock":  WHEEL_LONG_STOCK,
     "wheel_short_call":  WHEEL_SHORT_CALL,
+    # Turnover Wheel — same schemas as standard wheel (same action space)
+    "turnover_wheel_idle":       WHEEL_IDLE,
+    "turnover_wheel_short_put":  WHEEL_SHORT_PUT,
+    "turnover_wheel_long_stock": WHEEL_LONG_STOCK,
+    "turnover_wheel_short_call": WHEEL_SHORT_CALL,
     # Bull put spread
     "bull_put_spread_idle": BULL_PUT_SPREAD_IDLE,
     "bull_put_spread_open": BULL_PUT_SPREAD_OPEN,

@@ -481,6 +481,7 @@ DB_PATH = settings.DATABASE_PATH
 # Omit ?account= (or pass an unknown value) for the unfiltered view.
 _ACCOUNT_STRATEGY_MAP: dict[str, list[str]] = {
     "wheel": ["wheel"],
+    "turnover_wheel": ["turnover_wheel"],
     "iron_condor": ["iron_condor"],
     "spreads": ["bull_put_spread", "bear_call_spread", "long_call_vertical"],
 }

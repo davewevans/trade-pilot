@@ -22,6 +22,7 @@ import anthropic
 import config as _config
 from ai.schemas import get_schema
 from config import settings
+from strategies.turnover_wheel_strategy import TurnoverWheelState
 from strategies.wheel_strategy import WheelState
 
 logger = logging.getLogger(__name__)
@@ -241,6 +242,14 @@ class ClaudeAdvisor:
                     self.spread_prompts[key] = path.read_text(encoding="utf-8")
                 else:
                     logger.warning("Spread prompt not found: %s", path)
+
+        self.turnover_wheel_phase_prompts: dict[TurnoverWheelState, str] = {
+            TurnoverWheelState.IDLE: (_PROMPTS_DIR / "turnover_wheel_idle.md").read_text(encoding="utf-8"),
+            TurnoverWheelState.SHORT_PUT: (_PROMPTS_DIR / "turnover_wheel_short_put.md").read_text(encoding="utf-8"),
+            TurnoverWheelState.LONG_STOCK: (_PROMPTS_DIR / "turnover_wheel_long_stock.md").read_text(encoding="utf-8"),
+            TurnoverWheelState.SHORT_CALL: (_PROMPTS_DIR / "turnover_wheel_short_call.md").read_text(encoding="utf-8"),
+        }
+
         logger.info("Loaded prompt files from %s", _PROMPTS_DIR)
         self.prompt_version = self._compute_prompt_version()
         logger.info("Prompt version: %s", self.prompt_version)
@@ -382,6 +391,91 @@ class ClaudeAdvisor:
 
         logger.info(
             "Claude recommendation: action=%s confidence=%s",
+            recommendation["action"],
+            recommendation.get("confidence"),
+        )
+        logger.info("Reasoning: %s", json.dumps(recommendation.get("reasoning"), indent=2))
+
+        return recommendation
+
+    def ask_turnover_wheel(self, context: dict, phase: TurnoverWheelState) -> dict:
+        """Send the current market context to Claude and get a Turnover Wheel recommendation.
+
+        Mirrors ask() but uses the turnover_wheel prompt files, the shared
+        system prompt (not a separate one), and selects the turnover_wheel schema
+        from the registry.
+
+        Args:
+            context: The full context dict from ContextBuilder.build().
+            phase: The current TurnoverWheelState.
+
+        Returns:
+            Dict matching the wheel schema for this phase. On stop_reason
+            refusal or max_tokens, returns a safe SKIP dict instead of raising.
+
+        Raises:
+            Exception: On Anthropic API network/auth failures (re-raised so
+                the caller can log and decide how to handle).
+        """
+        phase_str = phase.value if hasattr(phase, "value") else str(phase)
+        prompt_text = self._inject_strategy_params(
+            self.turnover_wheel_phase_prompts[phase], "turnover_wheel"
+        )
+        context_json = json.dumps(context, indent=2, default=str)
+        user_content = (
+            f"<instructions>\n{prompt_text}\n</instructions>\n\n"
+            f"<market_context>\n{context_json}\n</market_context>\n\n"
+            f"Make your trading decision now."
+        )
+
+        logger.info("Asking Claude for turnover wheel advice (state=%s)", phase_str)
+
+        schema = get_schema("turnover_wheel", phase_str.lower())
+        output_config = self._build_output_config(schema)
+        thinking = self._build_thinking_param()
+
+        try:
+            _t0 = time.monotonic()
+            create_kwargs: dict = dict(
+                model=self.model,
+                max_tokens=16000 if thinking else 2048,
+                system=[
+                    {
+                        "type": "text",
+                        "text": self.system_prompt,
+                        "cache_control": {"type": "ephemeral", "ttl": "1h"},
+                    }
+                ],
+                messages=[{"role": "user", "content": user_content}],
+                output_config=output_config,
+            )
+            if thinking is not None:
+                create_kwargs["thinking"] = thinking
+            response = self.client.messages.create(**create_kwargs)
+            _latency_ms = int((time.monotonic() - _t0) * 1000)
+        except Exception:
+            logger.exception("Anthropic API call failed")
+            raise
+
+        self._last_usage = self._build_usage_dict(response.usage)
+        self._record_usage(
+            response.usage,
+            strategy="turnover_wheel",
+            phase=phase_str,
+            latency_ms=_latency_ms,
+        )
+
+        if response.stop_reason in ("refusal", "max_tokens"):
+            logger.error(
+                "Claude stop_reason=%s for turnover_wheel/%s — falling back to safe SKIP",
+                response.stop_reason, phase_str,
+            )
+            return _safe_skip_wheel(f"Claude stop_reason: {response.stop_reason}")
+
+        recommendation = json.loads(response.content[0].text)
+
+        logger.info(
+            "Claude turnover wheel recommendation: action=%s confidence=%s",
             recommendation["action"],
             recommendation.get("confidence"),
         )

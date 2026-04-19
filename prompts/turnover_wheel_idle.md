@@ -2,23 +2,35 @@
 
 ## Current Phase: IDLE — Looking for a Cash-Secured Put to Sell
 
-You currently have no open position on this underlying. Your task is to 
+You currently have no open position on this underlying. Your task is to
 evaluate whether to initiate the wheel by selling a cash-secured put.
 
 Work through the decision in this order:
-1. Check macro environment — is it safe to enter?
+1. Check macro environment (specific fields below) — is it safe to enter?
 2. Check fundamentals — earnings date, sector health, trend
 3. Check volatility — is IV rank high enough to collect meaningful premium?
 4. Scan the put chain — does any contract meet ALL entry criteria?
 5. If yes → recommend sell_put with the best qualifying contract
 6. If no → recommend skip with a clear explanation
 
-The put chain is provided in context under "option_chain". Each contract 
-includes symbol, strike, expiry, DTE, delta, bid, ask, open_interest, 
+The put chain is provided in context under "option_chain". Each contract
+includes symbol, strike, expiry, DTE, delta, bid, ask, open_interest,
 and IV where available.
 
 Select the contract closest to -0.25 delta that meets all criteria.
 Set limit_price to the midpoint of bid and ask, rounded to nearest $0.05.
+
+## Step 1 — Macro environment (explicit field references)
+
+Apply the regime rules from system.md using these context fields:
+
+- `confirmed_market_regime`: if CRASH, SKIP immediately. Other regimes proceed.
+- `regime_stable`: if false, increase selectivity — the regime is in transition.
+- `macro.vix`: note the level in `reasoning.macro`. Higher VIX = richer premium but fatter tails.
+- `macro.fear_greed_score`: if ≥ 75 (EUPHORIA territory), note elevated assignment risk in `reasoning.risk`.
+
+Full boundary-case handling (VIX exactly 35, F&G exactly 80, etc.) is
+in system.md — apply those rules rather than restating them here.
 
 ## ORATS Volatility Signals (soft preferences — no hard blocks)
 

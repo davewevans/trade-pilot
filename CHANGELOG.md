@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-04-19
+
+### Added
+- **Turnover Wheel strategy wired end-to-end**: `TurnoverWheelStrategy` is now fully instantiated and dispatched in `market_open.py` using its own Paper6 Alpaca account, mirroring the Standard Wheel call chain.
+- `ContextBuilder.build()` gains a `strategy_name` parameter (default `"wheel"`) that selects the correct state file for cost-basis injection; supports `"wheel"` and `"turnover_wheel"`.
+- `underlying_price_at_entry` field added to `TurnoverWheelStrategy` state file and surfaced in context — anchors the 20% drawdown roll gate to the original CSP entry price.
+- `ClaudeAdvisor.ask_turnover_wheel()` method loads `prompts/turnover_wheel_*.md` and calls the Turnover Wheel schema aliases.
+- `turnover_wheel_*` schema aliases registered in `ai/schemas.py` (same objects as the wheel schemas — no duplication).
+- `TURNOVER_WHEEL_ENABLED` feature flag (env var, default `True`) gates the router and dispatch block.
+- Turnover Wheel entry added to `_ACCOUNT_STRATEGY_MAP` in `api/server.py`.
+- 26 new tests in `tests/test_turnover_wheel.py` covering schemas, router flag, state persistence, and advisor prompt routing.
+
+### Fixed
+- Removed counterfactual check ("if not already open, would you open it?") from all three Turnover Wheel management prompts — it incorrectly forced CLOSE on ITM covered calls heading to successful assignment.
+- `turnover_wheel_long_stock.md`: replaced nonexistent `turnover_wheel_cost_basis` context key reference with the correct `wheel_cost_basis`; fixed all bare `cost_basis` references to `effective_cost_basis`.
+- `turnover_wheel_short_call.md`: replaced vague "OTM enough" ex-dividend rule with an explicit dividend-vs-extrinsic calculation; split into separate checks for the current CC and any roll candidate; removed `delta within 0.45` roll cap (contradicted the NO delta cap rule for CC entry).
+- `turnover_wheel_short_put.md`: grounded the 20% drawdown roll gate in the `underlying_price_at_entry` context field.
+- `turnover_wheel_idle.md`: replaced vague macro check with explicit `confirmed_market_regime`, `regime_stable`, `macro.vix`, and `macro.fear_greed_score` field references.
+- Added ex-dividend awareness to `turnover_wheel_long_stock.md` for new CC selection.
+
+### Removed
+- `TurnoverWheelStrategy.build_context()` and `_filter_chain()` deleted (dead code — strategy now routes through `ContextBuilder`).
+
 ## [1.7.1] - 2026-04-19
 
 ### Changed

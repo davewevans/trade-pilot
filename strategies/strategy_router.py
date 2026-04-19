@@ -7,6 +7,8 @@ per cycle.  Management cycles (OPEN state) always run.
 
 import logging
 
+from config import settings
+
 logger = logging.getLogger(__name__)
 
 # Priority order: income strategies before speculative
@@ -43,7 +45,9 @@ class StrategyRouter:
         Returns:
             List of strategy name strings.
         """
-        active: list[str] = ["wheel", "turnover_wheel"]
+        active: list[str] = ["wheel"]
+        if settings.TURNOVER_WHEEL_ENABLED:
+            active.append("turnover_wheel")
 
         regime = context.get("confirmed_market_regime", "NEUTRAL")
 
