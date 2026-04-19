@@ -249,6 +249,12 @@ const CATEGORIES: Category[] = [
           'The portfolio dropped 15% from its peak. The bot writes a lock file and stops all trading until a human manually deletes it.',
         applies: 'All strategies',
       },
+      {
+        reason: 'Drop-copy block',
+        body:
+          'The drop-copy reconciler detected a persistent mismatch between local state (SQLite / JSON) and broker-truth positions on Alpaca. New entries are suppressed until the discrepancy is resolved or the block file is manually cleared. Management actions (rolls, closes) are never blocked.',
+        applies: 'All strategies',
+      },
     ],
   },
 ]

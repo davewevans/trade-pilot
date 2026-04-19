@@ -49,6 +49,7 @@ class SkipReason(str, Enum):
     CIRCUIT_BREAKER_RED = "circuit_breaker_red"
     CIRCUIT_BREAKER_YELLOW = "circuit_breaker_yellow"
     BOT_HALTED = "bot_halted"
+    DROP_COPY_BLOCK = "drop_copy_block"
     CLAUDE_SKIP = "claude_skip"
     CLAUDE_ERROR = "claude_error"
     SCHEMA_INVALID = "schema_invalid"
@@ -82,6 +83,7 @@ REASON_TO_GATE = {
     SkipReason.CIRCUIT_BREAKER_RED: SkipGate.CIRCUIT_BREAKER,
     SkipReason.CIRCUIT_BREAKER_YELLOW: SkipGate.CIRCUIT_BREAKER,
     SkipReason.BOT_HALTED: SkipGate.HALTED,
+    SkipReason.DROP_COPY_BLOCK: SkipGate.CIRCUIT_BREAKER,
     SkipReason.CLAUDE_SKIP: SkipGate.CLAUDE_SKIP,
     SkipReason.CLAUDE_ERROR: SkipGate.CLAUDE_SKIP,
     SkipReason.SCHEMA_INVALID: SkipGate.LLM_OUTPUT,

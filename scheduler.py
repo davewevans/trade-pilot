@@ -23,6 +23,7 @@ import schedule
 from utils.clock_drift import check_and_halt_on_drift
 
 from jobs import (
+    drop_copy_reconcile,
     expiry_guard,
     market_close,
     market_open,
@@ -156,6 +157,7 @@ def register_jobs() -> None:
         "market_close": market_close.run,
         "post_market": post_market.run,
         "portfolio_refresh": portfolio_refresh.run,
+        "drop_copy_reconcile": drop_copy_reconcile.run,
         "shadow_capture": shadow_capture.run,
         "weekly_report": weekly_report.run,
         "monthly_evaluation": _monthly_eval_wrapper,

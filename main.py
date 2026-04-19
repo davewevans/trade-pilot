@@ -449,8 +449,26 @@ def validate_startup() -> None:
         )
         sys.exit(1)
 
-    # Liveness notification — fire after startup reconciler so we can
-    # include the reconciler summary in the message.
+    # Broker-truth state reconciliation — runs AFTER pending-order reconciler,
+    # BEFORE liveness notification. Compares SQLite/JSON local state against
+    # live Alpaca positions. In enforce mode, halts on large mismatches.
+    broker_reconcile_summary: dict = {}
+    try:
+        from jobs.startup_broker_reconcile import run as run_broker_reconcile
+        broker_reconcile_summary = run_broker_reconcile()
+        logger.info("Startup broker reconcile: %s", broker_reconcile_summary)
+    except Exception:
+        logger.exception("Startup broker reconcile failed — continuing without reconciliation")
+
+    if broker_reconcile_summary.get("halted"):
+        logger.critical(
+            "Startup broker reconcile wrote HALTED.lock — aborting bot startup. "
+            "Investigate broker state mismatch and delete HALTED.lock manually to resume."
+        )
+        sys.exit(1)
+
+    # Liveness notification — fire after all startup reconcilers so we can
+    # include both reconciler summaries in the message.
     try:
         from config import settings as _settings
         from notifications import notify
@@ -458,7 +476,9 @@ def validate_startup() -> None:
             "critical",
             "Bot started",
             (
-                f"trade-pilot started. Reconciler: {reconciler_summary}. "
+                f"trade-pilot started. "
+                f"PendingOrders: {reconciler_summary}. "
+                f"BrokerReconcile: {broker_reconcile_summary}. "
                 f"Mode: {'DRY RUN' if _settings.DRY_RUN else 'LIVE'}"
             ),
             tags=["startup"],

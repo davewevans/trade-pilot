@@ -265,6 +265,49 @@ class Settings:
             os.getenv("TURNOVER_WHEEL_ENABLED", "true").lower() == "true"
         )
 
+        # ── Drop-copy reconciliation ──────────────────────────────────────────
+        # Kill switches. Both default to True for paper. Flip either to False
+        # to disable without code changes.
+        self.STARTUP_RECONCILE_ENABLED: bool = (
+            os.getenv("STARTUP_RECONCILE_ENABLED", "true").lower() == "true"
+        )
+        self.DROP_COPY_RECONCILE_ENABLED: bool = (
+            os.getenv("DROP_COPY_RECONCILE_ENABLED", "true").lower() == "true"
+        )
+
+        # Enforcement mode:
+        #   "log_only" → compute diffs, write report, NEVER overwrite local state
+        #                and NEVER write HALTED.lock. First-week default.
+        #   "enforce"  → overwrite local state on mismatch; HALT above threshold.
+        # Flip to "enforce" only after one week of clean log-only runs.
+        self.DROP_COPY_ENFORCEMENT_MODE: str = os.getenv(
+            "DROP_COPY_ENFORCEMENT_MODE", "log_only"
+        ).lower()
+
+        # Thresholds — all USD unless suffixed _PCT.
+        # Position value mismatch that triggers YELLOW + ntfy (enforce mode).
+        self.DROP_COPY_POS_MISMATCH_USD: float = float(
+            os.getenv("DROP_COPY_POS_MISMATCH_USD", "100")
+        )
+        self.DROP_COPY_POS_MISMATCH_PCT: float = float(
+            os.getenv("DROP_COPY_POS_MISMATCH_PCT", "1.0")
+        )
+        # Cash mismatch that triggers YELLOW + ntfy (enforce mode).
+        self.DROP_COPY_CASH_MISMATCH_USD: float = float(
+            os.getenv("DROP_COPY_CASH_MISMATCH_USD", "100")
+        )
+        # Startup reconcile HALT threshold. Cumulative abs(position value delta)
+        # across all accounts above this → write HALTED.lock (enforce mode).
+        self.STARTUP_RECONCILE_HALT_THRESHOLD_USD: float = float(
+            os.getenv("STARTUP_RECONCILE_HALT_THRESHOLD_USD", "500")
+        )
+        # Grace: mismatch must be observed on N consecutive drop-copy cycles
+        # before any enforcement action. Tolerates snapshot-write / reconcile-read
+        # races. 2 means "seen twice in a row, ~5–10 min apart."
+        self.DROP_COPY_GRACE_CYCLES: int = int(
+            os.getenv("DROP_COPY_GRACE_CYCLES", "2")
+        )
+
         # ── Macro event block ─────────────────────────────────
         # Hard-blocks new entries the day of and the trading day before any Tier 1
         # macro event (FOMC, CPI, NFP) listed in data/macro_events.json.
@@ -545,6 +588,17 @@ SCHEDULE: list[dict] = [
         "description": (
             "Refreshes dashboard data every 5 minutes during market hours: "
             "equity balances, open positions, circuit breaker status, and spread reconciliation."
+        ),
+    },
+    {
+        "job": "drop_copy_reconcile",
+        "type": "interval",
+        "interval_minutes": 5,
+        "label": "Drop-copy reconcile",
+        "description": (
+            "Compares SQLite/local state against Alpaca broker truth every 5 minutes "
+            "during market hours. Log-only mode by default; in enforce mode, triggers "
+            "YELLOW or RED on mismatches."
         ),
     },
     # ── Weekly job ───────────────────────────────────────────────────────────

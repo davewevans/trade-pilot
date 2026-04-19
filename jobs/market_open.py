@@ -104,6 +104,18 @@ def run() -> None:
         logger.info("=== MARKET OPEN JOB COMPLETE (halted) ===")
         return
 
+    # ── Drop-copy reconcile blocker ──────────────────────────────────────────
+    # Set by jobs/drop_copy_reconcile.py when a persistent mismatch is detected
+    # in enforce mode. Management actions (rolls, closes) remain allowed;
+    # only new entries are gated. Cleared automatically on a clean cycle.
+    drop_copy_block_path = settings.SNAPSHOTS_DIR / "drop_copy_block.json"
+    drop_copy_blocked = drop_copy_block_path.exists()
+    if drop_copy_blocked:
+        logger.warning(
+            "Drop-copy block active — new entries suppressed this cycle "
+            "(block file: %s)", drop_copy_block_path,
+        )
+
     # ── Macro event block ────────────────────────────────────────────────────
     if settings.MACRO_EVENT_BLOCK_ENABLED:
         from data.macro_calendar import is_blocked as _macro_is_blocked
@@ -316,14 +328,18 @@ def run() -> None:
     #   0.5 → YELLOW: spreads blocked entirely (qty=1 → 0); wheel
     #         entries require high Claude confidence (>= 0.75)
     #   0.0 → RED:    all new entries blocked
-    block_all_new_entries = (size_multiplier == 0.0)
+    cb_is_red = (size_multiplier == 0.0)
+    block_all_new_entries = cb_is_red or drop_copy_blocked
     reduced_risk = (size_multiplier == 0.5)
     WHEEL_YELLOW_CONFIDENCE_FLOOR = 0.75
     WHEEL_ENTRY_ACTIONS = ("sell_put", "sell_call")
 
-    if block_all_new_entries:
+    if block_all_new_entries and cb_is_red:
         logger.warning("Circuit breaker RED — no new entries this cycle (management still allowed)")
         report_lines.append("**Circuit breaker RED** — no new entries allowed (existing positions managed normally)")
+    elif block_all_new_entries and drop_copy_blocked:
+        logger.warning("Drop-copy block active — no new entries this cycle (management still allowed)")
+        report_lines.append("**Drop-copy block** — new entries suppressed until mismatch resolves (management still allowed)")
     elif reduced_risk:
         logger.warning(
             "Circuit breaker YELLOW (multiplier=0.5) — spread entries blocked; "
@@ -548,7 +564,9 @@ def run() -> None:
             decision_action = decision.get("action")
             if decision_action in WHEEL_ENTRY_ACTIONS:
                 cb_skip_reason = None
-                if block_all_new_entries:
+                if drop_copy_blocked and not cb_is_red:
+                    cb_skip_reason = "drop_copy_block — new entries suppressed pending reconcile"
+                elif block_all_new_entries:
                     cb_skip_reason = "circuit breaker RED — new entries blocked"
                 elif reduced_risk:
                     conf = decision.get("confidence") or 0
@@ -573,11 +591,12 @@ def run() -> None:
                     })
                     if recorder is not None:
                         from strategies.skip_reasons import SkipGate, SkipReason
-                        _cb_reason_code = (
-                            SkipReason.CIRCUIT_BREAKER_RED
-                            if block_all_new_entries
-                            else SkipReason.CIRCUIT_BREAKER_YELLOW
-                        )
+                        if drop_copy_blocked and not cb_is_red:
+                            _cb_reason_code = SkipReason.DROP_COPY_BLOCK
+                        elif block_all_new_entries:
+                            _cb_reason_code = SkipReason.CIRCUIT_BREAKER_RED
+                        else:
+                            _cb_reason_code = SkipReason.CIRCUIT_BREAKER_YELLOW
                         recorder.record_decision(
                             strategy_type="wheel", underlying=symbol,
                             action="SKIP",
@@ -865,7 +884,9 @@ def run() -> None:
                 tw_decision_action = decision.get("action")
                 if tw_decision_action in WHEEL_ENTRY_ACTIONS:
                     cb_skip_reason = None
-                    if block_all_new_entries:
+                    if drop_copy_blocked and not cb_is_red:
+                        cb_skip_reason = "drop_copy_block — new entries suppressed pending reconcile"
+                    elif block_all_new_entries:
                         cb_skip_reason = "circuit breaker RED — new entries blocked"
                     elif reduced_risk:
                         conf = decision.get("confidence") or 0
@@ -890,11 +911,12 @@ def run() -> None:
                         })
                         if recorder is not None:
                             from strategies.skip_reasons import SkipGate, SkipReason
-                            _cb_reason_code = (
-                                SkipReason.CIRCUIT_BREAKER_RED
-                                if block_all_new_entries
-                                else SkipReason.CIRCUIT_BREAKER_YELLOW
-                            )
+                            if drop_copy_blocked and not cb_is_red:
+                                _cb_reason_code = SkipReason.DROP_COPY_BLOCK
+                            elif block_all_new_entries:
+                                _cb_reason_code = SkipReason.CIRCUIT_BREAKER_RED
+                            else:
+                                _cb_reason_code = SkipReason.CIRCUIT_BREAKER_YELLOW
                             recorder.record_decision(
                                 strategy_type="turnover_wheel", underlying=symbol,
                                 action="SKIP",
@@ -1231,16 +1253,16 @@ def run() -> None:
                     })
 
                 if action == "OPEN":
-                    # Circuit-breaker entry gate. Spreads always trade qty=1,
-                    # so YELLOW (multiplier 0.5 → 0 contracts) and RED both
-                    # block new OPENs. CLOSE is intentionally not gated below
-                    # so existing risk can always be taken off the table.
+                    # Circuit-breaker / drop-copy entry gate. Spreads always trade
+                    # qty=1, so YELLOW (multiplier 0.5 → 0 contracts), RED, and
+                    # drop-copy block all gate new OPENs. CLOSE is never gated.
                     if block_all_new_entries or reduced_risk:
-                        cb_reason = (
-                            "circuit breaker RED — new entries blocked"
-                            if block_all_new_entries
-                            else "circuit breaker YELLOW — spread entries blocked (qty 1→0)"
-                        )
+                        if drop_copy_blocked and not cb_is_red and not reduced_risk:
+                            cb_reason = "drop_copy_block — new entries suppressed pending reconcile"
+                        elif block_all_new_entries:
+                            cb_reason = "circuit breaker RED — new entries blocked"
+                        else:
+                            cb_reason = "circuit breaker YELLOW — spread entries blocked (qty 1→0)"
                         logger.warning("%s CB GATED: %s", strategy_name, cb_reason)
                         report_lines.append(f"**{strategy_name}** -- SKIPPED ({cb_reason})")
                     else:
