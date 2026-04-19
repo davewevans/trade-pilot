@@ -20,6 +20,8 @@ from zoneinfo import ZoneInfo
 
 import schedule
 
+from utils.clock_drift import check_and_halt_on_drift
+
 from jobs import (
     expiry_guard,
     market_close,
@@ -55,7 +57,15 @@ def safe_run(job_fn, job_name: str) -> None:
     traceback is logged but the error is **not** re-raised so the
     scheduler loop keeps running.  A "critical" notification is fired
     on job crash so the operator is alerted immediately.
+
+    A clock-drift pre-flight runs before the job body. If the host clock
+    has drifted beyond the configured threshold the job is skipped and
+    HALTED.lock is written. The check fails open on network errors.
     """
+    if not check_and_halt_on_drift(job_name):
+        logger.info("=== SKIPPING: %s — clock drift halt active ===", job_name)
+        return
+
     logger.info("=== STARTING: %s ===", job_name)
     t0 = time.monotonic()
     try:

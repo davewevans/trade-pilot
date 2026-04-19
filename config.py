@@ -197,6 +197,16 @@ class Settings:
         # ntfy server URL. Defaults to the public ntfy.sh server.
         # Override for self-hosted deployments (e.g. "https://ntfy.example.com").
         self.NTFY_SERVER: str = os.getenv("NTFY_SERVER", "https://ntfy.sh")
+
+        # ── Clock drift fail-safe ──────────────────────────────
+        # Set CLOCK_DRIFT_HALT_ENABLED=false to disable the check entirely.
+        self.CLOCK_DRIFT_HALT_ENABLED: bool = os.getenv("CLOCK_DRIFT_HALT_ENABLED", "true").lower() == "true"
+        # Drift exceeding this threshold (in seconds, strict >) triggers a halt.
+        self.CLOCK_DRIFT_THRESHOLD_SECONDS: int = int(os.getenv("CLOCK_DRIFT_THRESHOLD_SECONDS", "30"))
+        # Per-attempt HTTP timeout when fetching reference time from Alpaca.
+        self.CLOCK_DRIFT_FETCH_TIMEOUT_SECONDS: float = float(os.getenv("CLOCK_DRIFT_FETCH_TIMEOUT_SECONDS", "3.0"))
+        # Number of fetch attempts before giving up and failing open.
+        self.CLOCK_DRIFT_FETCH_MAX_RETRIES: int = int(os.getenv("CLOCK_DRIFT_FETCH_MAX_RETRIES", "3"))
         # Controls severity of fill notifications.
         # "true" (default) → critical (immediate push); "false" → info (digest only).
         self.ALERT_FILLS: bool = os.getenv("ALERT_FILLS", "true").lower() == "true"

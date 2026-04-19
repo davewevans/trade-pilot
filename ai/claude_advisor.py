@@ -39,9 +39,9 @@ def _cache_hit_pct(cache_read: int, cache_write: int, input_tokens: int) -> floa
     return round(cache_read / total * 100, 1)
 
 
-def _safe_skip_wheel(reason: str) -> dict:
+def _safe_skip_wheel(reason: str, skip_code: str | None = None) -> dict:
     """Return a safe SKIP dict matching the wheel schema shape."""
-    return {
+    result: dict = {
         "action": "skip",
         "symbol": None,
         "qty": 1,
@@ -58,11 +58,14 @@ def _safe_skip_wheel(reason: str) -> dict:
         "confidence": "low",
         "skip_reason": reason,
     }
+    if skip_code is not None:
+        result["skip_reason_code"] = skip_code
+    return result
 
 
-def _safe_skip_spread(strategy: str, phase: str, reason: str) -> dict:
+def _safe_skip_spread(strategy: str, phase: str, reason: str, skip_code: str | None = None) -> dict:
     """Return a safe SKIP dict matching the spread schema shape."""
-    return {
+    result: dict = {
         "action": "SKIP",
         "reasoning": {
             "macro": reason,
@@ -75,6 +78,41 @@ def _safe_skip_spread(strategy: str, phase: str, reason: str) -> dict:
         "confidence": "low",
         "skip_reason": reason,
     }
+    if skip_code is not None:
+        result["skip_reason_code"] = skip_code
+    return result
+
+
+def _log_schema_failure(
+    strategy: str,
+    phase: str,
+    raw_text: str | None,
+    stop_reason: str | None,
+    exception: Exception,
+) -> None:
+    """Append a failed-schema response to data/logs/schema_failures.jsonl.
+
+    Never raises — logging is best-effort diagnostic support. The file is
+    ops-level (not DB-tracked) and acts as the corpus for diagnosing what
+    Claude gets wrong when structured outputs fail.
+    """
+    try:
+        import datetime as _dt
+        log_path = settings.LOG_DIR / "schema_failures.jsonl"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        entry = json.dumps({
+            "timestamp": _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "strategy": strategy,
+            "phase": phase,
+            "stop_reason": stop_reason,
+            "exception_type": type(exception).__name__,
+            "exception_message": str(exception),
+            "raw_text": (raw_text or "")[:8000],
+        })
+        with open(log_path, "a", encoding="utf-8") as fh:
+            fh.write(entry + "\n")
+    except Exception as write_exc:
+        logger.warning("_log_schema_failure: could not write to schema_failures.jsonl: %s", write_exc)
 
 
 _VALID_THINKING_MODES = {"off", "adaptive_medium", "adaptive_high"}
@@ -385,16 +423,26 @@ class ClaudeAdvisor:
                 "Claude stop_reason=%s for wheel/%s — falling back to safe SKIP",
                 response.stop_reason, phase_str,
             )
+            # TODO: plumb distinct codes for refusal/max_tokens (SkipReason.CLAUDE_REFUSAL / CLAUDE_MAX_TOKENS)
             return _safe_skip_wheel(f"Claude stop_reason: {response.stop_reason}")
 
-        recommendation = json.loads(response.content[0].text)
-
-        logger.info(
-            "Claude recommendation: action=%s confidence=%s",
-            recommendation["action"],
-            recommendation.get("confidence"),
-        )
-        logger.info("Reasoning: %s", json.dumps(recommendation.get("reasoning"), indent=2))
+        try:
+            recommendation = json.loads(response.content[0].text)
+            logger.info(
+                "Claude recommendation: action=%s confidence=%s",
+                recommendation["action"],
+                recommendation.get("confidence"),
+            )
+            logger.info("Reasoning: %s", json.dumps(recommendation.get("reasoning"), indent=2))
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+            raw = getattr(response.content[0], "text", None) if response.content else None
+            logger.error(
+                "wheel/%s schema parse failure (%s: %s) — raw response (first 200 chars): %s",
+                phase_str, type(exc).__name__, exc, (raw or "")[:200],
+            )
+            from strategies.skip_codes import SkipCode
+            _log_schema_failure("wheel", phase_str, raw, response.stop_reason, exc)
+            return _safe_skip_wheel("Schema validation failed: SCHEMA_INVALID", skip_code=SkipCode.SCHEMA_INVALID)
 
         return recommendation
 
@@ -470,16 +518,26 @@ class ClaudeAdvisor:
                 "Claude stop_reason=%s for turnover_wheel/%s — falling back to safe SKIP",
                 response.stop_reason, phase_str,
             )
+            # TODO: plumb distinct codes for refusal/max_tokens (SkipReason.CLAUDE_REFUSAL / CLAUDE_MAX_TOKENS)
             return _safe_skip_wheel(f"Claude stop_reason: {response.stop_reason}")
 
-        recommendation = json.loads(response.content[0].text)
-
-        logger.info(
-            "Claude turnover wheel recommendation: action=%s confidence=%s",
-            recommendation["action"],
-            recommendation.get("confidence"),
-        )
-        logger.info("Reasoning: %s", json.dumps(recommendation.get("reasoning"), indent=2))
+        try:
+            recommendation = json.loads(response.content[0].text)
+            logger.info(
+                "Claude turnover wheel recommendation: action=%s confidence=%s",
+                recommendation["action"],
+                recommendation.get("confidence"),
+            )
+            logger.info("Reasoning: %s", json.dumps(recommendation.get("reasoning"), indent=2))
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+            raw = getattr(response.content[0], "text", None) if response.content else None
+            logger.error(
+                "turnover_wheel/%s schema parse failure (%s: %s) — raw response (first 200 chars): %s",
+                phase_str, type(exc).__name__, exc, (raw or "")[:200],
+            )
+            from strategies.skip_codes import SkipCode
+            _log_schema_failure("turnover_wheel", phase_str, raw, response.stop_reason, exc)
+            return _safe_skip_wheel("Schema validation failed: SCHEMA_INVALID", skip_code=SkipCode.SCHEMA_INVALID)
 
         return recommendation
 
@@ -559,9 +617,20 @@ class ClaudeAdvisor:
                 "Claude stop_reason=%s for %s/%s — falling back to safe SKIP",
                 response.stop_reason, strategy_type, phase,
             )
+            # TODO: plumb distinct codes for refusal/max_tokens (SkipReason.CLAUDE_REFUSAL / CLAUDE_MAX_TOKENS)
             return _safe_skip_spread(strategy_type, phase, f"Claude stop_reason: {response.stop_reason}")
 
-        return json.loads(response.content[0].text)
+        try:
+            return json.loads(response.content[0].text)
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+            raw = getattr(response.content[0], "text", None) if response.content else None
+            logger.error(
+                "%s/%s schema parse failure (%s: %s) — raw response (first 200 chars): %s",
+                strategy_type, phase, type(exc).__name__, exc, (raw or "")[:200],
+            )
+            from strategies.skip_codes import SkipCode
+            _log_schema_failure(strategy_type, phase, raw, response.stop_reason, exc)
+            return _safe_skip_spread(strategy_type, phase, "Schema validation failed: SCHEMA_INVALID", skip_code=SkipCode.SCHEMA_INVALID)
 
     @property
     def prompt_cache_stats(self) -> dict | None:

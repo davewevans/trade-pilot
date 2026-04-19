@@ -16,6 +16,7 @@ import sqlite3
 _GATE_TO_BUCKET: dict[str, str] = {
     "pre_check":       "skip_pre_check",
     "claude_skip":     "skip_claude",
+    "llm_output":      "skip_llm_output",
     "guardrail":       "skip_guardrail",
     "circuit_breaker": "skip_circuit_breaker",
     "macro_event":     "skip_macro_event",
@@ -30,6 +31,7 @@ _DECISION_BUCKETS = (
     "decisions_total",
     "skip_pre_check",
     "skip_claude",
+    "skip_llm_output",
     "skip_guardrail",
     "skip_circuit_breaker",
     "skip_macro_event",

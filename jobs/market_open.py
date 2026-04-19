@@ -436,6 +436,11 @@ def run() -> None:
                 })
                 if recorder is not None:
                     from strategies.skip_reasons import SkipGate, SkipReason
+                    _wheel_skip_code = decision.get("skip_reason_code") or SkipReason.CLAUDE_SKIP
+                    _wheel_skip_gate = (
+                        SkipGate.LLM_OUTPUT if _wheel_skip_code == SkipReason.SCHEMA_INVALID
+                        else SkipGate.CLAUDE_SKIP
+                    )
                     recorder.record_decision(
                         strategy_type="wheel", underlying=symbol,
                         action="SKIP",
@@ -444,8 +449,8 @@ def run() -> None:
                         confidence=decision.get("confidence"),
                         context=context,
                         research_metadata=context.get("_research"),
-                        skip_gate=SkipGate.CLAUDE_SKIP,
-                        skip_reason_code=SkipReason.CLAUDE_SKIP,
+                        skip_gate=_wheel_skip_gate,
+                        skip_reason_code=_wheel_skip_code,
                         job_run_id=job_run_id,
                         pre_check_verdict=_wheel_pcv,
                         prompt_version=advisor.prompt_version,
@@ -753,6 +758,11 @@ def run() -> None:
                     })
                     if recorder is not None:
                         from strategies.skip_reasons import SkipGate, SkipReason
+                        _tw_skip_code = decision.get("skip_reason_code") or SkipReason.CLAUDE_SKIP
+                        _tw_skip_gate = (
+                            SkipGate.LLM_OUTPUT if _tw_skip_code == SkipReason.SCHEMA_INVALID
+                            else SkipGate.CLAUDE_SKIP
+                        )
                         recorder.record_decision(
                             strategy_type="turnover_wheel", underlying=symbol,
                             action="SKIP",
@@ -761,8 +771,8 @@ def run() -> None:
                             confidence=decision.get("confidence"),
                             context=context,
                             research_metadata=context.get("_research"),
-                            skip_gate=SkipGate.CLAUDE_SKIP,
-                            skip_reason_code=SkipReason.CLAUDE_SKIP,
+                            skip_gate=_tw_skip_gate,
+                            skip_reason_code=_tw_skip_code,
                             job_run_id=job_run_id,
                             pre_check_verdict=_tw_pcv,
                             prompt_version=advisor.prompt_version,
@@ -1166,12 +1176,16 @@ def run() -> None:
                     if action == "SKIP":
                         from strategies.skip_reasons import SkipGate, SkipReason
                         _raw_skip = decision.get("skip_reason", "")
-                        if "no_candidates" in (_raw_skip or ""):
+                        _dict_code = decision.get("skip_reason_code")
+                        if _dict_code == SkipReason.SCHEMA_INVALID:
+                            _spread_skip_gate = SkipGate.LLM_OUTPUT
+                            _spread_skip_reason_code = SkipReason.SCHEMA_INVALID
+                        elif "no_candidates" in (_raw_skip or ""):
                             _spread_skip_gate = SkipGate.NO_CANDIDATE
                             _spread_skip_reason_code = SkipReason.NO_CANDIDATES_FOUND
                         else:
                             _spread_skip_gate = SkipGate.CLAUDE_SKIP
-                            _spread_skip_reason_code = SkipReason.CLAUDE_SKIP
+                            _spread_skip_reason_code = _dict_code or SkipReason.CLAUDE_SKIP
                     # pre_check_verdict: MANAGE for open-position management cycles;
                     # OPEN if winner found (pre-check passed); SKIP if no candidates.
                     _spread_pcv = (

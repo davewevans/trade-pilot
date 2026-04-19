@@ -109,6 +109,14 @@ class SkipCode:
     """Covered call: proposed strike is below the effective cost basis.
     Hard rule: never sell a CC below what you paid for the shares."""
 
+    # ── LLM output failure ─────────────────────────────────────
+
+    SCHEMA_INVALID = "SCHEMA_INVALID"
+    """Claude returned a response that could not be parsed as JSON or was
+    missing required fields. Full raw response logged to
+    data/logs/schema_failures.jsonl for diagnosis. Rare when structured
+    outputs are active, but caught here to prevent decision-cycle crashes."""
+
     # ── Fallback ───────────────────────────────────────────────
 
     OTHER = "OTHER"
@@ -128,6 +136,7 @@ class SkipCode:
         POSITION_LIMIT_REACHED, BUYING_POWER_INSUFFICIENT,
         CIRCUIT_BREAKER_ACTIVE,
         CONFIDENCE_LOW, STRIKE_BELOW_COST_BASIS,
+        SCHEMA_INVALID,
         OTHER,
     )
 

@@ -44,3 +44,4 @@ def test_specific_gate_assignments():
     assert REASON_TO_GATE[SkipReason.NO_CANDIDATES_FOUND] == SkipGate.NO_CANDIDATE
     assert REASON_TO_GATE[SkipReason.BOT_HALTED] == SkipGate.HALTED
     assert REASON_TO_GATE[SkipReason.CLAUDE_SKIP] == SkipGate.CLAUDE_SKIP
+    assert REASON_TO_GATE[SkipReason.SCHEMA_INVALID] == SkipGate.LLM_OUTPUT

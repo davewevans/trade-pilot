@@ -9,6 +9,7 @@ Verifies:
 """
 
 import json
+from pathlib import Path
 from unittest.mock import MagicMock, call, patch
 
 import pytest
@@ -301,3 +302,123 @@ def test_wheel_idle_schema_provides_all_guardrail_fields():
     props = schema["properties"]
     for field in ("action", "symbol", "qty", "order_type", "limit_price"):
         assert field in props, f"Schema missing guardrail field: {field}"
+
+
+# ── Schema failure safe-skip tests ────────────────────────────────────────────
+
+def _make_malformed_response(text: str, stop_reason: str = "end_turn"):
+    """Build a mock response whose content[0].text is not valid JSON."""
+    resp = MagicMock()
+    resp.stop_reason = stop_reason
+    resp.content = [MagicMock()]
+    resp.content[0].text = text
+    resp.usage = MagicMock()
+    resp.usage.model_dump.return_value = {}
+    resp.usage.cache_read_input_tokens = 0
+    resp.usage.cache_creation_input_tokens = 0
+    resp.usage.input_tokens = 100
+    resp.usage.output_tokens = 50
+    return resp
+
+
+def test_ask_returns_safe_skip_on_malformed_json(tmp_path):
+    """ask() returns a SKIP dict with SCHEMA_INVALID when JSON is unparseable."""
+    from strategies.skip_codes import SkipCode
+    advisor = _make_advisor()
+    advisor.client.messages.create.return_value = _make_malformed_response("not json")
+    advisor._inject_strategy_params = lambda t, s: t
+
+    with patch("ai.claude_advisor.settings") as mock_settings:
+        mock_settings.LOG_DIR = tmp_path
+        result = advisor.ask({}, WheelState.IDLE)
+
+    assert result["action"] == "skip"
+    assert result.get("skip_reason_code") == SkipCode.SCHEMA_INVALID
+    log_file = tmp_path / "schema_failures.jsonl"
+    assert log_file.exists()
+    line = json.loads(log_file.read_text())
+    assert line["strategy"] == "wheel"
+    assert line["exception_type"] == "JSONDecodeError"
+
+
+def test_ask_returns_safe_skip_on_missing_required_field(tmp_path):
+    """ask() returns SKIP when the JSON is valid but 'action' key is absent."""
+    from strategies.skip_codes import SkipCode
+    advisor = _make_advisor()
+    # Valid JSON, but missing the 'action' key — KeyError on recommendation["action"]
+    advisor.client.messages.create.return_value = _make_malformed_response('{"confidence": "high"}')
+    advisor._inject_strategy_params = lambda t, s: t
+
+    with patch("ai.claude_advisor.settings") as mock_settings:
+        mock_settings.LOG_DIR = tmp_path
+        result = advisor.ask({}, WheelState.IDLE)
+
+    assert result["action"] == "skip"
+    assert result.get("skip_reason_code") == SkipCode.SCHEMA_INVALID
+
+
+def test_ask_spread_returns_safe_skip_on_malformed_json(tmp_path):
+    """ask_spread() returns SKIP with SCHEMA_INVALID on JSON parse failure."""
+    from strategies.skip_codes import SkipCode
+    advisor = _make_advisor()
+    advisor.spread_prompts["bull_put_spread_idle"] = "test"
+    advisor.client.messages.create.return_value = _make_malformed_response("{bad json}")
+    advisor._inject_strategy_params = lambda t, s: t
+
+    with patch("ai.claude_advisor.settings") as mock_settings:
+        mock_settings.LOG_DIR = tmp_path
+        result = advisor.ask_spread({}, "bull_put_spread", "idle")
+
+    assert result["action"] == "SKIP"
+    assert result.get("skip_reason_code") == SkipCode.SCHEMA_INVALID
+    log_file = tmp_path / "schema_failures.jsonl"
+    assert log_file.exists()
+
+
+def test_ask_turnover_wheel_returns_safe_skip_on_malformed_json(tmp_path):
+    """ask_turnover_wheel() returns SKIP with SCHEMA_INVALID on parse failure."""
+    from strategies.skip_codes import SkipCode
+    from strategies.turnover_wheel_strategy import TurnoverWheelState
+    advisor = _make_advisor()
+    advisor.turnover_wheel_phase_prompts = {s: "" for s in TurnoverWheelState}
+    advisor.client.messages.create.return_value = _make_malformed_response("not json")
+    advisor._inject_strategy_params = lambda t, s: t
+
+    with patch("ai.claude_advisor.settings") as mock_settings:
+        mock_settings.LOG_DIR = tmp_path
+        result = advisor.ask_turnover_wheel({}, TurnoverWheelState.IDLE)
+
+    assert result["action"] == "skip"
+    assert result.get("skip_reason_code") == SkipCode.SCHEMA_INVALID
+
+
+def test_log_schema_failure_truncates_long_raw_text(tmp_path):
+    """_log_schema_failure truncates raw_text to 8000 chars."""
+    from ai.claude_advisor import _log_schema_failure
+
+    long_text = "x" * 20_000
+    with patch("ai.claude_advisor.settings") as mock_settings:
+        mock_settings.LOG_DIR = tmp_path
+        _log_schema_failure("wheel", "idle", long_text, "end_turn", ValueError("test"))
+
+    log_file = tmp_path / "schema_failures.jsonl"
+    line = json.loads(log_file.read_text())
+    assert len(line["raw_text"]) == 8000
+
+
+def test_log_schema_failure_never_raises_on_disk_error(tmp_path):
+    """_log_schema_failure swallows exceptions if writing fails."""
+    from ai.claude_advisor import _log_schema_failure
+
+    with patch("builtins.open", side_effect=OSError("disk full")), \
+         patch("ai.claude_advisor.settings") as mock_settings:
+        mock_settings.LOG_DIR = tmp_path
+        # Must not raise
+        _log_schema_failure("wheel", "idle", "raw", "end_turn", ValueError("test"))
+
+
+# ── SkipCode.ALL coverage ─────────────────────────────────────────────────────
+
+def test_schema_invalid_in_skip_code_all():
+    from strategies.skip_codes import SkipCode
+    assert SkipCode.SCHEMA_INVALID in SkipCode.ALL

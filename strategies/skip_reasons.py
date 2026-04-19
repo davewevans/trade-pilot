@@ -11,6 +11,7 @@ class SkipGate(str, Enum):
     LIQUIDITY_FLOOR = "liquidity_floor"
     WINRATE_FLOOR = "winrate_floor"
     CLAUDE_SKIP = "claude_skip"
+    LLM_OUTPUT = "llm_output"
     NO_CANDIDATE = "no_candidate"
     DATA_MISSING = "data_missing"
     HALTED = "halted"
@@ -50,6 +51,7 @@ class SkipReason(str, Enum):
     BOT_HALTED = "bot_halted"
     CLAUDE_SKIP = "claude_skip"
     CLAUDE_ERROR = "claude_error"
+    SCHEMA_INVALID = "schema_invalid"
     DATA_MISSING = "data_missing"
     UNKNOWN = "unknown"
 
@@ -82,6 +84,7 @@ REASON_TO_GATE = {
     SkipReason.BOT_HALTED: SkipGate.HALTED,
     SkipReason.CLAUDE_SKIP: SkipGate.CLAUDE_SKIP,
     SkipReason.CLAUDE_ERROR: SkipGate.CLAUDE_SKIP,
+    SkipReason.SCHEMA_INVALID: SkipGate.LLM_OUTPUT,
     SkipReason.DATA_MISSING: SkipGate.DATA_MISSING,
     SkipReason.UNKNOWN: SkipGate.PRE_CHECK,
 }
