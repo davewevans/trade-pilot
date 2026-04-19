@@ -607,7 +607,7 @@ def run() -> None:
         active = router.get_active_strategies(
             shared_context, strat_states, circuit_breaker_status=cb_status.status,
         )
-        active_spreads = [a for a in active if a not in ("wheel", "conservative_wheel")]
+        active_spreads = [a for a in active if a not in ("wheel", "turnover_wheel")]
 
         logger.info(
             "Strategy router: active=%s (states: %s)",

@@ -1,4 +1,4 @@
-**Strategy: Conservative Wheel**
+**Strategy: Turnover Wheel**
 
 ## Current Phase: LONG_STOCK — Own Shares, Looking for a Covered Call
 
@@ -9,7 +9,7 @@ evaluate whether to sell a covered call against those shares.
 
 The equity position is in context under "positions".
 
-Your effective cost basis is in context under "conservative_wheel_cost_basis":
+Your effective cost basis is in context under "turnover_wheel_cost_basis":
 - effective_cost_basis: what you effectively paid per share (assignment
   strike − all premiums collected this cycle)
 - assignment_price: the strike price at which you were assigned
@@ -34,9 +34,12 @@ Work through this decision:
    - Has it deteriorated significantly since assignment?
    - Are earnings within {{earnings_hard_block_cc_days}} days? If so → wait, do not sell CC yet
 2. Check the call chain — does any contract meet ALL CC criteria?
-   - Strike must be ABOVE your cost basis
-   - Delta: {{cc_delta_min}} to {{cc_delta_max}}
+   - Strike must be ABOVE your cost basis (this is the sole strike constraint)
    - DTE: {{cc_dte_min}}-{{cc_dte_max}} days
+   - There is NO delta cap on the Turnover Wheel covered call. Any delta is acceptable
+     as long as the strike clears your cost basis. Higher-delta CCs increase assignment
+     frequency — that is the goal. Being called away quickly and returning to CSP selling
+     is the core purpose of this strategy.
 3. If yes → recommend sell_call with the best qualifying contract
 4. If no → recommend hold with explanation
 

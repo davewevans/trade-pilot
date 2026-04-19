@@ -92,7 +92,7 @@ class ProgrammaticScorer:
         skipped_rules: list[str] = []
 
         # Dispatch to strategy-specific rule set
-        if strategy_type in ("wheel", "conservative_wheel"):
+        if strategy_type in ("wheel", "turnover_wheel"):
             if action == "SELL_PUT":
                 details, skipped_rules = self._check_wheel_csp_rules(
                     strategy_type, context, reasoning
@@ -220,15 +220,21 @@ class ProgrammaticScorer:
         else:
             skipped.append("earnings_buffer")
 
-        # Delta range
-        delta = _get_delta(reasoning, context)
-        if delta is not None:
-            delta_min = params.get("delta_min", 0.20)
-            delta_max = params.get("delta_max", 0.35)
-            details.append(
-                _rule("delta_range", delta_min <= delta <= delta_max, delta, f"{delta_min}–{delta_max}")
-            )
+        # Delta range — only scored when the strategy defines CC delta bounds.
+        # turnover_wheel has no delta cap on CC entry (cost-basis only), so
+        # delta_min/delta_max are absent from its JSON; skip the rule entirely.
+        if "delta_min" in params and "delta_max" in params:
+            delta = _get_delta(reasoning, context)
+            if delta is not None:
+                delta_min = params["delta_min"]
+                delta_max = params["delta_max"]
+                details.append(
+                    _rule("delta_range", delta_min <= delta <= delta_max, delta, f"{delta_min}–{delta_max}")
+                )
+            else:
+                skipped.append("delta_range")
         else:
+            # No delta bounds defined — no delta filter applied for this strategy's CC.
             skipped.append("delta_range")
 
         # DTE range
@@ -242,7 +248,7 @@ class ProgrammaticScorer:
         else:
             skipped.append("dte_range")
 
-        # Strike above cost basis — conservative_wheel requires this
+        # Strike above cost basis — turnover_wheel requires this
         if params.get("strike_above_cost_basis", False):
             cost_basis = context.get("cost_basis") or context.get("position", {}).get("cost_basis")
             strike = reasoning.get("strike")
@@ -604,7 +610,7 @@ class ProgrammaticScorer:
         try:
             params = get_strategy_entry_params(strategy_type)
             # For wheel-type strategies, use the CSP block as the reference
-            if strategy_type in ("wheel", "conservative_wheel"):
+            if strategy_type in ("wheel", "turnover_wheel"):
                 params = params.get("csp", params)
             block_days = params.get("earnings_buffer_days", _DEFAULT_EARNINGS_BUFFER_DAYS)
         except Exception:
@@ -638,7 +644,7 @@ class ProgrammaticScorer:
 
         try:
             params = get_strategy_entry_params(strategy_type)
-            if strategy_type in ("wheel", "conservative_wheel"):
+            if strategy_type in ("wheel", "turnover_wheel"):
                 params = params.get("csp", params)
             iv_min = params.get("iv_rank_min", 30)
         except Exception:

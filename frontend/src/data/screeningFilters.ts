@@ -6,7 +6,7 @@ export interface StrategyFilters {
 export const SCREENING_FILTERS: Record<string, StrategyFilters[]> = {
   wheel: [
     {
-      strategy: 'Cash-Secured Put Entry',
+      strategy: 'Standard Wheel — Cash-Secured Put Entry',
       filters: [
         { label: 'Delta', value: '-0.20 to -0.30' },
         { label: 'DTE', value: '21–35 days' },
@@ -20,7 +20,7 @@ export const SCREENING_FILTERS: Record<string, StrategyFilters[]> = {
       ],
     },
     {
-      strategy: 'Covered Call Entry',
+      strategy: 'Standard Wheel — Covered Call Entry',
       filters: [
         { label: 'Delta', value: '0.20 to 0.35' },
         { label: 'DTE', value: '21–35 days' },
@@ -133,9 +133,9 @@ export const SCREENING_FILTERS: Record<string, StrategyFilters[]> = {
     },
   ],
 
-  conservative_wheel: [
+  turnover_wheel: [
     {
-      strategy: 'Conservative Wheel — Cash-Secured Put Entry',
+      strategy: 'Turnover Wheel — Cash-Secured Put Entry',
       filters: [
         { label: 'Delta', value: '-0.20 to -0.30' },
         { label: 'DTE', value: '21–35 days' },
@@ -147,12 +147,11 @@ export const SCREENING_FILTERS: Record<string, StrategyFilters[]> = {
       ],
     },
     {
-      strategy: 'Conservative Wheel — Covered Call Entry',
+      strategy: 'Turnover Wheel — Covered Call Entry',
       filters: [
-        { label: 'Delta', value: '0.20 to 0.35' },
         { label: 'DTE', value: '7–14 days (vs. 21–35 standard — faster share turnover)' },
-        { label: 'Strike', value: 'Above cost basis (hard rule — no Bollinger Band check)' },
-        { label: 'Open Interest', value: '≥ 200' },
+        { label: 'Strike', value: 'Above cost basis (sole strike constraint — no delta cap, no Bollinger Band check)' },
+        { label: 'Open Interest', value: '≥ 200 (CSP entry)' },
         { label: 'Earnings', value: '> 21 days away' },
       ],
     },

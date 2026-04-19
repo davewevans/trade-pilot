@@ -105,7 +105,7 @@
       "label": "Paper Account 6",
       "credentials_key": "ALPACA_PAPER6_API_KEY",
       "credentials_secret": "ALPACA_PAPER6_SECRET_KEY",
-      "strategy": "conservative_wheel",
+      "strategy": "turnover_wheel",
       "status": "active",
       "watchlist": [],
       "screening_overrides": {}

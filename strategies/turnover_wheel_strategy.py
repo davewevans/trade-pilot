@@ -1,8 +1,8 @@
-"""Conservative Wheel strategy: CSP → assignment → CC → called away → repeat.
+"""Turnover Wheel strategy: CSP → assignment → CC → called away → repeat.
 
-Conservative variant: shorter CC duration (7–14 DTE), wider position count
-(up to 10 concurrent), smaller size per position (5% of buying power), and
-more permissive rolling rules before closing.
+Higher-turnover variant: shorter CC duration (7–14 DTE), no delta cap on CC
+entry (cost basis only), wider position count (10 concurrent), smaller size
+per position (5% of buying power), and up to 3 rolls before closing.
 """
 
 import json
@@ -19,17 +19,19 @@ from data import market_data
 
 logger = logging.getLogger(__name__)
 
-# Old source-relative path — used only during one-time migration on first load.
-_LEGACY_STATE_FILE = Path(__file__).parent / ".." / "data" / "conservative_wheel_state.json"
-STATE_FILE = str(settings.SNAPSHOTS_DIR / "conservative_wheel_state.json")
+# One-time rename migration: move conservative_wheel_state.json → turnover_wheel_state.json.
+# Points at the SNAPSHOTS_DIR location (the authoritative post-v1.5 path).
+# Safe to remove this constant after a successful first run on each environment.
+_LEGACY_STATE_FILE = settings.SNAPSHOTS_DIR / "conservative_wheel_state.json"
+STATE_FILE = str(settings.SNAPSHOTS_DIR / "turnover_wheel_state.json")
 
 # OCC symbols encode type at a fixed position: C = call, P = put.
 # Format: ROOT(6) + YYMMDD(6) + C/P(1) + strike*1000(8)
 _OCC_TYPE_OFFSET = 6 + 6  # 12th character (0-indexed)
 
 
-class ConservativeWheelState(str, Enum):
-    """Possible states in the conservative wheel strategy lifecycle."""
+class TurnoverWheelState(str, Enum):
+    """Possible states in the turnover wheel strategy lifecycle."""
 
     IDLE = "IDLE"              # No position — ready to sell a CSP
     SHORT_PUT = "SHORT_PUT"    # Cash-secured put is open
@@ -37,21 +39,21 @@ class ConservativeWheelState(str, Enum):
     SHORT_CALL = "SHORT_CALL"  # Covered call is open against the shares
 
 
-class ConservativeWheelStrategy:
-    """Manages the conservative wheel strategy lifecycle for a single underlying symbol.
+class TurnoverWheelStrategy:
+    """Manages the turnover wheel strategy lifecycle for a single underlying symbol.
 
-    The conservative wheel cycles through four states:
+    The turnover wheel cycles through four states:
         IDLE → SHORT_PUT → (assignment) → LONG_STOCK → SHORT_CALL → (called away) → IDLE
 
-    Conservative variant rules (vs standard wheel):
-    - CC DTE: 7–14 days (shorter gamma cycle for faster income collection)
-    - CC strike: above net cost basis only (no Bollinger Band constraint)
+    Turnover Wheel rules (vs standard wheel):
+    - CC DTE: 7–14 days (shorter gamma cycle for faster share turnover)
+    - CC strike: above net cost basis only — no delta cap, no Bollinger Band constraint
     - Max position size: 5% of buying power (half of standard wheel)
     - Max concurrent positions: 10 (doubled vs standard wheel)
     - Max rolls: 3 before closing (vs 2 in standard wheel)
     - Roll delta constraint: wider (-0.40 for puts, 0.45 for calls)
 
-    State is persisted to conservative_wheel_state.json so the bot can
+    State is persisted to turnover_wheel_state.json so the bot can
     resume after restart. Actual broker positions always take precedence
     over the saved state.
     """
@@ -61,8 +63,8 @@ class ConservativeWheelStrategy:
     # Management states (SHORT_PUT, SHORT_CALL) have no mapping — they
     # are never liquidity-gated once a position is open.
     STRATEGY_TYPE_MAP: dict = {
-        ConservativeWheelState.IDLE: "conservative_wheel_csp",
-        ConservativeWheelState.LONG_STOCK: "conservative_wheel_cc",
+        TurnoverWheelState.IDLE: "turnover_wheel_csp",
+        TurnoverWheelState.LONG_STOCK: "turnover_wheel_cc",
     }
 
     def __init__(self, broker: BaseBroker, liquidity_repo=None, backtest_stats_repo=None):
@@ -81,7 +83,7 @@ class ConservativeWheelStrategy:
         self._liquidity_repo = liquidity_repo
         self._backtest_stats_repo = backtest_stats_repo
         self.symbol: str | None = None
-        self.state: ConservativeWheelState = ConservativeWheelState.IDLE
+        self.state: TurnoverWheelState = TurnoverWheelState.IDLE
         self.open_position: dict | None = None
         # Effective cost basis tracking — see save_state/_load_state.
         # cost_basis = assignment strike − total premium collected this cycle
@@ -94,25 +96,25 @@ class ConservativeWheelStrategy:
     # ── state persistence ────────────────────────────────────
 
     def _load_state(self) -> None:
-        """Load persisted state from conservative_wheel_state.json if it exists."""
-        # One-time migration: move state from old source-relative path to persistent SNAPSHOTS_DIR.
-        old_path = _LEGACY_STATE_FILE.resolve()
+        """Load persisted state from turnover_wheel_state.json if it exists."""
+        # One-time migration: rename conservative_wheel_state.json → turnover_wheel_state.json.
+        # Safe to remove after a successful first run on each environment.
+        legacy_path = _LEGACY_STATE_FILE
         new_path = Path(STATE_FILE)
-        if old_path.exists() and not new_path.exists():
+        if legacy_path.exists() and not new_path.exists():
             new_path.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(old_path, new_path)
-            old_path.unlink()
-            logger.info("Migrated conservative wheel state from %s to %s", old_path, new_path)
+            shutil.move(str(legacy_path), str(new_path))
+            logger.info("Migrated conservative_wheel_state.json → turnover_wheel_state.json")
 
         if not os.path.exists(STATE_FILE):
-            logger.info("No conservative wheel state file found at %s — starting fresh", STATE_FILE)
+            logger.info("No turnover wheel state file found at %s — starting fresh", STATE_FILE)
             return
 
         try:
             with open(STATE_FILE, "r") as f:
                 data = json.load(f)
             self.symbol = data.get("symbol")
-            self.state = ConservativeWheelState(data.get("state", "IDLE"))
+            self.state = TurnoverWheelState(data.get("state", "IDLE"))
             self.open_position = data.get("open_position")
             self.cost_basis = data.get("cost_basis")
             self.total_premium_collected = float(
@@ -120,14 +122,14 @@ class ConservativeWheelStrategy:
             )
             self.roll_count = int(data.get("roll_count", 0) or 0)
             logger.info(
-                "Loaded conservative wheel state: symbol=%s state=%s", self.symbol, self.state.value
+                "Loaded turnover wheel state: symbol=%s state=%s", self.symbol, self.state.value
             )
         except (json.JSONDecodeError, ValueError):
-            logger.exception("Corrupt conservative wheel state file — resetting to IDLE")
-            self.state = ConservativeWheelState.IDLE
+            logger.exception("Corrupt turnover wheel state file — resetting to IDLE")
+            self.state = TurnoverWheelState.IDLE
 
     def save_state(self) -> None:
-        """Persist current state to conservative_wheel_state.json."""
+        """Persist current state to turnover_wheel_state.json."""
         data = {
             "symbol": self.symbol,
             "state": self.state.value,
@@ -139,12 +141,12 @@ class ConservativeWheelStrategy:
         }
         from utils.fileio import atomic_json_write
         atomic_json_write(Path(STATE_FILE), data)
-        logger.info("Conservative wheel state saved: symbol=%s state=%s", self.symbol, self.state.value)
+        logger.info("Turnover wheel state saved: symbol=%s state=%s", self.symbol, self.state.value)
 
     # ── state reconciliation ─────────────────────────────────
 
-    def get_current_state(self, symbol: str) -> ConservativeWheelState:
-        """Determine the real conservative wheel state by inspecting broker positions and orders.
+    def get_current_state(self, symbol: str) -> TurnoverWheelState:
+        """Determine the real turnover wheel state by inspecting broker positions and orders.
 
         Actual positions always win over the persisted state file.
 
@@ -159,7 +161,7 @@ class ConservativeWheelStrategy:
             symbol: The underlying ticker (e.g. "SPY").
 
         Returns:
-            The reconciled ConservativeWheelState.
+            The reconciled TurnoverWheelState.
         """
         self.symbol = symbol
         root = symbol.upper()
@@ -175,17 +177,17 @@ class ConservativeWheelStrategy:
             occ_type = self._occ_option_type(pos_symbol)
 
             if occ_type == "P" and qty < 0:
-                self.state = ConservativeWheelState.SHORT_PUT
+                self.state = TurnoverWheelState.SHORT_PUT
                 self.open_position = pos
                 self.save_state()
-                logger.info("Conservative wheel reconciled state → SHORT_PUT (short put position found)")
+                logger.info("Turnover wheel reconciled state → SHORT_PUT (short put position found)")
                 return self.state
 
             if occ_type == "C" and qty < 0:
-                self.state = ConservativeWheelState.SHORT_CALL
+                self.state = TurnoverWheelState.SHORT_CALL
                 self.open_position = pos
                 self.save_state()
-                logger.info("Conservative wheel reconciled state → SHORT_CALL (short call position found)")
+                logger.info("Turnover wheel reconciled state → SHORT_CALL (short call position found)")
                 return self.state
 
         # Check for stock position (assignment would create equity holding)
@@ -193,7 +195,7 @@ class ConservativeWheelStrategy:
             stock_pos = self.broker.get_position(root)
             qty = float(stock_pos.get("qty") or 0)
             if qty >= 100:
-                self.state = ConservativeWheelState.LONG_STOCK
+                self.state = TurnoverWheelState.LONG_STOCK
                 self.open_position = stock_pos
                 # Recompute effective cost basis the first time we observe
                 # the assignment (i.e. when cost_basis is unset). On
@@ -207,28 +209,28 @@ class ConservativeWheelStrategy:
                         assignment_price - self.total_premium_collected, 4,
                     )
                     logger.info(
-                        "Conservative wheel reconciled state → LONG_STOCK (%s shares, "
+                        "Turnover wheel reconciled state → LONG_STOCK (%s shares, "
                         "cost_basis=%.2f, assignment=%.2f, "
                         "premium_collected=%.2f)",
                         qty, self.cost_basis, assignment_price,
                         self.total_premium_collected,
                     )
                 else:
-                    logger.info("Conservative wheel reconciled state → LONG_STOCK (%s shares)", qty)
+                    logger.info("Turnover wheel reconciled state → LONG_STOCK (%s shares)", qty)
                 self.save_state()
                 return self.state
         except Exception:
             pass  # No stock position — that's fine
 
-        # No relevant positions found — conservative wheel cycle complete; reset
+        # No relevant positions found — turnover wheel cycle complete; reset
         # cost-basis tracking so the next CSP starts from a clean slate.
-        self.state = ConservativeWheelState.IDLE
+        self.state = TurnoverWheelState.IDLE
         self.open_position = None
         self.cost_basis = None
         self.total_premium_collected = 0.0
         self.roll_count = 0
         self.save_state()
-        logger.info("Conservative wheel reconciled state → IDLE (no positions for %s)", symbol)
+        logger.info("Turnover wheel reconciled state → IDLE (no positions for %s)", symbol)
         return self.state
 
     # ── liquidity gating ─────────────────────────────────────
@@ -237,7 +239,7 @@ class ConservativeWheelStrategy:
         self,
         symbol: str,
         context: dict,
-        state: ConservativeWheelState,
+        state: TurnoverWheelState,
     ) -> dict | None:
         """Check the liquidity tier before a new CSP or CC entry.
 
@@ -351,9 +353,9 @@ class ConservativeWheelStrategy:
             symbol: The underlying ticker (e.g. "SPY").
 
         Returns:
-            Dict with sections: account, conservative_wheel_state, positions,
+            Dict with sections: account, turnover_wheel_state, positions,
             technicals, option_chain_puts, option_chain_calls, earnings,
-            iv_rank, conservative_wheel_cost_basis.
+            iv_rank, turnover_wheel_cost_basis.
         """
         self.symbol = symbol
         today = date.today()
@@ -413,7 +415,7 @@ class ConservativeWheelStrategy:
                 "cash": account.get("cash"),
                 "options_trading_level": account.get("options_trading_level"),
             },
-            "conservative_wheel_state": {
+            "turnover_wheel_state": {
                 "symbol": symbol,
                 "state": current_state.value,
                 "open_position": self.open_position,
@@ -432,7 +434,7 @@ class ConservativeWheelStrategy:
                 ),
             },
             "iv_rank": iv_rank,
-            "conservative_wheel_cost_basis": (
+            "turnover_wheel_cost_basis": (
                 {
                     "effective_cost_basis": self.cost_basis,
                     "assignment_price": float(
@@ -441,7 +443,7 @@ class ConservativeWheelStrategy:
                     "total_premium_collected": self.total_premium_collected,
                     "roll_count": self.roll_count,
                 }
-                if current_state in (ConservativeWheelState.LONG_STOCK, ConservativeWheelState.SHORT_CALL)
+                if current_state in (TurnoverWheelState.LONG_STOCK, TurnoverWheelState.SHORT_CALL)
                 else None
             ),
             "metadata": {

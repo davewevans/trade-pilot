@@ -86,7 +86,7 @@ _SPREAD_STRATEGY_DEFS: dict | None = None
 def _load_spread_strategy_defs() -> dict:
     """Return {strategy_name: definition_dict} from strategies/definitions/*.json.
 
-    Excludes wheel, conservative_wheel, and adaptive_spreads (handled by the
+    Excludes wheel, turnover_wheel, and adaptive_spreads (handled by the
     strategy router separately). Caches the result at module level so the JSON
     files are only read once per process lifetime.
     """
@@ -95,7 +95,7 @@ def _load_spread_strategy_defs() -> dict:
         return _SPREAD_STRATEGY_DEFS
     import json
     from pathlib import Path
-    _exclude = {"wheel", "conservative_wheel", "adaptive_spreads"}
+    _exclude = {"wheel", "turnover_wheel", "adaptive_spreads"}
     defs_dir = Path(__file__).resolve().parent.parent / "strategies" / "definitions"
     result: dict = {}
     try:

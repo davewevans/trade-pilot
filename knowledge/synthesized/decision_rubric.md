@@ -46,7 +46,7 @@ Examples: delta = 0.20 with `delta_min = 0.20` → pass; DTE = 21 with `dte_min 
 | Earnings buffer | same as CSP | > `earnings_buffer_days` (default 21) |
 | Strike above cost basis | `context.cost_basis` and `reasoning.strike` | strike ≥ cost_basis |
 
-**conservative_wheel** — same rules as `wheel`, thresholds from `conservative_wheel.json`.
+**turnover_wheel** — same CSP rules as `wheel`, thresholds from `turnover_wheel.json`; CC has no delta cap (cost-basis only — `delta_min`/`delta_max` are absent from the CC block, so the `delta_range` rule is skipped for CC scoring).
 
 **bull_put_spread / bear_call_spread (OPEN)**
 | Rule | Source field | Threshold |
