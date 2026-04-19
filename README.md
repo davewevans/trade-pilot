@@ -14,8 +14,8 @@ trade-pilot runs a daily scheduled cycle that evaluates market conditions, asks 
 
 | Strategy | Account | IV Environment | Regime | Type |
 |---|---|---|---|---|
-| Wheel (CSP + CC) | `wheel` | Moderate+ (IVR ≥ 30) | BULL, NEUTRAL | Credit |
-| Conservative Wheel | `conservative_wheel` | Moderate+ (IVR ≥ 30) | BULL, NEUTRAL | Credit |
+| Standard Wheel (CSP + CC) | `wheel` | Moderate+ (IVR ≥ 30) | BULL, NEUTRAL | Credit |
+| Turnover Wheel | `turnover_wheel` | Moderate+ (IVR ≥ 30) | BULL, NEUTRAL | Credit |
 | Iron Condor | `iron_condor` | High (IVR ≥ 50) | NEUTRAL | Credit |
 | Bull Put Spread | `spreads` | Moderate+ (IVR ≥ 35) | BULL, NEUTRAL | Credit |
 | Bear Call Spread | `spreads` | Moderate+ (IVR ≥ 35) | BEAR, NEUTRAL | Credit |
@@ -154,11 +154,11 @@ Each strategy maps to a dedicated Alpaca paper account. Set the key/secret pair 
 
 | Variable pair | Account |
 |---|---|
-| `ALPACA_PAPER2_API_KEY` / `_SECRET_KEY` | Wheel account |
+| `ALPACA_PAPER2_API_KEY` / `_SECRET_KEY` | Standard Wheel account |
 | `ALPACA_PAPER3_API_KEY` / `_SECRET_KEY` | Iron Condor account |
 | `ALPACA_PAPER4_API_KEY` / `_SECRET_KEY` | Iron Butterfly account |
 | `ALPACA_PAPER5_API_KEY` / `_SECRET_KEY` | Calendar Spread account |
-| `ALPACA_CONSERVATIVE_WHEEL_API_KEY` / `_SECRET_KEY` | Conservative Wheel account |
+| `ALPACA_PAPER6_API_KEY` / `_SECRET_KEY` | Turnover Wheel account |
 
 `ALPACA_PAPER1` is the spreads account (bull put, bear call, long call vertical).
 

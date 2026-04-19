@@ -403,7 +403,7 @@ export function TopBar() {
             type="button"
             onClick={() => setShowResumeModal(true)}
             className="ml-auto px-4 py-1.5 rounded font-semibold text-sm border-2 border-white hover:bg-white transition-colors"
-            style={{ color: effectiveHalted ? 'var(--red)' : '#fff', minHeight: '44px' }}
+            style={{ color: '#fff', minHeight: '44px' }}
             onMouseEnter={(e) => {
               const el = e.currentTarget
               el.style.backgroundColor = '#fff'

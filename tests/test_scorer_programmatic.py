@@ -383,18 +383,35 @@ class TestIronCondorRuleAdherence:
         assert results[0]["score"] == pytest.approx(1.0)
 
 
-class TestConservativeWheelRuleAdherence:
+class TestTurnoverWheelRuleAdherence:
 
-    def test_csp_uses_conservative_wheel_params(self, scorer):
-        """Conservative wheel CSP has max_position_pct_of_bp=5 (not 10)."""
+    def test_csp_uses_turnover_wheel_params(self, scorer):
+        """Turnover wheel CSP has max_position_pct_of_bp=5 (not 10)."""
         d = _decision(
-            strategy_type="conservative_wheel",
+            strategy_type="turnover_wheel",
             action="SELL_PUT",
             context=_wheel_csp_context(iv_rank=35, days_until_earnings=30),
             reasoning=_reasoning(delta=0.25, dte=25, open_interest=250),
         )
         results = scorer.score_decision(d)
         assert results[0]["score"] == pytest.approx(1.0)
+
+    def test_cc_delta_range_is_skipped_no_cap(self, scorer):
+        """Turnover wheel CC has no delta cap — delta_range rule must be skipped, not failed."""
+        d = _decision(
+            strategy_type="turnover_wheel",
+            action="SELL_CALL",
+            context={
+                "earnings": {"days_until_earnings": 30},
+                "turnover_wheel_cost_basis": {"effective_cost_basis": 100.0},
+            },
+            reasoning=_reasoning(delta=0.60, dte=10, strike=105.0),
+        )
+        results = scorer.score_decision(d)
+        meta = results[0]["score_metadata"]
+        assert "delta_range" in meta["skipped_rules"], (
+            "delta_range must be skipped for turnover_wheel CC (no delta cap defined)"
+        )
 
 
 class TestCalendarSpreadRuleAdherence:

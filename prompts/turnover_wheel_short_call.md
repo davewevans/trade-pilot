@@ -1,4 +1,4 @@
-**Strategy: Conservative Wheel**
+**Strategy: Turnover Wheel**
 
 ## Current Phase: SHORT_CALL — Managing an Open Covered Call
 
@@ -27,7 +27,7 @@ Work through this decision:
    note that assignment at expiry is the ideal outcome
 
 Note: being assigned on a covered call is NOT a loss — it means the 
-conservative wheel completed a full cycle profitably. Celebrate it.
+turnover wheel completed a full cycle profitably. Celebrate it.
 
 **Ex-dividend risk check (required before any CC):**
 - Check ex_dividend.days_to_ex_dividend from context

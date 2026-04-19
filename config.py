@@ -43,13 +43,9 @@ class Settings:
         self.ALPACA_PAPER5_API_KEY: str = os.getenv("ALPACA_PAPER5_API_KEY", "")
         self.ALPACA_PAPER5_SECRET_KEY: str = os.getenv("ALPACA_PAPER5_SECRET_KEY", "")
 
-        # Paper Account 6 credentials
+        # Paper Account 6 credentials (Turnover Wheel)
         self.ALPACA_PAPER6_API_KEY: str = os.getenv("ALPACA_PAPER6_API_KEY", "")
         self.ALPACA_PAPER6_SECRET_KEY: str = os.getenv("ALPACA_PAPER6_SECRET_KEY", "")
-
-        # Conservative Wheel account credentials (fourth dedicated paper account)
-        self.ALPACA_CONSERVATIVE_WHEEL_API_KEY: str = os.getenv("ALPACA_CONSERVATIVE_WHEEL_API_KEY", "")
-        self.ALPACA_CONSERVATIVE_WHEEL_SECRET_KEY: str = os.getenv("ALPACA_CONSERVATIVE_WHEEL_SECRET_KEY", "")
 
         if self.ALPACA_PAPER:
             self.ALPACA_TRADE_URL = "https://paper-api.alpaca.markets"
@@ -277,22 +273,22 @@ class Settings:
         return self._account_manager
 
     def _load_watchlist(self) -> None:
-        """Load WATCHLIST and SPREAD_WATCHLIST from data/watchlist.json.
-
-        # DEPRECATED: Watchlists now live in account_config.json per account.
-        """
+        """Load strategy watchlists from data/watchlist.json."""
         watchlist_path = self.DATA_DIR / "watchlist.json"
         if watchlist_path.exists():
             try:
                 data = json.loads(watchlist_path.read_text(encoding="utf-8"))
                 self.WATCHLIST: list[str] = data.get("wheel", ["AAPL", "SPY"])
-                self.CONSERVATIVE_WHEEL_WATCHLIST: list[str] = data.get("conservative_wheel", list(self.WATCHLIST))
+                self.TURNOVER_WHEEL_WATCHLIST: list[str] = data.get("turnover_wheel", list(self.WATCHLIST))
                 self.SPREAD_WATCHLIST: list[str] = data.get("spreads", list(self.WATCHLIST))
                 self.IRON_CONDOR_WATCHLIST: list[str] = data.get("iron_condor", list(self.SPREAD_WATCHLIST))
+                self.IRON_BUTTERFLY_WATCHLIST: list[str] = data.get("iron_butterfly", list(self.IRON_CONDOR_WATCHLIST))
+                self.CALENDAR_SPREAD_WATCHLIST: list[str] = data.get("calendar_spread", list(self.SPREAD_WATCHLIST))
                 log.info(
-                    "Loaded watchlist from %s: %d wheel, %d conservative_wheel, %d iron_condor, %d spreads",
-                    watchlist_path, len(self.WATCHLIST), len(self.CONSERVATIVE_WHEEL_WATCHLIST),
-                    len(self.IRON_CONDOR_WATCHLIST), len(self.SPREAD_WATCHLIST),
+                    "Loaded watchlist from %s: %d wheel, %d turnover_wheel, %d iron_condor, %d iron_butterfly, %d spreads, %d calendar_spread",
+                    watchlist_path, len(self.WATCHLIST), len(self.TURNOVER_WHEEL_WATCHLIST),
+                    len(self.IRON_CONDOR_WATCHLIST), len(self.IRON_BUTTERFLY_WATCHLIST),
+                    len(self.SPREAD_WATCHLIST), len(self.CALENDAR_SPREAD_WATCHLIST),
                 )
                 return
             except Exception:
@@ -301,14 +297,16 @@ class Settings:
         # watchlist.json missing or unreadable — seed from built-in defaults
         log.warning("watchlist.json not found at %s; using built-in defaults", watchlist_path)
         self.WATCHLIST = ["AAPL", "SPY", "MSFT", "AMD", "JPM", "XOM"]
-        self.CONSERVATIVE_WHEEL_WATCHLIST = list(self.WATCHLIST)
+        self.TURNOVER_WHEEL_WATCHLIST = list(self.WATCHLIST)
         self.IRON_CONDOR_WATCHLIST = ["SPY", "QQQ", "IWM", "AAPL", "MSFT", "GOOGL", "AMZN", "JPM", "XOM", "META", "NVDA"]
+        self.IRON_BUTTERFLY_WATCHLIST = list(self.IRON_CONDOR_WATCHLIST)
         self.SPREAD_WATCHLIST = [
             "AAPL", "MSFT", "AMD", "GOOGL", "AMZN", "META", "NVDA", "TSLA",
             "JPM", "GS", "BAC", "XOM", "CVX", "JNJ", "UNH", "PFE",
             "SPY", "QQQ", "IWM", "DIS", "NFLX", "CRM", "ORCL", "ADBE",
             "HD", "LOW", "COST", "BA", "CAT", "DE",
         ]
+        self.CALENDAR_SPREAD_WATCHLIST = list(self.SPREAD_WATCHLIST)
 
     # Sector mapping for correlation awareness.
     # Used by the guardrails (sector concentration) and reporting to flag
@@ -330,7 +328,7 @@ class Settings:
     # DEPRECATED: Use AccountManager instead. Will be removed in v1.1.
     STRATEGY_ACCOUNT_MAP: dict[str, tuple[str, str]] = {
         "wheel":               ("ALPACA_PAPER2_API_KEY", "ALPACA_PAPER2_SECRET_KEY"),
-        "conservative_wheel":  ("ALPACA_CONSERVATIVE_WHEEL_API_KEY", "ALPACA_CONSERVATIVE_WHEEL_SECRET_KEY"),
+        "turnover_wheel":      ("ALPACA_PAPER6_API_KEY", "ALPACA_PAPER6_SECRET_KEY"),
         "iron_condor":         ("ALPACA_PAPER3_API_KEY", "ALPACA_PAPER3_SECRET_KEY"),
         "bull_put_spread":     ("ALPACA_PAPER1_API_KEY", "ALPACA_PAPER1_SECRET_KEY"),
         "bear_call_spread":    ("ALPACA_PAPER1_API_KEY", "ALPACA_PAPER1_SECRET_KEY"),
@@ -339,9 +337,9 @@ class Settings:
         "calendar_spread":     ("ALPACA_PAPER5_API_KEY", "ALPACA_PAPER5_SECRET_KEY"),
     }
 
-    # Conservative Wheel position sizing (differs from standard wheel)
-    CONSERVATIVE_WHEEL_MAX_POSITION_PCT: float = 0.05   # 5% of BP per position
-    CONSERVATIVE_WHEEL_MAX_CONCURRENT: int = 10
+    # Turnover Wheel position sizing (differs from standard wheel)
+    TURNOVER_WHEEL_MAX_POSITION_PCT: float = 0.05   # 5% of BP per position
+    TURNOVER_WHEEL_MAX_CONCURRENT: int = 10
 
     def get_broker_credentials(self, strategy_name: str) -> tuple[str, str]:
         """Return (api_key, secret_key) for the account assigned to *strategy_name*."""

@@ -6,7 +6,7 @@ export interface StrategyFilters {
 export const SCREENING_FILTERS: Record<string, StrategyFilters[]> = {
   wheel: [
     {
-      strategy: 'Cash-Secured Put Entry',
+      strategy: 'Standard Wheel — Cash-Secured Put Entry',
       filters: [
         { label: 'Delta', value: '-0.20 to -0.30' },
         { label: 'DTE', value: '21–35 days' },
@@ -20,7 +20,7 @@ export const SCREENING_FILTERS: Record<string, StrategyFilters[]> = {
       ],
     },
     {
-      strategy: 'Covered Call Entry',
+      strategy: 'Standard Wheel — Covered Call Entry',
       filters: [
         { label: 'Delta', value: '0.20 to 0.35' },
         { label: 'DTE', value: '21–35 days' },
@@ -92,6 +92,67 @@ export const SCREENING_FILTERS: Record<string, StrategyFilters[]> = {
         { label: 'SMA Filter', value: 'Stock above 50-day SMA' },
         { label: 'Regime', value: 'BULL only' },
         { label: 'IV Environment', value: 'LOW only (IVR < 30)' },
+      ],
+    },
+  ],
+
+  iron_butterfly: [
+    {
+      strategy: 'Iron Butterfly Entry',
+      filters: [
+        { label: 'Center Strike', value: 'ATM (both shorts at same strike)' },
+        { label: 'Wing Width', value: '$5 above and below center' },
+        { label: 'Total Credit', value: '≥ $2.00' },
+        { label: 'Credit-to-Width Ratio', value: '≥ 30%' },
+        { label: 'DTE', value: '20–45 days' },
+        { label: 'Open Interest', value: '≥ 200 (both wings)' },
+        { label: 'Bid-Ask Spread', value: '< 15%' },
+        { label: 'Earnings', value: '> 30 days away' },
+        { label: 'IV Forecast', value: 'OVERVALUED or FAIR (never UNDERVALUED)' },
+        { label: 'Term Structure', value: 'Not in backwardation' },
+        { label: 'Regime', value: 'NEUTRAL only' },
+        { label: 'IV Environment', value: 'HIGH (IVR ≥ 50)' },
+      ],
+    },
+  ],
+
+  calendar_spread: [
+    {
+      strategy: 'Calendar Spread Entry',
+      filters: [
+        { label: 'Strike Selection', value: 'ATM (50 delta, same strike both legs)' },
+        { label: 'Short Leg DTE', value: '20–35 days' },
+        { label: 'Long Leg DTE', value: '50–90 days (≥ 30 days after short leg)' },
+        { label: 'Net Debit', value: '≤ $2.50' },
+        { label: 'Earnings', value: 'Must NOT fall between the two expirations' },
+        { label: 'Term Structure', value: 'Contango required (short-term IV < long-term IV)' },
+        { label: 'IV Forecast', value: 'FAIR or UNDERVALUED preferred (we buy the long leg)' },
+        { label: 'Regime', value: 'NEUTRAL only' },
+        { label: 'IV Environment', value: 'LOW or MODERATE (IVR < 50)' },
+      ],
+    },
+  ],
+
+  turnover_wheel: [
+    {
+      strategy: 'Turnover Wheel — Cash-Secured Put Entry',
+      filters: [
+        { label: 'Delta', value: '-0.20 to -0.30' },
+        { label: 'DTE', value: '21–35 days' },
+        { label: 'IV Rank (1y)', value: '≥ 30' },
+        { label: 'Open Interest', value: '≥ 200' },
+        { label: 'Earnings', value: '> 21 days away' },
+        { label: 'Max Position Size', value: '≤ 5% buying power (vs. 10% standard)' },
+        { label: 'Max Concurrent', value: '10 wheels (vs. 5 standard)' },
+      ],
+    },
+    {
+      strategy: 'Turnover Wheel — Covered Call Entry',
+      filters: [
+        { label: 'DTE', value: '7–14 days (vs. 21–35 standard — faster share turnover)' },
+        { label: 'Strike', value: 'Above cost basis (sole strike constraint — no delta cap, no Bollinger Band check)' },
+        { label: 'Open Interest', value: '≥ 200 (CSP entry)' },
+        { label: 'Earnings', value: '> 21 days away' },
       ],
     },
   ],

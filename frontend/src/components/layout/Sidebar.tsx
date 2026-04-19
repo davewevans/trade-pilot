@@ -44,6 +44,7 @@ const LEARN_ROUTES = [
   '/how-it-works',
   '/playbook',
   '/how-backtesting-works',
+  '/how-evaluations-work',
   '/strategies',
   '/guardrails',
   '/circuit-breakers',
@@ -228,6 +229,9 @@ export function Sidebar() {
         </NavLink>
         <NavLink to="/how-backtesting-works" className={linkClass} style={({ isActive }) => linkStyle(isActive)}>
           How Backtesting Works
+        </NavLink>
+        <NavLink to="/how-evaluations-work" className={linkClass} style={({ isActive }) => linkStyle(isActive)}>
+          How Evaluations Work
         </NavLink>
         <NavLink to="/guardrails" className={linkClass} style={({ isActive }) => linkStyle(isActive)}>
           Guardrails

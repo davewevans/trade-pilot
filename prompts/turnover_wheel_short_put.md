@@ -1,4 +1,4 @@
-**Strategy: Conservative Wheel**
+**Strategy: Turnover Wheel**
 
 ## Current Phase: SHORT_PUT — Managing an Open Cash-Secured Put
 

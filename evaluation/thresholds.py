@@ -19,7 +19,7 @@ from __future__ import annotations
 # Calibrate after first real analysis pass.
 SAMPLE_SIZE_GATES: dict[str, int] = {
     "wheel": 10,
-    "conservative_wheel": 10,
+    "turnover_wheel": 10,
     "bull_put_spread": 10,
     "bear_call_spread": 10,
     "long_call_vertical": 5,

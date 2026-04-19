@@ -551,7 +551,7 @@ export function AccountDetail() {
         </section>
       )}
 
-      {accountMeta.strategy && SCREENING_FILTERS[accountMeta.strategy] && (
+      {accountMeta.strategy && (
         <section>
           <button
             onClick={() => setFiltersOpen((o) => !o)}
@@ -574,44 +574,59 @@ export function AccountDetail() {
           </button>
           {filtersOpen && (
             <div className="space-y-3 mt-3">
-              {SCREENING_FILTERS[accountMeta.strategy].map((group) => (
+              {SCREENING_FILTERS[accountMeta.strategy] ? (
+                <>
+                  {SCREENING_FILTERS[accountMeta.strategy].map((group) => (
+                    <div
+                      key={group.strategy}
+                      className="rounded p-4"
+                      style={{ backgroundColor: 'var(--bg-card)', border: '1px solid var(--border)' }}
+                    >
+                      <div
+                        className="text-xs font-semibold uppercase tracking-wider mb-3"
+                        style={{ color: 'var(--text-secondary)' }}
+                      >
+                        {group.strategy}
+                      </div>
+                      <div
+                        style={{
+                          display: 'grid',
+                          gridTemplateColumns: 'repeat(2, 1fr)',
+                          gap: '6px 24px',
+                        }}
+                      >
+                        {group.filters.map((f, i) => (
+                          <div key={i} className="flex items-baseline justify-between gap-2">
+                            <span className="text-xs" style={{ color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+                              {f.label}
+                            </span>
+                            <span
+                              className="font-mono text-xs"
+                              style={{ color: 'var(--text-primary)', textAlign: 'right' }}
+                            >
+                              {f.value}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                  <p className="text-xs" style={{ color: 'var(--text-muted)', marginTop: '4px' }}>
+                    These filters are defined in the bot's prompt configuration and guardrails.
+                  </p>
+                </>
+              ) : (
                 <div
-                  key={group.strategy}
                   className="rounded p-4"
                   style={{ backgroundColor: 'var(--bg-card)', border: '1px solid var(--border)' }}
                 >
-                  <div
-                    className="text-xs font-semibold uppercase tracking-wider mb-3"
-                    style={{ color: 'var(--text-secondary)' }}
-                  >
-                    {group.strategy}
-                  </div>
-                  <div
-                    style={{
-                      display: 'grid',
-                      gridTemplateColumns: 'repeat(2, 1fr)',
-                      gap: '6px 24px',
-                    }}
-                  >
-                    {group.filters.map((f, i) => (
-                      <div key={i} className="flex items-baseline justify-between gap-2">
-                        <span className="text-xs" style={{ color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
-                          {f.label}
-                        </span>
-                        <span
-                          className="font-mono text-xs"
-                          style={{ color: 'var(--text-primary)', textAlign: 'right' }}
-                        >
-                          {f.value}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
+                  <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
+                    Screening filters for <code>{accountMeta.strategy}</code> haven't been documented yet.
+                    Add an entry keyed by <code>{accountMeta.strategy}</code> to{' '}
+                    <code>frontend/src/data/screeningFilters.ts</code>.
+                  </p>
                 </div>
-              ))}
-              <p className="text-xs" style={{ color: 'var(--text-muted)', marginTop: '4px' }}>
-                These filters are defined in the bot's prompt configuration and guardrails.
-              </p>
+              )}
             </div>
           )}
         </section>
