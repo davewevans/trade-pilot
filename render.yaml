@@ -27,7 +27,7 @@ services:
       - key: DATA_DIR
         value: /data
       - key: PYTHON_VERSION
-        value: 3.14.0
+        value: 3.14.2
       - key: TZ
         value: UTC         # Render server runs UTC, scheduler adjusts
 
