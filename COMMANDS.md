@@ -42,8 +42,7 @@ bash start.sh
 ## Frontend (React / Vite)
 
 ```
-cd frontend
-npm run dev
+cd frontend && npm run dev
 ```
 
 Build for production:
