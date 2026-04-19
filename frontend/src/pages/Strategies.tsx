@@ -355,6 +355,7 @@ export function Strategies() {
               'Original Wheel: strike must be above the upper Bollinger Band AND above cost basis',
               'Conservative: strike must be above cost basis, period',
               'No technical-indicator filter on CC strike',
+              'No delta cap on the short call — the cost-basis filter is the sole strike constraint',
             ]}
           >
             We remove the Bollinger Band check. As long as the strike is above our net cost basis (so we can't
@@ -384,6 +385,17 @@ export function Strategies() {
             roll attempt and widens the acceptable delta range on the replacement contract (short put within
             −0.40, short call within 0.45). Net-credit requirement is unchanged — no rolls for a debit.
           </SubCard>
+        </div>
+
+        <div
+          className="mt-3 p-3 rounded text-xs"
+          style={{
+            backgroundColor: 'color-mix(in srgb, var(--accent) 8%, transparent)',
+            color: 'var(--text-secondary)',
+            borderLeft: '3px solid var(--accent)',
+          }}
+        >
+          <strong>Why no delta cap?</strong> The Conservative Wheel's goal is fast share turnover — get called away, return to selling puts. Capping short-call delta would slow that turnover by pushing strikes further OTM. Cost basis is the only hard rule because it's the only rule that prevents locking in a loss; everything else about the CC leg is optimized for speed of cycle rather than safety margin on the strike.
         </div>
 
         <Subheading>What's the same as the original Wheel</Subheading>
@@ -593,6 +605,17 @@ export function Strategies() {
           <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Earnings must NOT fall between the two expirations</li>
           <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Stock must be range-bound (within Bollinger Bands)</li>
         </ul>
+
+        <div
+          className="mt-3 p-3 rounded text-xs"
+          style={{
+            backgroundColor: 'color-mix(in srgb, var(--accent) 8%, transparent)',
+            color: 'var(--text-secondary)',
+            borderLeft: '3px solid var(--accent)',
+          }}
+        >
+          <strong>Why this strategy?</strong> Calendar Spread fills a gap in the strategy lineup: it's the only strategy that enters in NEUTRAL regime + LOW/MODERATE IV. Iron Condor and Iron Butterfly require HIGH IV, the Wheel skews toward moderate IV with directional bias via assignment, and the credit/debit spreads all require a directional view. When the market is quiet <em>and</em> options are cheap, Calendar Spread is the only thing that runs — it's also the bot's only vega-positive strategy, so it profits from IV expansion rather than contraction.
+        </div>
 
         <Subheading>Risk profile</Subheading>
         <div className="grid gap-3 md:grid-cols-3">
