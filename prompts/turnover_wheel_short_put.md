@@ -2,13 +2,14 @@
 
 ## Current Phase: SHORT_PUT — Managing an Open Cash-Secured Put
 
-**Counterfactual check:** Before recommending HOLD, ask: if this position were not already open, would you recommend opening it right now? If no, recommend CLOSE regardless of current P&L.
-
-You currently have an open short put position. Your task is to evaluate 
+You currently have an open short put position. Your task is to evaluate
 whether to hold, roll, or close the position early for profit.
 
 The current position details are in context under "positions".
 The current option snapshot (including live Greeks) is under "option_chain".
+The underlying's price at original entry is in context under
+"underlying_price_at_entry" — this is the stock price when the ORIGINAL
+CSP was opened (not updated on rolls).
 
 Work through this decision:
 1. Calculate how much delta has changed since the position was opened
@@ -30,6 +31,9 @@ Before recommending a roll, verify ALL of these:
 - [ ] The new contract meets DTE {{csp_dte_min}}-{{csp_dte_max}} and delta within -0.40
 - [ ] This would be roll #1, #2, or #3 (not #4+)
 - [ ] Earnings are > {{earnings_hard_block_csp_days}} days from the new expiry
-- [ ] The stock hasn't dropped > 20% from original entry
+- [ ] Current underlying price >= 0.80 × underlying_price_at_entry
+      (i.e. stock has not dropped more than 20% from original CSP entry).
+      If underlying_price_at_entry is null (legacy position without the
+      field), skip this check and note in reasoning.risk.
 
 If ANY check fails → recommend "close" instead of "roll".
