@@ -78,6 +78,12 @@ class SkipCode:
     """Net debit exceeds the maximum allowed for debit spreads / calendars,
     OR falls outside the allowed debit range (too high or too low)."""
 
+    # ── Macro event proximity ──────────────────────────────────
+
+    MACRO_EVENT_PROXIMITY = "MACRO_EVENT_PROXIMITY"
+    """A Tier 1 macro event (FOMC, CPI, NFP) is scheduled for the current or next
+    trading day. New entries blocked until the session after the event."""
+
     # ── Position / account limits ──────────────────────────────
 
     POSITION_LIMIT_REACHED = "POSITION_LIMIT_REACHED"
@@ -118,6 +124,7 @@ class SkipCode:
         LIQUIDITY_INSUFFICIENT, DELTA_OUT_OF_RANGE, DTE_OUT_OF_RANGE,
         NO_ELIGIBLE_STRIKE,
         CREDIT_TOO_LOW, DEBIT_TOO_HIGH,
+        MACRO_EVENT_PROXIMITY,
         POSITION_LIMIT_REACHED, BUYING_POWER_INSUFFICIENT,
         CIRCUIT_BREAKER_ACTIVE,
         CONFIDENCE_LOW, STRIKE_BELOW_COST_BASIS,

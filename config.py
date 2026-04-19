@@ -255,6 +255,14 @@ class Settings:
             os.getenv("TURNOVER_WHEEL_ENABLED", "true").lower() == "true"
         )
 
+        # ── Macro event block ─────────────────────────────────
+        # Hard-blocks new entries the day of and the trading day before any Tier 1
+        # macro event (FOMC, CPI, NFP) listed in data/macro_events.json.
+        # Management cycles (rolls, closes) are never blocked.
+        self.MACRO_EVENT_BLOCK_ENABLED: bool = (
+            os.getenv("MACRO_EVENT_BLOCK_ENABLED", "true").lower() == "true"
+        )
+
         # Create required directories
         self.DATA_DIR.mkdir(parents=True, exist_ok=True)
         self.LOG_DIR.mkdir(parents=True, exist_ok=True)

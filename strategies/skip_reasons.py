@@ -7,6 +7,7 @@ class SkipGate(str, Enum):
     PRE_CHECK = "pre_check"
     GUARDRAIL = "guardrail"
     CIRCUIT_BREAKER = "circuit_breaker"
+    MACRO_EVENT = "macro_event"
     LIQUIDITY_FLOOR = "liquidity_floor"
     WINRATE_FLOOR = "winrate_floor"
     CLAUDE_SKIP = "claude_skip"
@@ -41,6 +42,8 @@ class SkipReason(str, Enum):
     GUARDRAIL_SYMBOL_FORMAT = "guardrail_symbol_format"
     GUARDRAIL_SHARED_CAPITAL = "guardrail_shared_capital"
     GUARDRAIL_OTHER = "guardrail_other"
+    # macro event
+    MACRO_EVENT_PROXIMITY = "macro_event_proximity"
     # system
     CIRCUIT_BREAKER_RED = "circuit_breaker_red"
     CIRCUIT_BREAKER_YELLOW = "circuit_breaker_yellow"
@@ -73,6 +76,7 @@ REASON_TO_GATE = {
     SkipReason.GUARDRAIL_SYMBOL_FORMAT: SkipGate.GUARDRAIL,
     SkipReason.GUARDRAIL_SHARED_CAPITAL: SkipGate.GUARDRAIL,
     SkipReason.GUARDRAIL_OTHER: SkipGate.GUARDRAIL,
+    SkipReason.MACRO_EVENT_PROXIMITY: SkipGate.MACRO_EVENT,
     SkipReason.CIRCUIT_BREAKER_RED: SkipGate.CIRCUIT_BREAKER,
     SkipReason.CIRCUIT_BREAKER_YELLOW: SkipGate.CIRCUIT_BREAKER,
     SkipReason.BOT_HALTED: SkipGate.HALTED,

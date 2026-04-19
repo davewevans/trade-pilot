@@ -823,6 +823,13 @@ export function Strategies() {
               <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Circuit breaker monitors aggregate equity across all four accounts</li>
             </ul>
           </SubCard>
+          <SubCard title="Macro Event Block">
+            <ul className="space-y-1 text-xs" style={{ color: 'var(--text-secondary)' }}>
+              <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Blocks new entries the day of and the trading day before FOMC / CPI / NFP</li>
+              <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Existing positions manage normally through events</li>
+              <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Event schedule populated from <code className="font-mono">data/macro_events.json</code></li>
+            </ul>
+          </SubCard>
         </div>
 
         <Subheading>Entry Timing</Subheading>

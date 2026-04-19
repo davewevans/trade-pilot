@@ -164,6 +164,7 @@ class ContextBuilder:
             "volatility": None,
             "earnings": None,
             "ex_dividend": None,
+            "next_macro_event": None,
         }
 
         # ── Parallel fetches ────────────────────────────────
@@ -592,6 +593,16 @@ class ContextBuilder:
                         context["spread_candidates"] = all_candidates
         except Exception:
             logger.warning("Failed to build spread candidates for %s", symbol, exc_info=True)
+
+        # Macro event proximity — for Claude's margin reasoning
+        try:
+            from data.macro_calendar import next_event as _next_macro_event
+            context["next_macro_event"] = _next_macro_event(
+                datetime.now(__import__("zoneinfo").ZoneInfo("America/New_York"))
+            )
+        except Exception:
+            logger.warning("Failed to fetch next macro event", exc_info=True)
+            context["next_macro_event"] = None
 
         elapsed = time.monotonic() - t0
         logger.info("Context build for %s completed in %.2fs", symbol, elapsed)

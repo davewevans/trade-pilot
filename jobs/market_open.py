@@ -104,6 +104,44 @@ def run() -> None:
         logger.info("=== MARKET OPEN JOB COMPLETE (halted) ===")
         return
 
+    # ── Macro event block ────────────────────────────────────────────────────
+    if settings.MACRO_EVENT_BLOCK_ENABLED:
+        from data.macro_calendar import is_blocked as _macro_is_blocked
+        _macro_blocked, _macro_reason = _macro_is_blocked(et_now)
+        if _macro_blocked:
+            logger.info("MACRO EVENT BLOCK ACTIVE: %s — skipping all entries", _macro_reason)
+            append_section(
+                "Market Open Decisions (10:00 AM ET)",
+                f"**MACRO BLOCK** — {_macro_reason}. No new entries.",
+            )
+            logger.info("=== MARKET OPEN JOB COMPLETE (macro blocked) ===")
+            return
+
+    # Record macro calendar coverage health for dashboard visibility
+    try:
+        from data.macro_calendar import fomc_coverage_days as _fcd
+        from data.source_health import SourceHealth as _SH
+        _msh = _SH()
+        _days = _fcd(et_now)
+        if _days < 30:
+            _msh.record(
+                "Macro Calendar", False,
+                f"FOMC/CPI coverage only {_days} days out — populate data/macro_events.json",
+            )
+            logger.warning(
+                "Macro calendar FOMC/CPI coverage: only %d days out — populate data/macro_events.json",
+                _days,
+            )
+        elif _days < 60:
+            _msh.record(
+                "Macro Calendar", True,
+                f"FOMC/CPI coverage {_days} days out (< 60 — consider adding more dates)",
+            )
+        else:
+            _msh.record("Macro Calendar", True, f"FOMC/CPI coverage {_days} days out")
+    except Exception:
+        logger.warning("Failed to record macro calendar health", exc_info=True)
+
     logger.info(
         "Circuit breaker: %s | Daily P&L: %.2f%% | Drawdown: %.2f%% | Multiplier: %.1f",
         cb_status.status, cb_status.daily_pnl_pct, cb_status.drawdown_pct,
