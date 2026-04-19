@@ -9,7 +9,7 @@ const STEPS: Step[] = [
     num: 1,
     label: 'Gather',
     body:
-      'Fetches live prices, IV rank, macro data, earnings dates, and account state from six data sources every cycle.',
+      'Fetches live prices, IV rank, macro data, earnings dates, and portfolio state from six data sources every cycle.',
   },
   {
     num: 2,
@@ -31,24 +31,42 @@ const STEPS: Step[] = [
   },
 ]
 
-const ACCOUNTS = [
+const STRATEGIES = [
   {
     accent: 'var(--accent-wheel, var(--accent))',
-    name: 'Wheel Account',
+    name: 'Standard Wheel',
     body:
-      'Runs the wheel strategy — selling cash-secured puts for income and covered calls after assignment. Cycles through four states: IDLE, SHORT_PUT, LONG_STOCK, SHORT_CALL.',
+      'A three-phase income strategy — sells cash-secured puts for premium, takes assignment if the stock drops, then sells covered calls until the shares are called away. Active in most market conditions.',
+  },
+  {
+    accent: 'var(--accent-wheel, var(--accent))',
+    name: 'Turnover Wheel',
+    body:
+      'Runs the same four-phase cycle as the Standard Wheel but optimized for faster share turnover — shorter covered call cycles and cost-basis-only strike selection to exit positions quickly and return to selling puts.',
   },
   {
     accent: 'var(--accent-iron-condor, var(--accent))',
-    name: 'Iron Condor Account',
+    name: 'Iron Condor',
     body:
-      'Runs a single strategy: the iron condor. Sells an OTM put spread and an OTM call spread simultaneously, profiting when the market stays within a defined range. Activated in neutral, high-IV conditions.',
+      'Sells an OTM put spread and an OTM call spread simultaneously, profiting when the stock stays within a defined range. Activated in neutral, high-IV conditions.',
   },
   {
     accent: 'var(--accent-spreads, var(--accent))',
-    name: 'Spreads Account',
+    name: 'Bull Put Spread',
     body:
-      'Runs three strategies adaptively — Bull Put Spread, Bear Call Spread, and Long Call Vertical — switching between them based on the current market regime and IV environment. Only one new position per cycle.',
+      'Sells a put and buys a lower-strike put for protection, collecting premium when the stock stays above the short strike. Used in neutral-to-bullish conditions at moderate or high IV.',
+  },
+  {
+    accent: 'var(--accent-spreads, var(--accent))',
+    name: 'Bear Call Spread',
+    body:
+      'Sells a call and buys a higher-strike call for protection, profiting when the stock stays below the short strike. Used in neutral-to-bearish conditions at moderate or high IV.',
+  },
+  {
+    accent: 'var(--accent-spreads, var(--accent))',
+    name: 'Long Call Vertical',
+    body:
+      'A debit strategy — buys a call and sells a higher-strike call above it, profiting when the stock rises above the long strike plus the debit paid. Deployed only in bullish conditions when options are cheap (low IV).',
   },
 ]
 
@@ -78,7 +96,7 @@ const GOALS = [
 const STACK = [
   { label: 'AI', value: 'Claude Sonnet (Anthropic)' },
   { label: 'Broker', value: 'Alpaca (paper trading)' },
-  { label: 'Language', value: 'Python 3.11+' },
+  { label: 'Language', value: 'Python 3.14.2' },
   { label: 'Data', value: 'Alpaca Market Data, yfinance, FRED, Finnhub, CNN Fear & Greed, ORATS (IV analytics, options data, volatility surface, earnings, historical backtesting)' },
   { label: 'Scheduler', value: 'Python schedule library' },
   { label: 'API', value: 'FastAPI' },
@@ -167,11 +185,11 @@ export function About() {
         </div>
       </section>
 
-      {/* Section 3: Three Accounts */}
+      {/* Section 3: Strategies */}
       <section className="mb-12">
-        <SectionHeader>The Three Accounts</SectionHeader>
+        <SectionHeader>Strategies</SectionHeader>
         <div className="grid gap-3 md:grid-cols-3">
-          {ACCOUNTS.map((a) => (
+          {STRATEGIES.map((a) => (
             <div
               key={a.name}
               className="p-4 rounded-lg border"
@@ -249,7 +267,7 @@ export function About() {
 
       {/* Footer note */}
       <div className="text-center text-xs pb-8" style={{ color: 'var(--text-muted)' }}>
-        Currently running on paper trading accounts. No real capital is at risk.
+        Currently running on paper trading. No real capital is at risk.
       </div>
     </div>
   )
