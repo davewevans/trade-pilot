@@ -8,6 +8,8 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 from typing import Optional
 
+from database.db import db_retry
+
 
 class BacktestStatsRepository:
     """Read/write access to backtest trade log and aggregated stats tables."""
@@ -17,6 +19,7 @@ class BacktestStatsRepository:
 
     # ── Raw trade methods ─────────────────────────────────────────────────────
 
+    @db_retry()
     def insert_trade(self, trade_data: dict) -> int:
         """Insert a single backtest trade row. Returns trade_id.
 
@@ -62,6 +65,7 @@ class BacktestStatsRepository:
         self._conn.commit()
         return int(cur.lastrowid)
 
+    @db_retry()
     def insert_trades_batch(self, trades: list[dict], sweep_run_id: str) -> int:
         """Bulk insert trades via executemany. Returns count inserted."""
         if not trades:
@@ -152,6 +156,7 @@ class BacktestStatsRepository:
 
     # ── Stats methods ─────────────────────────────────────────────────────────
 
+    @db_retry()
     def upsert_symbol_stat(self, stat: dict) -> None:
         """Insert or update a symbol_strategy_stats row."""
         self._conn.execute(
@@ -193,6 +198,7 @@ class BacktestStatsRepository:
         )
         self._conn.commit()
 
+    @db_retry()
     def upsert_regime_stat(self, stat: dict) -> None:
         """Insert or update a regime_strategy_stats row."""
         self._conn.execute(

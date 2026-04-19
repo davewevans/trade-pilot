@@ -1,4 +1,4 @@
-**Strategy: Conservative Wheel**
+**Strategy: Turnover Wheel**
 
 ## Current Phase: IDLE — Looking for a Cash-Secured Put to Sell
 

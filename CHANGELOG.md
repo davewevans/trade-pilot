@@ -7,6 +7,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.1] - 2026-04-19
+
+### Changed
+- About page: replaced "Three Accounts" section with a six-strategy overview (Wheel, Turnover Wheel, Iron Condor, Bull Put Spread, Bear Call Spread, Long Call Vertical); removed all account-name references; corrected Python version from 3.11+ to 3.14.2.
+
+## [1.7.0] - 2026-04-19
+
+## [1.6.0] - 2026-04-18
+
+### Added
+- **ORATS quota hardening — 9-phase protection system** (see `docs/api_quota_protection.md`)
+  following the 2026-04-17 incident where three concurrent processes exhausted the 20,000-call
+  monthly ORATS budget in ~7 minutes.
+
+  - **Phase 1 — Process Singleton Lock** (`utils/process_lock.py`): PID lock files prevent
+    concurrent job instances. Stale locks (dead PID) are auto-cleared. `main.py` exits 2 if
+    a live Python process already holds the lock.
+
+  - **Phase 2 — API Usage Ledger & Hard Caps** (`data/api_ledger.py`): Every ORATS call
+    recorded in `api_usage_ledger` (SQLite WAL). `check_and_reserve()` enforces rolling monthly
+    (14k), daily (14k), and per-minute (600) caps for `orats_historical`; separate caps for
+    `orats_live`. Raises `OratsQuotaExceeded` when exceeded. Cap values overridable via env vars.
+
+  - **Phase 3 — Pre-flight Budget Check** (`jobs/weekly_research.py`): Estimates sweep cost
+    before `run_sweep()` starts. `sys.exit(3)` if warm estimate exceeds remaining budget or 80%
+    of it. `ORATS_ALLOW_BUDGET_HEAVY=1` overrides the 80% gate. Fires ntfy on abort.
+
+  - **Phase 4 — Structured API Call Log** (`utils/json_log_formatter.py`): One JSON line per
+    API call in `LOG_DIR/api_calls.jsonl` (14-day rotation). `propagate=False` keeps it out of
+    `trade-pilot.log`. `data.orats_historical` and `data.orats_client` silenced to WARNING.
+
+  - **Phase 5 — Usage Snapshot & API Endpoint** (`data/api_ledger.py`, `api/server.py`):
+    `write_snapshot()` atomically writes `SNAPSHOTS_DIR/api_usage.json` every 50 billable calls,
+    on quota exceeded, and at process exit. `GET /api/usage` exposes the snapshot.
+
+  - **Phase 6 — ntfy Threshold Alerts** (`data/api_ledger.py`): Fires ntfy critical at 50%,
+    75%, 90%, 95% monthly usage (once per threshold per month). Immediate alert on
+    `OratsQuotaExceeded`; minute-cap alerts rate-limited to one per 5 minutes.
+
+  - **Phase 7 — Kill Switch** (`data/api_ledger.py`, `api/server.py`): `ORATS_DISABLED.lock`
+    in `DATA_DIR` instantly blocks all ORATS calls (`OratsDisabled` raised before cap checks).
+    Admin endpoints: `POST /api/admin/orats/disable`, `POST /api/admin/orats/enable`,
+    `GET /api/admin/orats/status`.
+
+  - **Phase 8 — Sweep Resume Safety** (`research/backtesting/sweep.py`): Stale in-progress
+    sweep state (state file age >1 h, no `completed_at`) is auto-reset with WARNING log.
+    `run_sweep(force_restart=True)` bypasses. CLI: `--force-restart-sweep` /
+    `FORCE_RESTART_SWEEP=1`.
+
+  - **Phase 9 — Documentation** (`docs/api_quota_protection.md`): Full runbook including
+    architecture diagram, env var reference, admin commands, and monitoring queries.
+
 ## [1.5.0] - 2026-04-17
 
 ### Added

@@ -3,6 +3,8 @@
 import json
 import sqlite3
 
+from database.db import db_retry
+
 
 def _row_to_dict(row: sqlite3.Row) -> dict:
     d = dict(row)
@@ -28,6 +30,7 @@ class DecisionRepository:
     def __init__(self, conn: sqlite3.Connection):
         self._conn = conn
 
+    @db_retry()
     def insert(self, decision: dict) -> int:
         """Insert a new decision row. Returns the new ``id``.
 
@@ -48,8 +51,11 @@ class DecisionRepository:
                 timestamp, strategy_type, underlying, cycle_id, wheel_state,
                 action, reasoning, confidence, alpaca_order_id,
                 prompt_version, context_json, research_metadata_json,
-                skip_gate, skip_reason_code
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                skip_gate, skip_reason_code,
+                model_version, input_tokens, output_tokens,
+                cache_read_tokens, cache_creation_tokens, estimated_cost_usd,
+                job_run_id, pre_check_verdict
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 decision["timestamp"],
@@ -66,6 +72,14 @@ class DecisionRepository:
                 research_json,
                 decision.get("skip_gate"),
                 decision.get("skip_reason_code"),
+                decision.get("model_version"),
+                decision.get("input_tokens"),
+                decision.get("output_tokens"),
+                decision.get("cache_read_tokens"),
+                decision.get("cache_creation_tokens"),
+                decision.get("estimated_cost_usd"),
+                decision.get("job_run_id"),
+                decision.get("pre_check_verdict"),
             ),
         )
         self._conn.commit()
@@ -228,3 +242,19 @@ class DecisionRepository:
             (*params, limit, offset),
         ).fetchall()
         return [_row_to_dict(r) for r in rows], int(total)
+
+    def get_in_range(self, start_iso: str, end_iso: str) -> list[dict]:
+        """Return all decisions with timestamp in [start_iso, end_iso] (inclusive).
+
+        Results are ordered by timestamp ASC, id ASC so the caller processes
+        decisions in chronological order.
+        """
+        rows = self._conn.execute(
+            """
+            SELECT * FROM decisions
+             WHERE timestamp >= ? AND timestamp <= ?
+             ORDER BY timestamp ASC, id ASC
+            """,
+            (start_iso, end_iso),
+        ).fetchall()
+        return [_row_to_dict(r) for r in rows]

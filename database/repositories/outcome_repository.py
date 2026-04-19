@@ -6,11 +6,14 @@ import json
 import sqlite3
 from datetime import datetime, timezone
 
+from database.db import db_retry
+
 
 class OutcomeRepository:
     def __init__(self, conn: sqlite3.Connection):
         self._conn = conn
 
+    @db_retry()
     def insert(self, data: dict) -> None:
         """Insert or ignore an outcome row (idempotent on PK conflict)."""
         proxy_json = data.get("proxy_params_json")

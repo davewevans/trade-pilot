@@ -13,12 +13,74 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
 from config import settings
 
 logger = logging.getLogger(__name__)
+
+
+def _run_preflight_check(sweep, ledger) -> None:
+    """Run ORATS budget pre-flight check before the backtest sweep.
+
+    Logs a structured one-line report then exits with code 3 if the estimated
+    call count would exceed the remaining monthly budget (or 80% of it without
+    the ORATS_ALLOW_BUDGET_HEAVY override).
+
+    Args:
+        sweep: BacktestSweep instance (provides estimate_cost()).
+        ledger: ApiLedger instance (provides get_usage()).
+    """
+    estimate = sweep.estimate_cost()
+    usage = ledger.get_usage("orats_historical")
+    month_remaining = usage["month_remaining"]
+
+    # Use the per-run budget (WEEKLY_SWEEP_BUDGET_CALLS) as the operative estimate;
+    # it reflects what we actually plan to spend this run, not the full cold-cache cost.
+    run_budget = settings.WEEKLY_SWEEP_BUDGET_CALLS
+    warm_estimate = min(run_budget, estimate["warm_estimate"])
+
+    logger.info(
+        "ORATS pre-flight: cold_estimate=%d warm_estimate=%d run_budget=%d "
+        "month_used=%d month_cap=%d month_remaining=%d day_remaining=%d",
+        estimate["cold_estimate"],
+        warm_estimate,
+        run_budget,
+        usage["month_used"],
+        usage["month_cap"],
+        month_remaining,
+        usage["day_remaining"],
+    )
+
+    if warm_estimate > month_remaining:
+        logger.error(
+            "Pre-flight ABORT: warm_estimate=%d exceeds month_remaining=%d. "
+            "The sweep would exhaust the ORATS monthly budget.",
+            warm_estimate, month_remaining,
+        )
+        try:
+            from notifications import notify
+            notify(
+                "critical",
+                "weekly_research pre-flight aborted",
+                f"ORATS estimate {warm_estimate:,} > remaining {month_remaining:,}. "
+                "Sweep blocked.",
+                tags=["orats", "pre_flight", "budget"],
+            )
+        except Exception:
+            pass
+        sys.exit(3)
+
+    if warm_estimate > month_remaining * 0.8 and settings.ORATS_ALLOW_BUDGET_HEAVY != 1:
+        logger.error(
+            "Pre-flight ABORT: warm_estimate=%d > 80%% of month_remaining=%d. "
+            "Set ORATS_ALLOW_BUDGET_HEAVY=1 to proceed anyway.",
+            warm_estimate, month_remaining,
+        )
+        sys.exit(3)
 
 
 def run() -> None:
@@ -113,9 +175,20 @@ def run() -> None:
             repo=bt_repo,
             universe=universe,
         )
+        # ── Pre-flight budget check ──────────────────────────────────────
+        try:
+            from data.api_ledger import get_ledger
+            _run_preflight_check(sweep, get_ledger())
+        except SystemExit:
+            raise  # propagate sys.exit(3) without logging it as a sweep failure
+        except Exception:
+            logger.warning("Pre-flight check failed (non-fatal) — proceeding", exc_info=True)
+
+        _force_restart = os.environ.get("FORCE_RESTART_SWEEP", "0") == "1"
         sweep_stats = sweep.run_sweep(
             mode=settings.RESEARCH_BACKTEST_SWEEP_MODE,
             progress_cb=lambda msg: logger.info("bt_sweep: %s", msg),
+            force_restart=_force_restart,
         )
         logger.info("Backtest sweep complete: %s", sweep_stats)
         # Record phase 2 ORATS usage if engine exposes an orats client

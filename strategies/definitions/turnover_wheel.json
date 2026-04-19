@@ -1,8 +1,8 @@
 {
-  "name": "conservative_wheel",
-  "display_name": "Conservative Wheel",
-  "description": "Conservative variant: shorter CC cycles (7–14 DTE), wider position count (10 concurrent), smaller size per position (5% of BP), and 3 rolls before closing. CSP → assignment → CC → called away → repeat.",
-  "type": "conservative_wheel",
+  "name": "turnover_wheel",
+  "display_name": "Turnover Wheel",
+  "description": "Higher-turnover variant of the wheel: shorter CC cycles (7–14 DTE), no delta cap on CC strike (cost basis is the sole constraint), smaller positions (5% of BP), 10 concurrent positions max, and up to 3 rolls before closing. Designed for faster share turnover and more frequent return to CSP selling.",
+  "type": "turnover_wheel",
   "composite": false,
   "entry": {
     "csp": {
@@ -18,8 +18,6 @@
       "above_sma_50": true
     },
     "cc": {
-      "delta_min": 0.20,
-      "delta_max": 0.35,
       "dte_min": 7,
       "dte_max": 14,
       "earnings_buffer_days": 21,

@@ -4,6 +4,8 @@ import json
 import sqlite3
 from datetime import datetime, timezone
 
+from database.db import db_retry
+
 
 def _row_to_dict(row: sqlite3.Row) -> dict:
     d = dict(row)
@@ -21,6 +23,7 @@ class StrategyStateRepository:
     def __init__(self, conn: sqlite3.Connection):
         self._conn = conn
 
+    @db_retry()
     def upsert(
         self,
         strategy_type: str,

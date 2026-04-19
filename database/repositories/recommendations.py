@@ -17,6 +17,13 @@ class RecommendationRepository:
         self._conn = conn
 
     # ── Write ─────────────────────────────────────────────────────────────────
+    # CROSS-PROCESS WRITE TARGET: watchlist_recommendations is the only table
+    # written by both the scheduler process (insert_batch(), called from
+    # weekly_research.py) and the API process (record_decision(), called from
+    # api/server.py when the operator accepts/rejects recommendations).
+    # @db_retry() on both methods handles SQLite WAL lock contention between
+    # the two writers. If you add new cross-process write paths, document them
+    # here and confirm @db_retry() coverage.
 
     @db_retry()
     def insert_batch(self, recommendations: list[dict]) -> int:

@@ -40,7 +40,6 @@ class IronButterflyStrategy:
         self.state_writer = state_writer
         self.spread_tracker = spread_tracker
         self.recorder = recorder
-        self.cb_status_at_entry: str | None = None
         self.state = IronButterflyState.IDLE
         self.open_spread_id: str | None = None
         self.pending_order_id: str | None = None
@@ -337,7 +336,7 @@ class IronButterflyStrategy:
 
     # ── execution ───────────────────────────────────────────
 
-    def execute_entry(self, decision: dict) -> bool:
+    def execute_entry(self, decision: dict, cb_status: str | None = None) -> bool:
         """Place the 4-leg mleg order and register with spread_tracker.
 
         Leg order: buy put wing → sell ATM put → sell ATM call → buy call wing.
@@ -381,7 +380,7 @@ class IronButterflyStrategy:
                 max_loss=decision.get("max_loss", 0),
                 max_gain=abs(decision.get("total_credit", 0)) * 100,
                 entry_order_id=order_id,
-                cb_status_at_entry=self.cb_status_at_entry,
+                cb_status_at_entry=cb_status,
             )
             self.open_spread_id = spread_id
 

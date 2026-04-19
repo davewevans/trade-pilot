@@ -9,6 +9,7 @@ import { Strategies } from './pages/Strategies'
 import { HowItWorks } from './pages/HowItWorks'
 import { ClaudesPlaybook } from './pages/ClaudesPlaybook'
 import { HowBacktestingWorks } from './pages/HowBacktestingWorks'
+import { HowEvaluationsWork } from './pages/HowEvaluationsWork'
 import { OptionsBasics } from './pages/OptionsBasics'
 import { TradeLifecycle } from './pages/TradeLifecycle'
 import { SkipReasons } from './pages/SkipReasons'
@@ -25,6 +26,9 @@ import { Volatility } from './pages/Volatility'
 import { Research } from './pages/Research'
 import { Recommendations } from './pages/Recommendations'
 import { ResearchGuide } from './pages/ResearchGuide'
+import { Evaluations } from './pages/Evaluations'
+import { EvaluationDetail } from './pages/EvaluationDetail'
+import { StrategyHealth } from './pages/StrategyHealth'
 
 export function App() {
   return (
@@ -40,6 +44,9 @@ export function App() {
           <Route path="/backtest-intel" element={<BacktestIntel />} />
           <Route path="/volatility" element={<Volatility />} />
           <Route path="/account/:account" element={<AccountDetail />} />
+          <Route path="/evaluations" element={<Evaluations />} />
+          <Route path="/evaluations/:month" element={<EvaluationDetail />} />
+          <Route path="/strategy-health" element={<StrategyHealth />} />
           <Route path="/decisions" element={<DecisionLog />} />
           <Route path="/reasoning" element={<ReasoningExplorer />} />
           <Route path="/guardrails" element={<Guardrails />} />
@@ -47,6 +54,7 @@ export function App() {
           <Route path="/how-it-works" element={<HowItWorks />} />
           <Route path="/playbook" element={<ClaudesPlaybook />} />
           <Route path="/how-backtesting-works" element={<HowBacktestingWorks />} />
+          <Route path="/how-evaluations-work" element={<HowEvaluationsWork />} />
           <Route path="/options-basics" element={<OptionsBasics />} />
           <Route path="/trade-lifecycle" element={<TradeLifecycle />} />
           <Route path="/skip-reasons" element={<SkipReasons />} />

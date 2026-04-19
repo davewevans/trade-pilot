@@ -53,7 +53,7 @@ class TestCircuitBreakerRedTransitionFiresCritical:
 
 class TestCircuitBreakerYellowTransitionFiresWarning:
     def test_circuit_breaker_yellow_fires_warning(self, tmp_path):
-        """Driving the CB to YELLOW fires a warning notification."""
+        """Driving the CB to YELLOW fires a high-priority notification."""
         data_dir = tmp_path / "data"
         data_dir.mkdir()
         snaps_dir = data_dir / "snapshots"
@@ -85,9 +85,9 @@ class TestCircuitBreakerYellowTransitionFiresWarning:
             # Drive to YELLOW (daily loss 1.5-3%)
             cb.update(98_500)
 
-        warning_calls = [n for n in notified if n["severity"] == "warning"]
-        assert len(warning_calls) >= 1, \
-            f"Expected at least 1 warning notification for YELLOW. Got: {notified}"
+        high_calls = [n for n in notified if n["severity"] == "high"]
+        assert len(high_calls) >= 1, \
+            f"Expected at least 1 high notification for YELLOW. Got: {notified}"
 
 
 class TestHaltedLockFiresCritical:

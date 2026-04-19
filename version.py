@@ -5,10 +5,9 @@ section to CHANGELOG.md. Other modules read this via ``settings.VERSION``
 rather than importing this file directly.
 """
 
-VERSION = "1.5.0"
-VERSION_DATE = "2026-04-17"
+VERSION = "1.7.1"
+VERSION_DATE = "2026-04-19"
 VERSION_NOTES = (
-    "Notification backends (ntfy/email) with severity routing; recommendation accuracy scorecard with "
-    "live-outcome feedback loop; skip-reason telemetry with gate-breakdown dashboard; ORATS usage "
-    "tracking; SQLite db_retry for write contention; EV-gated win-rate multiplier."
+    "Updates the About page to replace the Three Accounts section with a six-strategy overview "
+    "and corrects the Python version label from 3.11+ to 3.14.2."
 )

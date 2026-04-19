@@ -3,15 +3,20 @@
 import json
 import logging
 import os
+import shutil
 from datetime import date, datetime, timedelta
 from enum import Enum
+from pathlib import Path
 
 from brokers.base import BaseBroker
+from config import settings
 from data import market_data
 
 logger = logging.getLogger(__name__)
 
-STATE_FILE = os.path.join(os.path.dirname(__file__), "..", "data", "wheel_state.json")
+# Old source-relative path — used only during one-time migration on first load.
+_LEGACY_STATE_FILE = Path(__file__).parent / ".." / "data" / "wheel_state.json"
+STATE_FILE = str(settings.SNAPSHOTS_DIR / "wheel_state.json")
 
 # OCC symbols encode type at a fixed position: C = call, P = put.
 # Format: ROOT(6) + YYMMDD(6) + C/P(1) + strike*1000(8)
@@ -76,6 +81,15 @@ class WheelStrategy:
 
     def _load_state(self) -> None:
         """Load persisted state from wheel_state.json if it exists."""
+        # One-time migration: move state from old source-relative path to persistent SNAPSHOTS_DIR.
+        old_path = _LEGACY_STATE_FILE.resolve()
+        new_path = Path(STATE_FILE)
+        if old_path.exists() and not new_path.exists():
+            new_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(old_path, new_path)
+            old_path.unlink()
+            logger.info("Migrated wheel state from %s to %s", old_path, new_path)
+
         if not os.path.exists(STATE_FILE):
             logger.info("No state file found at %s — starting fresh", STATE_FILE)
             return
@@ -109,7 +123,6 @@ class WheelStrategy:
             "roll_count": self.roll_count,
             "updated_at": datetime.now().isoformat(),
         }
-        from pathlib import Path
         from utils.fileio import atomic_json_write
         atomic_json_write(Path(STATE_FILE), data)
         logger.info("State saved: symbol=%s state=%s", self.symbol, self.state.value)

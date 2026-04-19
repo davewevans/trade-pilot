@@ -75,14 +75,66 @@ def _fetch_news(symbol: str, limit: int = 5) -> list[dict]:
     ]
 
 
+# ── Strategy definition cache ─────────────────────────────────────────────────
+# Loaded once at module level and reused by _select_spread_strategies (static
+# method) and the candidate-building loop in build(). Excludes wheel strategies
+# because the router handles those outside the spread candidate pipeline.
+
+_SPREAD_STRATEGY_DEFS: dict | None = None
+
+
+def _load_spread_strategy_defs() -> dict:
+    """Return {strategy_name: definition_dict} from strategies/definitions/*.json.
+
+    Excludes wheel, turnover_wheel, and adaptive_spreads (handled by the
+    strategy router separately). Caches the result at module level so the JSON
+    files are only read once per process lifetime.
+    """
+    global _SPREAD_STRATEGY_DEFS
+    if _SPREAD_STRATEGY_DEFS is not None:
+        return _SPREAD_STRATEGY_DEFS
+    import json
+    from pathlib import Path
+    _exclude = {"wheel", "turnover_wheel", "adaptive_spreads"}
+    defs_dir = Path(__file__).resolve().parent.parent / "strategies" / "definitions"
+    result: dict = {}
+    try:
+        for path in sorted(defs_dir.glob("*.json")):
+            name = path.stem
+            if name.startswith("_") or name in _exclude:
+                continue
+            try:
+                defn = json.loads(path.read_text(encoding="utf-8"))
+                result[name] = defn
+            except Exception:
+                logger.warning(
+                    "Failed to load strategy definition %s", path, exc_info=True,
+                )
+    except Exception:
+        logger.warning(
+            "Failed to scan definitions directory %s", defs_dir, exc_info=True,
+        )
+    _SPREAD_STRATEGY_DEFS = result
+    return result
+
+
 class ContextBuilder:
     """Assembles all market data into a single context dict for Claude."""
 
-    def __init__(self, broker: BaseBroker, data_client=None, journal: TradeJournal | None = None):
+    def __init__(
+        self,
+        broker: BaseBroker,
+        data_client=None,
+        journal: TradeJournal | None = None,
+        account_id: str | None = None,
+    ):
         self.broker = broker
         self.data_client = data_client
         self.journal = journal or TradeJournal()
         self._regime_filter = RegimeStabilityFilter()
+        # account_id scopes portfolio_exposure to this account's snapshot file.
+        # Pass e.g. "wheel" or "spreads" from the job; None = main portfolio.json.
+        self._account_id = account_id
 
     def build(self, symbol: str, wheel_state: str) -> dict:
         """Assemble the full context for Claude's decision-making.
@@ -403,6 +455,14 @@ class ContextBuilder:
             logger.warning("Failed to build rejections for %s", symbol, exc_info=True)
             context["guardrail_rejections"] = None
 
+        # Portfolio-level Greek exposure (from most recent portfolio_refresh snapshot)
+        # account_id scopes to this account; None falls back to main portfolio.json.
+        try:
+            context["portfolio_exposure"] = compute_portfolio_greeks(self._account_id)
+        except Exception:
+            logger.warning("Failed to compute portfolio Greeks", exc_info=True)
+            context["portfolio_exposure"] = None
+
         # Portfolio-level pattern summary (written weekly)
         try:
             patterns = self._load_portfolio_patterns()
@@ -449,24 +509,61 @@ class ContextBuilder:
 
                 if strategy_types:
                     all_candidates: dict[str, dict] = {}
+                    # Pre-build the ORATS enrichment summary once; only used for
+                    # strategies that go through _enrich_with_ev (not IB/calendar).
+                    enriched_summary = {
+                        **(orats or {}),
+                        "skew_percentile": cores.get("skew_percentile"),
+                    }
+                    # Read calendar option_type once from definition (currently "put").
+                    _cal_defs = _load_spread_strategy_defs()
+                    _cal_option_type = (
+                        _cal_defs.get("calendar_spread", {})
+                        .get("entry", {})
+                        .get("option_type", "put")
+                    )
                     for st in strategy_types:
                         try:
-                            candidates = self.build_spread_candidates(
-                                symbol, st, underlying_price=current_price,
-                            )
-                            # Enrich all candidates + best_candidate with EV scores.
-                            # Merge skew_percentile (from /cores) into the summary
-                            # dict so _enrich_with_ev can use it for put-selling bonus.
-                            enriched_summary = {
-                                **(orats or {}),
-                                "skew_percentile": cores.get("skew_percentile"),
-                            }
-                            _enrich_with_ev(
-                                candidates,
-                                strategy_type=st,
-                                orats_summary=enriched_summary,
-                                monies_rows=monies_rows,
-                            )
+                            if st == "iron_butterfly":
+                                candidates = self.build_iron_butterfly_candidates(
+                                    symbol, underlying_price=current_price,
+                                )
+                                # TODO (future PR): Add EV enrichment for iron_butterfly.
+                                # Compute compute_ev_score() on both put-side and call-side
+                                # legs and combine into a total_ev_score field (mirroring
+                                # iron_condor's _enrich_with_ev treatment). Deferred to keep
+                                # this PR focused on candidate generation.
+                                # pre_check_entry() already handles absent total_ev_score
+                                # gracefully (falls back to total_credit for ranking).
+                            elif st == "calendar_spread":
+                                # option_type from calendar_spread.json — currently "put"
+                                # because put calendars benefit from put-skew making the
+                                # sell-near / buy-far net debit lower.
+                                candidates = self.build_calendar_candidates(
+                                    symbol,
+                                    underlying_price=current_price,
+                                    option_type=_cal_option_type,
+                                )
+                                # EV enrichment is not applicable for calendar spreads.
+                                # This is a debit strategy with a different P&L structure
+                                # (net_debit, not net_credit + wing_width). Calling
+                                # _enrich_with_ev would corrupt best_candidate by re-ranking
+                                # on credit_to_width_ratio (absent in calendar candidates).
+                                # build_calendar_candidates already selects best_candidate
+                                # by minimum net_debit, which is the correct ranking.
+                            else:
+                                candidates = self.build_spread_candidates(
+                                    symbol, st, underlying_price=current_price,
+                                )
+                                # Enrich all candidates + best_candidate with EV scores.
+                                # Merge skew_percentile (from /cores) into the summary
+                                # dict so _enrich_with_ev can use it for put-selling bonus.
+                                _enrich_with_ev(
+                                    candidates,
+                                    strategy_type=st,
+                                    orats_summary=enriched_summary,
+                                    monies_rows=monies_rows,
+                                )
                             all_candidates[st] = candidates
                         except Exception:
                             logger.warning(
@@ -486,23 +583,27 @@ class ContextBuilder:
 
     @staticmethod
     def _select_spread_strategies(regime: str, iv_env: str) -> list[str]:
-        """Return strategy types appropriate for the current regime + IV."""
+        """Return strategy types appropriate for the current regime + IV.
+
+        Data-driven from strategies/definitions/*.json — each strategy's
+        ``regime.allowed`` and ``iv_environment.allowed`` lists determine
+        eligibility. Wheel strategies are excluded (the router handles them).
+        CRASH always returns [] regardless of JSON definitions.
+
+        Previously this was a hardcoded if/elif chain which contained a latent
+        bug: iron_condor was returned for NEUTRAL+MODERATE even though
+        iron_condor.json only allows HIGH IV. The data-driven approach removes
+        that inconsistency and automatically includes iron_butterfly and
+        calendar_spread once their JSON definitions are present.
+        """
         if regime == "CRASH":
             return []
-        if regime == "BEAR":
-            return ["bear_call_spread"]
-        if regime == "EUPHORIA":
-            return ["bull_put_spread"]
-        if regime == "BULL" and iv_env == "LOW":
-            return ["long_call_vertical"]
-        if regime == "BULL":
-            return ["bull_put_spread"]
-        # NEUTRAL
-        if iv_env == "HIGH":
-            return ["iron_condor"]
-        if iv_env in ("MODERATE", "HIGH"):
-            return ["bull_put_spread", "iron_condor"]
-        return ["bull_put_spread"]
+        defs = _load_spread_strategy_defs()
+        return [
+            name for name, defn in defs.items()
+            if regime in defn.get("regime", {}).get("allowed", [])
+            and iv_env in defn.get("iv_environment", {}).get("allowed", [])
+        ]
 
     def build_spread_candidates(
         self,
@@ -826,6 +927,240 @@ class ContextBuilder:
         result["candidates"] = candidates
         if candidates:
             result["best_candidate"] = min(candidates, key=lambda c: c.get("net_debit", 99))
+
+        return result
+
+    def build_iron_butterfly_candidates(
+        self,
+        underlying_symbol: str,
+        dte_min: int | None = None,
+        dte_max: int | None = None,
+        put_wing_width: int | None = None,
+        call_wing_width: int | None = None,
+        underlying_price: float | None = None,
+    ) -> dict:
+        """Build iron butterfly candidates (sell ATM put + call, buy OTM wings).
+
+        Fetches put and call chains for the DTE range, then for each expiration
+        finds the ATM center strike and constructs the symmetric 4-leg structure.
+
+        Defaults are loaded from strategies/definitions/iron_butterfly.json so
+        parameter changes are made in one place (the definition file).
+
+        Tie-breaking rule for ATM strike selection: when the underlying price
+        falls exactly halfway between two consecutive strikes, the higher strike
+        is preferred. This places the center of the butterfly slightly above the
+        current price, which is a modest conservative bias consistent with
+        put-skew (the put wing is already priced for downside risk).
+
+        TODO (future PR): Add EV enrichment using compute_ev_score() on each
+        leg (put-side + call-side), combining into a total_ev_score field that
+        mirrors iron_condor's treatment. pre_check_entry() already handles
+        absent total_ev_score gracefully (falls back to total_credit for ranking).
+
+        Returns a dict with shape::
+
+            {
+                "underlying": str,
+                "underlying_price": float,
+                "strategy_type": "iron_butterfly",
+                "candidates": [...],          # all valid (filtered) candidates
+                "iron_butterfly_legs": dict | None,  # best candidate (mirrors iron_condor_legs key)
+                "best_candidate": dict | None,       # same object as iron_butterfly_legs
+            }
+        """
+        import json as _json
+        from pathlib import Path as _Path
+
+        # Load defaults from JSON definition
+        _defs_dir = _Path(__file__).resolve().parent.parent / "strategies" / "definitions"
+        try:
+            _ib_entry = _json.loads(
+                (_defs_dir / "iron_butterfly.json").read_text(encoding="utf-8")
+            ).get("entry", {})
+        except Exception:
+            logger.warning("Failed to load iron_butterfly.json defaults", exc_info=True)
+            _ib_entry = {}
+
+        if dte_min is None:
+            dte_min = _ib_entry.get("dte_min", 20)
+        if dte_max is None:
+            dte_max = _ib_entry.get("dte_max", 45)
+        if put_wing_width is None:
+            put_wing_width = _ib_entry.get("put_wing_width", 5)
+        if call_wing_width is None:
+            call_wing_width = _ib_entry.get("call_wing_width", 5)
+        min_total_credit: float = _ib_entry.get("min_total_credit", 2.00)
+        min_oi: int = _ib_entry.get("min_open_interest", 200)
+
+        today = datetime.now().date()
+        gte = (today + timedelta(days=dte_min)).isoformat()
+        lte = (today + timedelta(days=dte_max)).isoformat()
+
+        if underlying_price is None:
+            tech = market_data.get_stock_technicals(underlying_symbol)
+            underlying_price = tech.get("current_price", 0)
+
+        result: dict = {
+            "underlying": underlying_symbol,
+            "underlying_price": underlying_price,
+            "strategy_type": "iron_butterfly",
+            "candidates": [],
+            "iron_butterfly_legs": None,
+            "best_candidate": None,
+        }
+
+        # Fetch put and call chains for the DTE window
+        put_contracts = self.broker.get_option_chain_with_greeks(
+            underlying_symbol=underlying_symbol,
+            expiration_date_gte=gte,
+            expiration_date_lte=lte,
+            contract_type="put",
+        ) or []
+        call_contracts = self.broker.get_option_chain_with_greeks(
+            underlying_symbol=underlying_symbol,
+            expiration_date_gte=gte,
+            expiration_date_lte=lte,
+            contract_type="call",
+        ) or []
+
+        if not put_contracts and not call_contracts:
+            return result
+
+        # Fetch snapshots for all contracts in a single batch
+        all_syms = [c["symbol"] for c in put_contracts + call_contracts]
+        snapshots = self.broker.get_option_snapshots(all_syms, underlying=underlying_symbol)
+
+        # Index by (expiration_date, strike) for O(1) leg lookup
+        puts: dict[tuple[str, float], dict] = {}
+        calls: dict[tuple[str, float], dict] = {}
+
+        for c in put_contracts:
+            snap = snapshots.get(c["symbol"], {})
+            strike = float(c.get("strike_price", 0))
+            puts[(c["expiration_date"], strike)] = {**c, **snap, "strike": strike}
+
+        for c in call_contracts:
+            snap = snapshots.get(c["symbol"], {})
+            strike = float(c.get("strike_price", 0))
+            calls[(c["expiration_date"], strike)] = {**c, **snap, "strike": strike}
+
+        # Only process expirations present in BOTH put and call chains
+        put_exps = {exp for (exp, _) in puts}
+        call_exps = {exp for (exp, _) in calls}
+        common_exps = put_exps & call_exps
+
+        candidates = []
+        for exp in sorted(common_exps):
+            try:
+                dte = (datetime.strptime(exp, "%Y-%m-%d").date() - today).days
+            except ValueError:
+                continue
+
+            # Strikes available at this expiration (union of put + call strikes)
+            strikes_at_exp = {s for (e, s) in puts if e == exp} | {s for (e, s) in calls if e == exp}
+            if not strikes_at_exp:
+                continue
+
+            # ATM strike = closest to underlying_price.
+            # Tie-breaking rule: when the underlying is exactly between two
+            # strikes (e.g. price=540.0, strikes=[537.5, 542.5]), prefer the
+            # higher strike. The secondary sort key -s achieves this: ties in
+            # abs-distance are broken by choosing the largest s (min of -s).
+            center = min(strikes_at_exp, key=lambda s: (abs(s - underlying_price), -s))
+
+            put_long_strike = center - put_wing_width
+            call_long_strike = center + call_wing_width
+
+            # All 4 legs must exist; skip this expiration if any are missing
+            put_long_data = puts.get((exp, put_long_strike))
+            put_short_data = puts.get((exp, center))
+            call_short_data = calls.get((exp, center))
+            call_long_data = calls.get((exp, call_long_strike))
+
+            if not all([put_long_data, put_short_data, call_short_data, call_long_data]):
+                continue
+
+            put_short_mid = put_short_data.get("mid")
+            call_short_mid = call_short_data.get("mid")
+            put_long_mid = put_long_data.get("mid") or 0
+            call_long_mid = call_long_data.get("mid") or 0
+
+            # Short mids must be positive; long mids default to 0 if missing
+            if not put_short_mid or not call_short_mid:
+                continue
+
+            # total_credit = short premiums − long premiums (should be positive)
+            total_credit = round(
+                put_short_mid + call_short_mid - put_long_mid - call_long_mid, 4
+            )
+            if total_credit <= 0:
+                continue
+
+            # Filter: minimum total credit from JSON definition
+            if total_credit < min_total_credit:
+                continue
+
+            max_wing = max(put_wing_width, call_wing_width)
+            max_loss = round(max_wing * 100 - total_credit * 100, 2)
+            credit_to_width_ratio = round(total_credit / max_wing, 4)
+
+            # Liquidity check (informational — strategy/guardrails enforce it)
+            put_short_oi = put_short_data.get("open_interest")
+            call_short_oi = call_short_data.get("open_interest")
+            put_long_oi = put_long_data.get("open_interest")
+            call_long_oi = call_long_data.get("open_interest")
+            liquidity_ok = all(
+                oi is not None and oi >= min_oi
+                for oi in (put_short_oi, call_short_oi, put_long_oi, call_long_oi)
+            )
+
+            candidates.append({
+                "expiration": exp,
+                "dte": dte,
+                "center_strike": center,
+                "underlying_price": underlying_price,
+                "put_long": {
+                    "symbol": put_long_data.get("symbol", ""),
+                    "strike": put_long_strike,
+                    "mid": put_long_mid,
+                    "delta": put_long_data.get("delta"),
+                    "open_interest": put_long_oi,
+                },
+                "put_short": {
+                    "symbol": put_short_data.get("symbol", ""),
+                    "strike": center,
+                    "mid": put_short_mid,
+                    "delta": put_short_data.get("delta"),
+                    "open_interest": put_short_oi,
+                },
+                "call_short": {
+                    "symbol": call_short_data.get("symbol", ""),
+                    "strike": center,
+                    "mid": call_short_mid,
+                    "delta": call_short_data.get("delta"),
+                    "open_interest": call_short_oi,
+                },
+                "call_long": {
+                    "symbol": call_long_data.get("symbol", ""),
+                    "strike": call_long_strike,
+                    "mid": call_long_mid,
+                    "delta": call_long_data.get("delta"),
+                    "open_interest": call_long_oi,
+                },
+                "total_credit": total_credit,
+                "max_loss": max_loss,
+                "credit_to_width_ratio": credit_to_width_ratio,
+                "liquidity_ok": liquidity_ok,
+            })
+
+        # Rank by total_credit descending; best = first
+        candidates.sort(key=lambda c: c.get("total_credit", 0), reverse=True)
+        best = candidates[0] if candidates else None
+
+        result["candidates"] = candidates
+        result["iron_butterfly_legs"] = best
+        result["best_candidate"] = best
 
         return result
 
@@ -1615,6 +1950,242 @@ class ContextBuilder:
             f"DTE Earnings: {dte_str} | VIX: {vix_str} | "
             f"F&G: {fg_str} | RFR: {rfr_str}"
         )
+
+
+# ── Portfolio-level Greeks aggregation ────────────────────────────────────────
+
+
+def _dte_bucket(dte: int | None) -> str:
+    """Map a DTE value to the spec's four DTE bucket keys."""
+    if dte is None:
+        return "46_plus"
+    if dte <= 7:
+        return "0_7"
+    if dte <= 21:
+        return "8_21"
+    if dte <= 45:
+        return "22_45"
+    return "46_plus"
+
+
+def _empty_greeks_result(now_iso: str) -> dict:
+    buckets = {
+        b: {"theta": 0.0, "vega": 0.0, "position_count": 0}
+        for b in ("0_7", "8_21", "22_45", "46_plus")
+    }
+    return {
+        "net_delta": 0.0,
+        "net_theta": 0.0,
+        "net_vega": 0.0,
+        "net_gamma": 0.0,
+        "total_defined_risk_usd": 0.0,
+        "position_count": 0,
+        "by_dte_bucket": buckets,
+        "by_strategy": {},
+        "freshness": {
+            "oldest_contract_age_seconds": 0,
+            "newest_contract_age_seconds": 0,
+            "max_skew_seconds": 0,
+            "contracts_from_fallback_source": 0,
+            "computed_at": now_iso,
+        },
+    }
+
+
+def compute_portfolio_greeks(account_id: str | None = None) -> dict:
+    """Aggregate Greeks across open positions from the most recent portfolio snapshot.
+
+    Sign convention (Alpaca buyer-perspective Greeks × signed qty × multiplier):
+      - Short option (qty positive from Alpaca, side="short"):
+          signed_qty = -qty  →  short put (delta=-0.25): net_delta = -0.25 * -1 * 100 = +25
+      - Long equity (LONG_STOCK phase, 100 shares, side="long"):
+          signed_qty = +100  →  net_delta = 1.0 * 100 = +100 (per $1 stock move)
+      - theta: positive = earns per day (short option),  negative = costs per day (long)
+      - vega:  positive = gains on IV rise (long), negative = loses (short)
+      All values are in dollars, assuming the standard 100-shares-per-contract multiplier.
+      Long equity positions contribute delta only (theta = vega = gamma = 0).
+
+    ORATS is never called here.  All data comes from the most recent portfolio
+    snapshot written by jobs/portfolio_refresh.py (runs every 5 min during
+    market hours).  Greeks are sourced from Alpaca option snapshots fetched
+    during that refresh cycle.
+
+    Args:
+        account_id: If provided, reads portfolio_{account_id}.json.
+                    If None, reads portfolio.json (primary account).
+
+    Returns a dict with the shape documented in prompts/system.md under
+    "Current Portfolio Exposure".
+    """
+    import json
+    from datetime import datetime, timezone
+
+    try:
+        # Use the module-level settings binding so tests can patch it cleanly.
+        snap_dir = settings.SNAPSHOTS_DIR
+    except Exception:
+        import os
+        from pathlib import Path
+        snap_dir = Path(os.getenv("DATA_DIR", "data")) / "snapshots"
+
+    now = datetime.now(timezone.utc)
+    now_iso = now.isoformat(timespec="seconds")
+
+    if account_id is not None:
+        snap_path = snap_dir / f"portfolio_{account_id}.json"
+    else:
+        snap_path = snap_dir / "portfolio.json"
+
+    if not snap_path.exists():
+        return _empty_greeks_result(now_iso)
+
+    try:
+        snapshot = json.loads(snap_path.read_text(encoding="utf-8"))
+    except Exception:
+        logger.warning("compute_portfolio_greeks: failed to read %s", snap_path, exc_info=True)
+        return _empty_greeks_result(now_iso)
+
+    positions = snapshot.get("positions") or []
+    open_spreads = snapshot.get("open_spreads") or []
+
+    # ── Freshness ───────────────────────────────────────────────────────────
+    # All Greeks were fetched at greeks_fetched_at (or snapshot timestamp if None).
+    gfa_str = snapshot.get("greeks_fetched_at") or snapshot.get("timestamp") or ""
+    try:
+        gfa_dt = datetime.fromisoformat(gfa_str.replace("Z", "+00:00"))
+        if gfa_dt.tzinfo is None:
+            gfa_dt = gfa_dt.replace(tzinfo=timezone.utc)
+        snap_age_secs = int((now - gfa_dt).total_seconds())
+    except (ValueError, TypeError):
+        snap_age_secs = 0
+
+    # ── Defined risk from open spreads ──────────────────────────────────────
+    # Only count OPEN or PENDING_CLOSE spreads (not PENDING_OPEN or terminal).
+    live_spread_statuses = {"open", "pending_close"}
+    total_defined_risk = sum(
+        float(s.get("max_loss") or 0)
+        for s in open_spreads
+        if (s.get("status") or "").lower() in live_spread_statuses
+    )
+
+    # ── Build symbol → spread strategy_type lookup ─────────────────────────
+    # SpreadTracker's strategy_type is more specific than the "spread" tag in
+    # portfolio.json (e.g., "bull_put_spread" vs "spread").
+    leg_to_strategy: dict[str, str] = {}
+    for spread in open_spreads:
+        st = spread.get("strategy_type") or "spread"
+        for leg in spread.get("legs") or []:
+            sym = (leg.get("symbol") or "").upper()
+            if sym:
+                leg_to_strategy[sym] = st
+
+    # ── Aggregate Greeks ────────────────────────────────────────────────────
+    net_delta = 0.0
+    net_theta = 0.0
+    net_vega  = 0.0
+    net_gamma = 0.0
+    position_count = 0
+    contracts_from_fallback = 0
+
+    by_dte_bucket: dict[str, dict] = {
+        b: {"theta": 0.0, "vega": 0.0, "position_count": 0}
+        for b in ("0_7", "8_21", "22_45", "46_plus")
+    }
+    by_strategy: dict[str, dict] = {}
+
+    for pos in positions:
+        qty_raw = float(pos.get("quantity") or 0)
+        if qty_raw == 0:
+            continue
+
+        side = (pos.get("side") or "long").lower()
+        # signed_qty: negative for short positions
+        signed_qty = qty_raw if side == "long" else -qty_raw
+
+        expiration = pos.get("expiration")
+        is_equity = expiration is None  # LONG_STOCK has no expiration date
+
+        delta = pos.get("delta")
+        theta = pos.get("theta")
+        vega  = pos.get("vega")
+        gamma = pos.get("gamma")
+
+        has_greeks = any(v is not None for v in (delta, theta, vega, gamma))
+
+        if is_equity:
+            # Equity (LONG_STOCK): delta = $1 per share per $1 stock move.
+            # theta = vega = gamma = 0.
+            d_contrib = signed_qty  # one share → delta 1.0; signed_qty shares
+            t_contrib = 0.0
+            v_contrib = 0.0
+            g_contrib = 0.0
+        else:
+            # Option: scale by 100-share multiplier.
+            if not has_greeks:
+                contracts_from_fallback += 1
+            multiplier = 100.0
+            d_contrib = float(delta or 0) * signed_qty * multiplier
+            t_contrib = float(theta or 0) * signed_qty * multiplier
+            v_contrib = float(vega  or 0) * signed_qty * multiplier
+            g_contrib = float(gamma or 0) * signed_qty * multiplier
+
+        net_delta += d_contrib
+        net_theta += t_contrib
+        net_vega  += v_contrib
+        net_gamma += g_contrib
+        position_count += 1
+
+        # ── DTE bucket (options only) ─────────────────────────────────────
+        if not is_equity:
+            dte = pos.get("dte")
+            bkt = _dte_bucket(dte)
+            by_dte_bucket[bkt]["theta"]          += t_contrib
+            by_dte_bucket[bkt]["vega"]           += v_contrib
+            by_dte_bucket[bkt]["position_count"] += 1
+
+        # ── Strategy breakdown ─────────────────────────────────────────────
+        sym_upper = (pos.get("symbol") or "").upper()
+        strat = leg_to_strategy.get(sym_upper) or (pos.get("strategy_type") or "unknown")
+        if strat not in by_strategy:
+            by_strategy[strat] = {
+                "net_delta": 0.0, "net_theta": 0.0, "net_vega": 0.0,
+                "position_count": 0,
+            }
+        by_strategy[strat]["net_delta"]      += d_contrib
+        by_strategy[strat]["net_theta"]      += t_contrib
+        by_strategy[strat]["net_vega"]       += v_contrib
+        by_strategy[strat]["position_count"] += 1
+
+    # Round to 4 dp to avoid FP noise in JSON
+    def _r(v: float) -> float:
+        return round(v, 4)
+
+    for bkt in by_dte_bucket.values():
+        bkt["theta"] = _r(bkt["theta"])
+        bkt["vega"]  = _r(bkt["vega"])
+
+    for st in by_strategy.values():
+        st["net_delta"] = _r(st["net_delta"])
+        st["net_theta"] = _r(st["net_theta"])
+        st["net_vega"]  = _r(st["net_vega"])
+
+    return {
+        "net_delta":             _r(net_delta),
+        "net_theta":             _r(net_theta),
+        "net_vega":              _r(net_vega),
+        "net_gamma":             _r(net_gamma),
+        "total_defined_risk_usd": round(total_defined_risk, 2),
+        "position_count":        position_count,
+        "by_dte_bucket":         by_dte_bucket,
+        "by_strategy":           by_strategy,
+        "freshness": {
+            "oldest_contract_age_seconds":    snap_age_secs,
+            "newest_contract_age_seconds":    snap_age_secs,
+            "max_skew_seconds":               0,
+            "contracts_from_fallback_source": contracts_from_fallback,
+            "computed_at":                    now_iso,
+        },
+    }
 
 
 # ── Earnings volatility helpers ───────────────────────────────────────────────

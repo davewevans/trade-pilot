@@ -1,5 +1,16 @@
-import { useRef } from 'react'
+import { useRef, useEffect, useState } from 'react'
 import { PageAudioPlayer } from '../components/shared/PageAudioPlayer'
+
+type ScheduleEntry = {
+  job: string
+  type: string
+  time?: string
+  interval_minutes?: number
+  day?: string
+  tz?: string
+  label: string
+  description: string
+}
 
 function PageHeader({ title, subtitle }: { title: string; subtitle: string }) {
   return (
@@ -188,8 +199,34 @@ function StepCard({
   )
 }
 
+/** Convert a 24-hour "HH:MM" string to "H:MM AM/PM" display format. */
+function formatTime(time24: string): string {
+  const [hStr, mStr] = time24.split(':')
+  const h = parseInt(hStr, 10)
+  const ampm = h >= 12 ? 'PM' : 'AM'
+  const h12 = h % 12 || 12
+  return `${h12}:${mStr} ${ampm}`
+}
+
 export function TradeLifecycle() {
   const contentRef = useRef<HTMLDivElement>(null)
+  const [schedule, setSchedule] = useState<ScheduleEntry[]>([])
+
+  useEffect(() => {
+    fetch('/api/schedule')
+      .then(r => r.ok ? r.json() : [])
+      .then(setSchedule)
+      .catch(() => {/* leave schedule empty — static fallback text is shown */})
+  }, [])
+
+  // Entries shown in the "Daily Check-In Schedule" section: weekday jobs
+  // from 10:00 (entry evaluation) through 15:15 (pre-close), plus the
+  // portfolio_refresh interval indicator. Excludes pre-market (06:00),
+  // market-close (16:00), and post-market (16:30) background jobs.
+  const checkinJobs = schedule.filter(
+    e => e.type === 'weekday' && e.time && e.time >= '10:00' && e.time <= '15:20',
+  )
+
   return (
     <div ref={contentRef} className="max-w-5xl">
       <PageHeader
@@ -219,34 +256,27 @@ export function TradeLifecycle() {
           borderLeft: '4px solid var(--accent)',
         }}
       >
-        <TimeRow time="10:00 AM">
-          <strong>Entry evaluation.</strong> The bot scans the market, builds context for each
-          watchlist symbol, and decides whether to open new positions. This is the only time new
-          trades are opened.
-        </TimeRow>
-        <TimeRow time="10:45 AM">
-          <strong>First position check.</strong> For every open position, the bot fetches current
-          option prices and evaluates: has the profit target been hit? Has delta doubled? Is there
-          a risk that needs attention?
-        </TimeRow>
-        <TimeRow time="12:30 PM">
-          <strong>Midday check.</strong> Same evaluation as 10:45 — the bot re-checks all open
-          positions with updated prices.
-        </TimeRow>
-        <TimeRow time="2:00 PM">
-          <strong>Afternoon check.</strong> Last management pass before the end-of-day sequence
-          begins.
-        </TimeRow>
-        <TimeRow time="3:00 PM">
-          <strong>Expiry guard.</strong> Safety sweep specifically looking for positions that
-          expire TODAY. Any short option that's in the money gets closed immediately to avoid
-          surprise assignment.
-        </TimeRow>
-        <TimeRow time="3:15 PM">
-          <strong>Pre-close observation.</strong> The bot scans for positions approaching
-          expiration (within 7 days) and logs warnings. No new orders placed this late — too close
-          to market close.
-        </TimeRow>
+        {checkinJobs.length > 0
+          ? checkinJobs.map((entry, i) => (
+              <TimeRow key={`${entry.job}-${entry.time}-${i}`} time={formatTime(entry.time!)}>
+                <strong>{entry.label}.</strong> {entry.description}
+              </TimeRow>
+            ))
+          : /* Fallback while fetch is in-flight or if API is unavailable */
+            [
+              { time: '10:00 AM', label: 'Entry evaluation', desc: 'Main entry cycle — wheel and spread strategies.' },
+              { time: '10:45 AM', label: 'First position check', desc: 'Evaluate open positions: profit target hit? Delta doubled?' },
+              { time: '11:30 AM', label: 'Late-morning check', desc: 'Re-check all open positions with updated prices.' },
+              { time: '12:30 PM', label: 'Midday check', desc: 'Midday management pass with updated prices.' },
+              { time: '2:00 PM', label: 'Afternoon check', desc: 'Last management pass before end-of-day sequence.' },
+              { time: '3:00 PM', label: 'Expiry guard', desc: 'Safety sweep for positions expiring today.' },
+              { time: '3:15 PM', label: 'Pre-close observation', desc: 'Warnings for positions within 7 DTE — no new orders.' },
+            ].map(({ time, label, desc }) => (
+              <TimeRow key={time} time={time}>
+                <strong>{label}.</strong> {desc}
+              </TimeRow>
+            ))
+        }
       </div>
       <Callout>
         Between these check-ins, the bot is not watching. If a stock spikes or crashes at 11:15

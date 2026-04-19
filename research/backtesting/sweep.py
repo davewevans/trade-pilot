@@ -11,9 +11,10 @@ from __future__ import annotations
 import json
 import logging
 import math
+import time
 import uuid
 from dataclasses import asdict
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -55,6 +56,34 @@ _STRATEGY_PARAMS: dict[str, dict] = {
 }
 
 
+def _count_hist_summaries_cached(cache, symbol: str, max_days: int) -> int:
+    """Count fresh hist/summaries cache entries for *symbol* in the ORATS cache table.
+
+    Returns the number of distinct (symbol, date) summary rows that are still
+    within their TTL — used by :meth:`BacktestSweep.estimate_cost` to compute
+    the warm-cache call estimate.
+    """
+    if cache._conn is None:
+        return 0
+    import time as _time
+
+    now = _time.time()
+    try:
+        row = cache._conn.execute(
+            """
+            SELECT COUNT(*) FROM orats_cache
+            WHERE endpoint = 'hist/summaries'
+              AND cache_key LIKE ?
+              AND (? - fetched_at) < ttl_seconds
+            """,
+            (f"{symbol}|%", now),
+        ).fetchone()
+        return min(int(row[0]) if row else 0, max_days)
+    except Exception:
+        logger.warning("_count_hist_summaries_cached failed for %s", symbol, exc_info=True)
+        return 0
+
+
 class BacktestSweep:
     """Orchestrates weekly backtest sweeps and aggregated stats computation.
 
@@ -77,6 +106,79 @@ class BacktestSweep:
             self._data_dir = Path(data_dir)
 
         self._state_path = self._data_dir / "backtest_sweep_state.json"
+
+    # ── Cost estimation ──────────────────────────────────────────────────────
+
+    def estimate_cost(self) -> dict:
+        """Estimate ORATS calls needed given current cache state.
+
+        Returns ``{'cold_estimate': int, 'warm_estimate': int, 'by_symbol': dict}``.
+
+        Cold estimate: assumes no cache hits (~2,170 calls per (symbol × strategy)
+        pair, consistent with the 2026-04-17 forensic report).
+
+        Warm estimate: credits ``hist/summaries`` cache hits (fresh within the
+        7-day TTL) as a proxy for fully-cached days; strikes and cores are
+        not modeled separately — the estimate rounds up pessimistically.
+
+        Lookback: ``RESEARCH_BACKTEST_LOOKBACK_YEARS × 252`` trading days.
+        """
+        from config import settings
+
+        lookback_days = settings.RESEARCH_BACKTEST_LOOKBACK_YEARS * 252
+        cold_cost_per_pair = 2170  # per forensic report 2026-04-17
+
+        # Determine symbol list (mirror run_sweep logic)
+        mode = settings.RESEARCH_BACKTEST_SWEEP_MODE
+        if mode == "watchlist":
+            symbols = sorted(set(
+                list(settings.WATCHLIST)
+                + list(settings.IRON_CONDOR_WATCHLIST)
+                + list(settings.SPREAD_WATCHLIST)
+            ))
+        else:
+            try:
+                self._universe.load()
+                symbols = self._universe.all_symbols()
+            except Exception:
+                logger.warning("estimate_cost: universe.all_symbols() failed; using watchlist")
+                symbols = sorted(set(
+                    list(settings.WATCHLIST)
+                    + list(settings.IRON_CONDOR_WATCHLIST)
+                    + list(settings.SPREAD_WATCHLIST)
+                ))
+
+        strategies = list(_STRATEGY_PARAMS.keys())
+        n_strategies = len(strategies)
+
+        cold_total = len(symbols) * n_strategies * cold_cost_per_pair
+
+        # Query the ORATS cache to credit already-cached hist/summaries days
+        from data.orats_cache import ORATSCache
+        import time as _time
+
+        _cache = ORATSCache()
+        by_symbol: dict = {}
+        warm_total = 0
+
+        for sym in symbols:
+            fresh = _count_hist_summaries_cached(_cache, sym.upper(), lookback_days)
+            cached_frac = min(fresh / lookback_days, 1.0) if lookback_days > 0 else 0.0
+            warm_per_pair = int(cold_cost_per_pair * (1.0 - cached_frac))
+            sym_warm = warm_per_pair * n_strategies
+            by_symbol[sym] = {
+                "cold": cold_cost_per_pair * n_strategies,
+                "warm": sym_warm,
+                "cached_summary_days": fresh,
+                "cached_fraction": round(cached_frac, 3),
+            }
+            warm_total += sym_warm
+
+        return {
+            "cold_estimate": cold_total,
+            "warm_estimate": warm_total,
+            "by_symbol": by_symbol,
+        }
 
     # ── State file helpers ────────────────────────────────────────────────
 
@@ -281,20 +383,202 @@ class BacktestSweep:
 
         return counts
 
+    # ── sweep_progress table helpers ─────────────────────────────────────────
+
+    def _sweep_db_conn(self):
+        """Return a dedicated sqlite3 connection to the main database."""
+        import sqlite3 as _sqlite3
+        from config import settings as _settings
+        conn = _sqlite3.connect(str(_settings.DATABASE_PATH), check_same_thread=False)
+        conn.execute("PRAGMA journal_mode=WAL")
+        return conn
+
+    def _load_sweep_progress(
+        self,
+        symbols: list[str],
+        strategies: list[str],
+        lookback_years: int,
+    ) -> dict[tuple[str, str], dict]:
+        """Load sweep_progress rows for the given pairs.
+
+        Returns a dict keyed by (symbol, strategy) → {last_primed_at, prime_cost_calls, last_error}.
+        """
+        result: dict[tuple[str, str], dict] = {}
+        try:
+            conn = self._sweep_db_conn()
+            try:
+                placeholders_sym = ",".join("?" * len(symbols))
+                placeholders_strat = ",".join("?" * len(strategies))
+                rows = conn.execute(
+                    f"""
+                    SELECT symbol, strategy, last_primed_at, prime_cost_calls, last_error
+                    FROM sweep_progress
+                    WHERE symbol IN ({placeholders_sym})
+                      AND strategy IN ({placeholders_strat})
+                      AND lookback_years = ?
+                    """,
+                    [*symbols, *strategies, lookback_years],
+                ).fetchall()
+                for sym, strat, primed_at, cost, error in rows:
+                    result[(sym, strat)] = {
+                        "last_primed_at": primed_at,
+                        "prime_cost_calls": cost,
+                        "last_error": error,
+                    }
+            finally:
+                conn.close()
+        except Exception:
+            logger.warning("_load_sweep_progress failed", exc_info=True)
+        return result
+
+    def _update_sweep_progress(
+        self,
+        symbol: str,
+        strategy: str,
+        lookback_years: int,
+        success: bool,
+        cost_calls: int,
+        error: Optional[str],
+    ) -> None:
+        """Upsert a sweep_progress row after processing a pair."""
+        try:
+            conn = self._sweep_db_conn()
+            try:
+                primed_at = time.time() if success else None
+                conn.execute(
+                    """
+                    INSERT INTO sweep_progress (symbol, strategy, lookback_years,
+                        last_primed_at, prime_cost_calls, last_error)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(symbol, strategy, lookback_years) DO UPDATE SET
+                        last_primed_at   = excluded.last_primed_at,
+                        prime_cost_calls = excluded.prime_cost_calls,
+                        last_error       = excluded.last_error
+                    """,
+                    (symbol, strategy, lookback_years, primed_at, cost_calls, error),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+        except Exception:
+            logger.warning(
+                "_update_sweep_progress failed for %s/%s", symbol, strategy, exc_info=True
+            )
+
+    def _reset_sweep_progress(self, symbols: list[str], strategies: list[str], lookback_years: int) -> None:
+        """Clear sweep_progress for all matching pairs (used on force_restart)."""
+        try:
+            conn = self._sweep_db_conn()
+            try:
+                placeholders_sym = ",".join("?" * len(symbols))
+                placeholders_strat = ",".join("?" * len(strategies))
+                conn.execute(
+                    f"""
+                    DELETE FROM sweep_progress
+                    WHERE symbol IN ({placeholders_sym})
+                      AND strategy IN ({placeholders_strat})
+                      AND lookback_years = ?
+                    """,
+                    [*symbols, *strategies, lookback_years],
+                )
+                conn.commit()
+            finally:
+                conn.close()
+        except Exception:
+            logger.warning("_reset_sweep_progress failed", exc_info=True)
+
+    # ── Per-pair cost estimation ──────────────────────────────────────────────
+
+    def estimate_pair_cost(self, symbol: str, strategy: str) -> int:
+        """Estimate warm-cache ORATS calls for a single (symbol, strategy) pair.
+
+        Returns an integer call count (0 if fully cached, up to cold_cost_per_pair).
+        """
+        from config import settings
+        from data.orats_cache import ORATSCache
+
+        lookback_days = settings.RESEARCH_BACKTEST_LOOKBACK_YEARS * 252
+        cold_cost_per_pair = 2170
+
+        _cache = ORATSCache()
+        fresh = _count_hist_summaries_cached(_cache, symbol.upper(), lookback_days)
+        cached_frac = min(fresh / lookback_days, 1.0) if lookback_days > 0 else 0.0
+        return int(cold_cost_per_pair * (1.0 - cached_frac))
+
+    # ── Priority queue ────────────────────────────────────────────────────────
+
+    def _build_priority_queue(
+        self,
+        symbols: list[str],
+        strategies: list[str],
+        lookback_years: int,
+        open_symbols: set[str],
+        progress: dict[tuple[str, str], dict],
+        reprime_weeks: int,
+    ) -> list[tuple[str, str]]:
+        """Return (symbol, strategy) pairs sorted by priority.
+
+        Priority 1: symbol has an open Alpaca position
+        Priority 2: pair never primed (null last_primed_at)
+        Priority 3: pair primed > reprime_weeks ago
+        Skip:       pair primed within reprime_weeks
+        """
+        reprime_cutoff = time.time() - reprime_weeks * 7 * 24 * 3600
+        ranked: list[tuple[int, str, str]] = []
+
+        for sym in symbols:
+            for strat in strategies:
+                row = progress.get((sym, strat), {})
+                primed_at = row.get("last_primed_at")
+
+                if primed_at is not None and primed_at >= reprime_cutoff:
+                    # Primed recently — skip
+                    continue
+
+                if sym in open_symbols:
+                    priority = 1
+                elif primed_at is None:
+                    priority = 2
+                else:
+                    priority = 3
+
+                ranked.append((priority, sym, strat))
+
+        ranked.sort(key=lambda t: t[0])
+        return [(sym, strat) for _, sym, strat in ranked]
+
     # ── Top-level orchestration ───────────────────────────────────────────
 
     def run_sweep(
         self,
         mode: str,
         progress_cb: Optional[Callable[[str], None]] = None,
+        force_restart: bool = False,
     ) -> dict:
-        """Orchestrate one Sunday sweep chunk.
+        """Orchestrate one budget-aware rotating sweep chunk.
 
-        Returns a summary dict including run_id, mode, symbols processed,
-        and whether stats were recomputed.
+        Processes (symbol, strategy) pairs in priority order (open positions first,
+        then unprimed, then stale) until the per-run budget or monthly ORATS budget
+        is exhausted.  Progress is persisted in the sweep_progress database table so
+        each run continues from where the previous one left off.
+
+        Args:
+            mode:          ``'watchlist'`` or ``'universe'``.
+            progress_cb:   Optional callback called with a progress message
+                           after each pair completes.
+            force_restart: When True, clear sweep_progress for all pairs so the
+                           next run treats everything as unprimed.
+
+        Returns a summary dict compatible with the legacy run_sweep() shape.
         """
         from config import settings
         from backtesting.engine import SUPPORTED_STRATEGIES
+
+        run_id = str(uuid.uuid4())
+        lookback_years = settings.RESEARCH_BACKTEST_LOOKBACK_YEARS
+        today = date.today().isoformat()
+        end_date = today
+        start_date = (date.today() - timedelta(days=lookback_years * 365)).isoformat()
 
         # ── 1. Determine symbol list ──────────────────────────────────────
         if mode == "watchlist":
@@ -304,116 +588,171 @@ class BacktestSweep:
                 + list(settings.SPREAD_WATCHLIST)
             ))
         else:
-            self._universe.load()
-            full_list = self._universe.all_symbols()
-
-        # ── 2. Load or reset state ────────────────────────────────────────
-        state = self._load_state()
-        lookback_years = settings.RESEARCH_BACKTEST_LOOKBACK_YEARS
-
-        today = date.today().isoformat()
-        stale = False
-        if state.get("last_completed_at"):
-            last = state["last_completed_at"][:10]
             try:
-                days_since = (date.fromisoformat(today) - date.fromisoformat(last)).days
-                stale = days_since > 7
-            except ValueError:
-                stale = True
+                self._universe.load()
+                full_list = self._universe.all_symbols()
+            except Exception:
+                logger.warning("run_sweep: universe load failed; falling back to watchlist")
+                full_list = sorted(set(
+                    list(settings.WATCHLIST)
+                    + list(settings.IRON_CONDOR_WATCHLIST)
+                    + list(settings.SPREAD_WATCHLIST)
+                ))
 
-        mode_changed = state.get("mode") != mode
+        strategies = list(SUPPORTED_STRATEGIES)
 
-        if mode_changed or stale or state.get("current_run_id") is None:
-            run_id = str(uuid.uuid4())
-            state["current_run_id"] = run_id
-            state["completed_symbols"] = {s: [] for s in SUPPORTED_STRATEGIES}
-            state["mode"] = mode
-            logger.info("Starting new backtest sweep run %s (mode=%s)", run_id, mode)
-        else:
-            run_id = state["current_run_id"]
-            if not isinstance(state.get("completed_symbols"), dict):
-                state["completed_symbols"] = {s: [] for s in SUPPORTED_STRATEGIES}
-            logger.info("Resuming backtest sweep run %s (mode=%s)", run_id, mode)
+        # ── 2. Reset sweep_progress if force_restart ──────────────────────
+        if force_restart:
+            logger.info("force_restart=True — clearing sweep_progress for all pairs")
+            self._reset_sweep_progress(full_list, strategies, lookback_years)
 
-        # ── 3. Determine remaining symbols ────────────────────────────────
-        # Use union of remaining across all strategies (conservative approach:
-        # a symbol is "done" only when all strategies have processed it)
-        completed_sets = {
-            strat: set(state["completed_symbols"].get(strat, []))
-            for strat in SUPPORTED_STRATEGIES
-        }
-        remaining = [
-            sym for sym in full_list
-            if any(sym not in completed_sets[s] for s in SUPPORTED_STRATEGIES)
-        ]
+        # ── 3. Get open Alpaca positions (for priority 1) ─────────────────
+        open_symbols: set[str] = set()
+        try:
+            from brokers.broker_factory import get_broker
+            positions = get_broker().get_positions() or []
+            open_symbols = {
+                p.get("symbol", "").split("_")[0].split(" ")[0]
+                for p in positions
+                if p.get("symbol")
+            }
+        except Exception:
+            logger.debug("run_sweep: could not fetch open positions for priority", exc_info=True)
 
-        # ── 4. Cap per run ────────────────────────────────────────────────
-        max_per_run = settings.RESEARCH_BACKTEST_MAX_SYMBOLS_PER_RUN
-        chunk = remaining[:max_per_run]
+        # ── 4. Load sweep_progress and build priority queue ───────────────
+        progress = self._load_sweep_progress(full_list, strategies, lookback_years)
+        pairs = self._build_priority_queue(
+            symbols=full_list,
+            strategies=strategies,
+            lookback_years=lookback_years,
+            open_symbols=open_symbols,
+            progress=progress,
+            reprime_weeks=settings.SWEEP_REPRIME_WEEKS,
+        )
 
-        if not chunk:
-            logger.info("All symbols already complete for run %s", run_id)
-            stats_result = {}
-            regime_result = {}
-        else:
-            # ── 5. Date range ─────────────────────────────────────────────
-            end_date = today
-            start_date = (
-                date.today() - timedelta(days=lookback_years * 365)
-            ).isoformat()
+        # ── 5. Budget limits ──────────────────────────────────────────────
+        run_budget = settings.WEEKLY_SWEEP_BUDGET_CALLS
+        monthly_remaining = run_budget  # conservative default if ledger unavailable
+        try:
+            from data.api_ledger import get_ledger
+            usage = get_ledger().get_usage("orats_historical")
+            monthly_remaining = usage.get("month_remaining", run_budget)
+        except Exception:
+            logger.debug("run_sweep: could not read monthly budget from ledger", exc_info=True)
 
-            # ── 6. Run the sweep ──────────────────────────────────────────
-            sweep_result = self.sweep_symbols(
-                symbols=chunk,
-                strategies=SUPPORTED_STRATEGIES,
-                start_date=start_date,
-                end_date=end_date,
-                sweep_run_id=run_id,
-                progress_cb=progress_cb,
-            )
+        # ── 6. Greedy fill ────────────────────────────────────────────────
+        calls_used = 0
+        pairs_primed = 0
+        pairs_failed = 0
+        pairs_skipped_budget = 0
 
-            # ── 7. Update state with completed symbols ────────────────────
-            for strat in SUPPORTED_STRATEGIES:
-                done = state["completed_symbols"].get(strat, [])
-                state["completed_symbols"][strat] = sorted(set(done) | set(chunk))
-            self._save_state(state)
+        for symbol, strategy in pairs:
+            estimated = self.estimate_pair_cost(symbol, strategy)
+            remaining_run = run_budget - calls_used
+            remaining_monthly = monthly_remaining - calls_used
 
-            # ── 8. If all symbols complete, recompute stats ───────────────
-            remaining_after = [
-                sym for sym in full_list
-                if any(
-                    sym not in set(state["completed_symbols"].get(s, []))
-                    for s in SUPPORTED_STRATEGIES
+            budget_limit = min(remaining_run, remaining_monthly)
+            if estimated > budget_limit:
+                pairs_skipped_budget += 1
+                logger.debug(
+                    "run_sweep: skipping %s/%s — estimated %d calls > remaining %d",
+                    symbol, strategy, estimated, budget_limit,
                 )
-            ]
-            stats_result = {}
-            regime_result = {}
-            if not remaining_after:
-                logger.info("All symbols processed — recomputing stats")
+                break  # pairs are sorted; if this one doesn't fit, later ones won't either
+
+            if progress_cb:
+                progress_cb(f"priming {symbol}/{strategy}")
+
+            try:
+                self.sweep_symbols(
+                    symbols=[symbol],
+                    strategies=[strategy],
+                    start_date=start_date,
+                    end_date=end_date,
+                    sweep_run_id=run_id,
+                    progress_cb=progress_cb,
+                )
+                self._update_sweep_progress(
+                    symbol, strategy, lookback_years,
+                    success=True, cost_calls=estimated, error=None,
+                )
+                calls_used += estimated
+                pairs_primed += 1
+            except Exception as exc:
+                error_msg = str(exc)[:500]
+                self._update_sweep_progress(
+                    symbol, strategy, lookback_years,
+                    success=False, cost_calls=0, error=error_msg,
+                )
+                pairs_failed += 1
+                logger.exception("run_sweep: failed to prime %s/%s", symbol, strategy)
+
+        # Pairs remaining after this run (eligible but not processed)
+        pairs_remaining = len(pairs) - pairs_primed - pairs_failed
+
+        # ── 7. Recompute stats if all pairs primed ────────────────────────
+        stats_result: dict = {}
+        regime_result: dict = {}
+        all_progress = self._load_sweep_progress(full_list, strategies, lookback_years)
+        reprime_cutoff = time.time() - settings.SWEEP_REPRIME_WEEKS * 7 * 24 * 3600
+        all_primed = all(
+            (sym, strat) in all_progress
+            and all_progress[(sym, strat)].get("last_primed_at") is not None
+            and all_progress[(sym, strat)]["last_primed_at"] >= reprime_cutoff
+            for sym in full_list for strat in strategies
+        )
+        if all_primed and full_list and strategies:
+            logger.info("All pairs primed — recomputing backtest stats")
+            try:
                 stats_result = self.recompute_symbol_stats(lookback_years)
                 regime_result = self.recompute_regime_stats(lookback_years)
-                state["last_run_id"] = run_id
-                state["last_completed_at"] = today
-                state["current_run_id"] = None
-                self._save_state(state)
+            except Exception:
+                logger.exception("recompute_symbol_stats / recompute_regime_stats failed")
 
-            return {
-                "run_id": run_id,
-                "mode": mode,
-                "chunk_size": len(chunk),
-                "remaining_after": len(remaining_after),
-                "sweep": sweep_result,
-                "symbol_stats": stats_result,
-                "regime_stats": regime_result,
-            }
+        # ── 8. Log summary + ntfy ─────────────────────────────────────────
+        est_full_prime_weeks = (
+            math.ceil(len(pairs) / max(pairs_primed, 1))
+            if pairs_primed > 0
+            else None
+        )
+        logger.info(
+            "Weekly sweep: %d pairs primed, %d failed. "
+            "Budget used: %d/%d calls. Pairs remaining: %d. "
+            "Est. full prime: %s weeks.",
+            pairs_primed, pairs_failed,
+            calls_used, run_budget, pairs_remaining,
+            est_full_prime_weeks if est_full_prime_weeks else "unknown",
+        )
 
-        # No chunk needed (already complete)
+        if pairs_primed > 0:
+            try:
+                from notifications import notify
+                notify(
+                    "default",
+                    "weekly sweep complete",
+                    f"{pairs_primed} pairs primed, {pairs_failed} failed. "
+                    f"Budget: {calls_used}/{run_budget} calls. "
+                    f"Remaining: {pairs_remaining} pairs.",
+                    tags=["sweep", "weekly_research"],
+                )
+            except Exception:
+                pass
+
         return {
             "run_id": run_id,
             "mode": mode,
-            "chunk_size": 0,
-            "remaining_after": 0,
-            "sweep": {},
+            "pairs_primed": pairs_primed,
+            "pairs_failed": pairs_failed,
+            "calls_used": calls_used,
+            "pairs_remaining": pairs_remaining,
+            # Legacy keys for backward compatibility
+            "chunk_size": pairs_primed,
+            "remaining_after": pairs_remaining,
+            "sweep": {
+                "total_attempts": pairs_primed + pairs_failed,
+                "successes": pairs_primed,
+                "failures": pairs_failed,
+            },
             "symbol_stats": stats_result,
             "regime_stats": regime_result,
         }

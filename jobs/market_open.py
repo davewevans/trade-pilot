@@ -7,6 +7,7 @@ limit-at-mid orders fill more cleanly once the quotes settle.
 
 import json
 import logging
+import uuid
 from dataclasses import asdict
 
 from config import settings
@@ -20,6 +21,7 @@ def run() -> None:
 
     Uses StrategyRouter to decide which spread strategies are active.
     """
+    job_run_id = f"market_open.{uuid.uuid4()}"
     logger.info("=== MARKET OPEN JOB STARTING ===")
 
     from datetime import datetime
@@ -210,11 +212,6 @@ def run() -> None:
         spread_strategies["calendar_spread"] = CalendarSpreadStrategy(
             broker=paper5_broker, state_writer=sw, spread_tracker=tracker, recorder=recorder,
         )
-    # Stamp current circuit-breaker color on each strategy so any spread
-    # opened this cycle records the CB status it was entered under.
-    for _s in spread_strategies.values():
-        _s.cb_status_at_entry = cb_status.status
-
     # Reconcile any PENDING_OPEN / PENDING_CLOSE spreads from a previous
     # session before we make new decisions. Without this, management logic
     # could act on phantom positions (orders that never filled or were
@@ -277,6 +274,10 @@ def run() -> None:
     for symbol in settings.WATCHLIST:
         try:
             state = wheel_strategy.get_current_state(symbol)
+            # pre_check_verdict for this symbol: MANAGE for position-management
+            # states; OPEN for IDLE (entry will be evaluated by Claude); overridden
+            # to SKIP below if the liquidity gate rejects the symbol.
+            _wheel_pcv = "OPEN" if state.value == "IDLE" else "MANAGE"
             logger.info("%s wheel state: %s", symbol, state.value)
 
             context = ctx_builder.build(symbol, state.value)
@@ -320,6 +321,9 @@ def run() -> None:
                         research_metadata=_liq_skip.get("_research"),
                         skip_gate=SkipGate.LIQUIDITY_FLOOR,
                         skip_reason_code=SkipReason.LIQUIDITY_TIER_D,
+                        job_run_id=job_run_id,
+                        pre_check_verdict="SKIP",
+                        prompt_version=None,
                     )
                 report_lines.append(
                     f"**{symbol}** -- SKIPPED (liquidity floor: {_liq_skip.get('skip_reason')})"
@@ -377,6 +381,9 @@ def run() -> None:
                         research_metadata=context.get("_research"),
                         skip_gate=SkipGate.CLAUDE_SKIP,
                         skip_reason_code=SkipReason.CLAUDE_SKIP,
+                        job_run_id=job_run_id,
+                        pre_check_verdict=_wheel_pcv,
+                        prompt_version=advisor.prompt_version,
                     )
                 report_lines.append(
                     f"**{symbol}** -- {decision.get('action').upper()} "
@@ -409,6 +416,9 @@ def run() -> None:
                         research_metadata=context.get("_research"),
                         skip_gate=SkipGate.GUARDRAIL,
                         skip_reason_code=SkipReason.GUARDRAIL_OTHER,
+                        job_run_id=job_run_id,
+                        pre_check_verdict=_wheel_pcv,
+                        prompt_version=advisor.prompt_version,
                     )
                 from strategies.guardrails import Guardrails as _G
                 journal.append({
@@ -451,6 +461,9 @@ def run() -> None:
                     confidence=decision.get("confidence"),
                     context=context,
                     research_metadata=context.get("_research"),
+                    job_run_id=job_run_id,
+                    pre_check_verdict=_wheel_pcv,
+                    prompt_version=advisor.prompt_version,
                 )
 
             if settings.DRY_RUN:
@@ -504,6 +517,9 @@ def run() -> None:
                             context=context,
                             skip_gate=SkipGate.CIRCUIT_BREAKER,
                             skip_reason_code=_cb_reason_code,
+                            job_run_id=job_run_id,
+                            pre_check_verdict=_wheel_pcv,
+                            prompt_version=advisor.prompt_version,
                         )
                     report_lines.append(f"**{symbol}** -- SKIPPED ({cb_skip_reason})")
                     continue
@@ -591,7 +607,7 @@ def run() -> None:
         active = router.get_active_strategies(
             shared_context, strat_states, circuit_breaker_status=cb_status.status,
         )
-        active_spreads = [a for a in active if a not in ("wheel", "conservative_wheel")]
+        active_spreads = [a for a in active if a not in ("wheel", "turnover_wheel")]
 
         logger.info(
             "Strategy router: active=%s (states: %s)",
@@ -610,6 +626,7 @@ def run() -> None:
                 strat_state_value = strat.get_state().value
                 spread_ctx = None
                 decision = None
+                _spread_used_advisor = False
 
                 if strat_state_value == "OPEN":
                     mgmt_underlying = None
@@ -636,6 +653,7 @@ def run() -> None:
                         )
                         continue
                     decision = strat.run_cycle(spread_ctx, advisor)
+                    _spread_used_advisor = True
                 else:
                     # IDLE: scan the strategy-specific watchlist, pre-check without
                     # Claude, then run_cycle (→ Claude) once for the winner.
@@ -645,9 +663,46 @@ def run() -> None:
                     last_skip_reason = None
                     if strategy_name == "iron_condor":
                         symbols = settings.IRON_CONDOR_WATCHLIST or settings.WATCHLIST
+                    elif strategy_name == "iron_butterfly":
+                        symbols = settings.IRON_BUTTERFLY_WATCHLIST or settings.IRON_CONDOR_WATCHLIST or settings.WATCHLIST
+                    elif strategy_name == "calendar_spread":
+                        symbols = settings.CALENDAR_SPREAD_WATCHLIST or settings.SPREAD_WATCHLIST or settings.WATCHLIST
                     else:
                         symbols = settings.SPREAD_WATCHLIST or settings.WATCHLIST
-                    for sym in symbols:
+
+                    # ── Pre-filter: cheap gates before expensive ctx_builder.build() calls ──
+                    from data.spread_screen import screen_spread_candidates
+                    from data.orats_client import ORATSClient as _ORATSClient
+                    from data import market_data as _mkt
+                    _regime = (shared_context or {}).get("confirmed_market_regime", "NEUTRAL")
+                    _iv_env = (shared_context or {}).get("iv_environment", "NORMAL")
+                    _screen_survivors, _screen_rejections = screen_spread_candidates(
+                        symbols=list(symbols),
+                        strategy_name=strategy_name,
+                        regime=_regime,
+                        iv_env=_iv_env,
+                        orats_client=_ORATSClient(),
+                        earnings_fn=_mkt.get_earnings_calendar,
+                    )
+                    _reason_counts: dict[str, int] = {}
+                    for _r in _screen_rejections:
+                        _reason_counts[_r["reason"]] = _reason_counts.get(_r["reason"], 0) + 1
+                    _reason_str = ", ".join(f"{v} {k}" for k, v in _reason_counts.items())
+                    logger.info(
+                        "Spread scan (%s): %d symbols → %d survivors. Rejected: %s",
+                        strategy_name, len(list(symbols)), len(_screen_survivors),
+                        _reason_str if _reason_str else "none",
+                    )
+                    try:
+                        _screen_path = settings.SNAPSHOTS_DIR / f"spread_screen_{strategy_name}.json"
+                        _screen_path.write_text(json.dumps(_screen_rejections, indent=2))
+                    except Exception:
+                        logger.warning(
+                            "Failed to write spread screen snapshot for %s",
+                            strategy_name, exc_info=True,
+                        )
+
+                    for sym in _screen_survivors:
                         try:
                             candidate_ctx = ctx_builder.build(sym, "IDLE")
                         except Exception:
@@ -672,7 +727,11 @@ def run() -> None:
                             last_skip_reason = skip_reason
 
                     if best_ctx is None:
-                        wl_name = "IRON_CONDOR_WATCHLIST" if strategy_name == "iron_condor" else "SPREAD_WATCHLIST"
+                        wl_name = {
+                            "iron_condor": "IRON_CONDOR_WATCHLIST",
+                            "iron_butterfly": "IRON_BUTTERFLY_WATCHLIST",
+                            "calendar_spread": "CALENDAR_SPREAD_WATCHLIST",
+                        }.get(strategy_name, "SPREAD_WATCHLIST")
                         reason = (
                             f"No qualifying candidates across {wl_name} "
                             f"(last skip: {last_skip_reason})"
@@ -694,6 +753,7 @@ def run() -> None:
                             strategy_name, best_symbol, best_score,
                         )
                         decision = strat.run_cycle(spread_ctx, advisor)
+                        _spread_used_advisor = True
                         # Tag the winning underlying so _handle_spread_open uses it.
                         if decision.get("action") == "OPEN":
                             decision["underlying"] = best_symbol
@@ -739,6 +799,12 @@ def run() -> None:
                         else:
                             _spread_skip_gate = SkipGate.CLAUDE_SKIP
                             _spread_skip_reason_code = SkipReason.CLAUDE_SKIP
+                    # pre_check_verdict: MANAGE for open-position management cycles;
+                    # OPEN if winner found (pre-check passed); SKIP if no candidates.
+                    _spread_pcv = (
+                        "MANAGE" if strat_state_value == "OPEN"
+                        else ("OPEN" if decision.get("_pre_check_would_have") == "OPEN" else "SKIP")
+                    )
                     recorder.record_decision(
                         strategy_type=strategy_name,
                         underlying=spread_underlying,
@@ -749,6 +815,9 @@ def run() -> None:
                         research_metadata=(spread_ctx or {}).get("_research"),
                         skip_gate=_spread_skip_gate,
                         skip_reason_code=_spread_skip_reason_code,
+                        job_run_id=job_run_id,
+                        pre_check_verdict=_spread_pcv,
+                        prompt_version=advisor.prompt_version if _spread_used_advisor else None,
                     )
 
                 # Journal SKIPs from spread strategies so Claude sees them
@@ -792,6 +861,7 @@ def run() -> None:
                             strategy_name, strat, decision, guardrails,
                             spread_ctx, account, tracker, settings, report_lines,
                             journal=journal,
+                            cb_status=cb_status.status,
                         )
                         # Re-poll order status immediately so a same-cycle fast
                         # fill flips PENDING_OPEN → OPEN before the next loop.
@@ -827,6 +897,7 @@ _GUARDRAIL_MAP = {
 def _handle_spread_open(
     name, strat, decision, guardrails, context, account, tracker, settings, report_lines,
     journal=None,
+    cb_status: str | None = None,
 ):
     """Validate and execute a spread OPEN decision."""
     validator_name = _GUARDRAIL_MAP.get(name)
@@ -909,7 +980,7 @@ def _handle_spread_open(
         report_lines.append(f"**{name}** -- DRY RUN: OPEN")
         return
 
-    success = strat.execute_entry({**decision, "underlying": underlying})
+    success = strat.execute_entry({**decision, "underlying": underlying}, cb_status=cb_status)
     if success:
         report_lines.append(
             f"**{name}** -- OPENED (credit/debit: "

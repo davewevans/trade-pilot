@@ -1,13 +1,18 @@
 import type {
   CircuitBreaker,
+  ClaudeAgreementResponse,
+  ClaudeCostsResponse,
+  CycleSummaryResponse,
   DecisionStats,
   DecisionsResponse,
   EquityHistory,
   FillQualityResponse,
+  HaltInfo,
   HealthStatus,
   NtaEventsResponse,
   Performance,
   Portfolio,
+  PortfolioGreeks,
   TokenUsageDaily,
   TokenUsageSummary,
   TokenUsageToday,
@@ -198,6 +203,161 @@ export interface ORATSUsageResponse {
   this_month_total: number;
 }
 
+// ── Evaluation types ──────────────────────────────────────────────────────────
+
+export type ReviewStatus = 'pending' | 'reviewed' | 'reviewed-with-action'
+
+export interface EvaluationSummary {
+  month: string
+  generated_at: string
+  decisions_scored: number
+  closed_trades_in_window: number | null
+  insufficient_sample: null  // not persisted by backend
+  flag_count: number
+  review_status: ReviewStatus
+  judge_operator_disagreement: number | null
+}
+
+export interface EvaluationsListResponse {
+  evaluations: EvaluationSummary[]
+  total: number
+}
+
+export interface DimensionStats {
+  mean: number
+  median: number
+  stddev: number
+  n: number
+  by_prompt_version?: Record<string, { mean: number; median: number; stddev: number; n: number }>
+}
+
+export interface StrategyDistribution {
+  by_dimension: Record<string, DimensionStats>
+  decisions_scored: number
+  closed_trades_in_window: number
+}
+
+export interface ScoreDistribution {
+  by_strategy: Record<string, StrategyDistribution>
+  overall: {
+    by_dimension: Record<string, DimensionStats>
+    decisions_scored: number
+    closed_trades_in_window: number
+  }
+}
+
+export interface FlagSummaryItem {
+  strategy: string
+  dimension: string
+  severity: string
+  reason: string
+}
+
+export interface EvaluationDetailResponse {
+  month: string
+  generated_at: string
+  decisions_scored: number
+  avg_score: number | null
+  pct_pass: number | null
+  reviewed_at: string | null
+  action_note: string | null
+  review_status: ReviewStatus
+  flag_summary: FlagSummaryItem[]
+  score_distribution: ScoreDistribution
+  judge_operator_disagreement: number | null
+}
+
+export interface FlaggedDecision {
+  id: number
+  timestamp: string
+  underlying: string | null
+  action: string | null
+  reasoning: unknown
+  context: unknown
+  scores: Array<{
+    id: number
+    decision_id: number
+    scorer_type: string
+    total_score: number | null
+    dimension_scores_json: string | null
+    dimension_scores?: Array<{ dimension: string; score: number; justification?: string }>
+    scored_at: string
+    prompt_version: string | null
+  }>
+  [key: string]: unknown
+}
+
+export interface FlaggedDecisionGroup {
+  strategy: string
+  dimension: string
+  severity: string
+  reason: string
+  decisions: FlaggedDecision[]
+}
+
+export interface FlaggedDecisionsResponse {
+  month: string
+  flags: FlaggedDecisionGroup[]
+}
+
+export interface MarkReviewedResponse {
+  month: string
+  review_status: ReviewStatus
+  reviewed_at: string | null
+  action_note: string | null
+}
+
+// ── Spot-check queue ──────────────────────────────────────────────────────────
+
+export interface SpotCheckDimensionScore {
+  dimension: string
+  score: number
+  justification?: string
+}
+
+export interface SpotCheckScore {
+  id: number
+  decision_id: number
+  scorer_type: string
+  total_score: number | null
+  dimension_scores: SpotCheckDimensionScore[] | null
+  scored_at: string
+  prompt_version: string | null
+  [key: string]: unknown
+}
+
+export interface SpotCheckDecision {
+  id: number
+  timestamp: string
+  underlying: string | null
+  action: string | null
+  reasoning: Record<string, unknown> | null
+  context: Record<string, unknown> | null
+  [key: string]: unknown
+}
+
+export interface SpotCheckQueueItem {
+  decision: SpotCheckDecision
+  score: SpotCheckScore
+}
+
+export interface SpotCheckQueueResponse {
+  month: string
+  queue: SpotCheckQueueItem[]
+}
+
+export interface SpotCheckSubmitResponse {
+  spot_check: {
+    id: number
+    decision_score_id: number
+    submitted_at: string
+    judge_score: number | null
+    operator_verdict: 'agree' | 'disagree' | 'unclear'
+    verdict_notes: string | null
+    checked_at: string
+  }
+}
+
 export const api = {
   health: () => get<HealthStatus>('/api/health'),
 
@@ -384,22 +544,125 @@ export const api = {
   oratsUsage: (): Promise<ORATSUsageResponse> =>
     get<ORATSUsageResponse>('/api/orats/usage'),
 
-  watchlist: () =>
-    get<{ wheel: string[]; iron_condor: string[]; spreads: string[]; updated_at: string | null }>('/api/watchlist'),
+  listEvaluations: (limit = 20, offset = 0): Promise<EvaluationsListResponse> => {
+    const q = new URLSearchParams()
+    q.set('limit', String(limit))
+    q.set('offset', String(offset))
+    return get<EvaluationsListResponse>(`/api/evaluations?${q.toString()}`)
+  },
 
-  updateWatchlist: async (wheel: string[], iron_condor: string[], spreads: string[]) => {
-    const res = await fetch(`${BASE}/api/watchlist`, {
+  getEvaluation: (month: string): Promise<EvaluationDetailResponse> =>
+    get<EvaluationDetailResponse>(`/api/evaluations/${encodeURIComponent(month)}`),
+
+  getFlaggedDecisions: (month: string): Promise<FlaggedDecisionsResponse> =>
+    get<FlaggedDecisionsResponse>(`/api/evaluations/${encodeURIComponent(month)}/flagged-decisions`),
+
+  getSpotCheckQueue: (month: string, limit = 100): Promise<SpotCheckQueueResponse> => {
+    const q = new URLSearchParams()
+    q.set('limit', String(limit))
+    return get<SpotCheckQueueResponse>(`/api/evaluations/${encodeURIComponent(month)}/spot-check-queue?${q.toString()}`)
+  },
+
+  submitSpotCheck: async (
+    month: string,
+    decisionScoreId: number,
+    verdict: 'agree' | 'disagree' | 'unclear',
+    note?: string,
+  ): Promise<SpotCheckSubmitResponse> => {
+    const res = await fetchWithRetry(`${BASE}/api/evaluations/${encodeURIComponent(month)}/spot-checks`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
-      body: JSON.stringify({ wheel, iron_condor, spreads }),
+      body: JSON.stringify({
+        decision_score_id: decisionScoreId,
+        operator_verdict: verdict,
+        note: note ?? null,
+      }),
     })
     if (res.status === 401) { _handleUnauthorized(); throw new Error('Unauthorized') }
     if (!res.ok) {
       const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }))
       throw new Error(err.error ?? `API error ${res.status}`)
     }
-    return res.json() as Promise<{ wheel: string[]; iron_condor: string[]; spreads: string[]; updated_at: string | null }>
+    return res.json() as Promise<SpotCheckSubmitResponse>
+  },
+
+  markReviewed: async (month: string, actionNote: string | null): Promise<MarkReviewedResponse> => {
+    const res = await fetchWithRetry(`${BASE}/api/evaluations/${encodeURIComponent(month)}/mark-reviewed`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ action_note: actionNote }),
+    })
+    if (res.status === 401) { _handleUnauthorized(); throw new Error('Unauthorized') }
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }))
+      throw new Error(err.error ?? `API error ${res.status}`)
+    }
+    return res.json() as Promise<MarkReviewedResponse>
+  },
+
+  claudeCosts: (window: '7d' | '30d' | '90d' | 'all' = '7d', account?: string): Promise<ClaudeCostsResponse> => {
+    const q = new URLSearchParams()
+    q.set('window', window)
+    if (account) q.set('account', account)
+    return get<ClaudeCostsResponse>(`/api/claude-costs?${q.toString()}`)
+  },
+
+  cycleSummary: (jobRunId?: string): Promise<CycleSummaryResponse> => {
+    const qs = jobRunId ? `?job_run_id=${encodeURIComponent(jobRunId)}` : ''
+    return get<CycleSummaryResponse>(`/api/cycle-summary${qs}`)
+  },
+
+  claudeAgreement: (window: '7d' | '30d' | '90d' | 'all' = '30d'): Promise<ClaudeAgreementResponse> => {
+    return get<ClaudeAgreementResponse>(`/api/claude-agreement?window=${window}`)
+  },
+
+  portfolioGreeks: (account?: string): Promise<PortfolioGreeks> => {
+    const qs = account ? `?account=${encodeURIComponent(account)}` : ''
+    return get<PortfolioGreeks>(`/api/portfolio-greeks${qs}`)
+  },
+
+  haltStatus: () => get<HaltInfo>('/api/halt-status'),
+
+  halt: async (reason?: string): Promise<HaltInfo> => {
+    const res = await fetchWithRetry(`${BASE}/api/halt`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ reason: reason ?? '' }),
+    })
+    if (res.status === 401) { _handleUnauthorized(); throw new Error('Unauthorized') }
+    // 200 = halted now, 409 = already halted — both return the current halt info
+    return (await res.json()) as HaltInfo
+  },
+
+  resume: async (): Promise<HaltInfo> => {
+    const res = await fetchWithRetry(`${BASE}/api/resume`, {
+      method: 'POST',
+      credentials: 'include',
+    })
+    if (res.status === 401) { _handleUnauthorized(); throw new Error('Unauthorized') }
+    if (!res.ok) throw new Error(`API error ${res.status}: resume`)
+    return (await res.json()) as HaltInfo
+  },
+
+  watchlist: () =>
+    get<{ wheel: string[]; iron_condor: string[]; iron_butterfly: string[]; spreads: string[]; calendar_spread: string[]; updated_at: string | null }>('/api/watchlist'),
+
+  updateWatchlist: async (wheel: string[], iron_condor: string[], iron_butterfly: string[], spreads: string[], calendar_spread: string[]) => {
+    const res = await fetch(`${BASE}/api/watchlist`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ wheel, iron_condor, iron_butterfly, spreads, calendar_spread }),
+    })
+    if (res.status === 401) { _handleUnauthorized(); throw new Error('Unauthorized') }
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }))
+      throw new Error(err.error ?? `API error ${res.status}`)
+    }
+    return res.json() as Promise<{ wheel: string[]; iron_condor: string[]; iron_butterfly: string[]; spreads: string[]; calendar_spread: string[]; updated_at: string | null }>
   },
 }
 

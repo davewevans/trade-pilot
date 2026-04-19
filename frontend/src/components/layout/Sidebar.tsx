@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { NavLink, useLocation } from 'react-router-dom'
 import { useAccounts } from '../../hooks/useAccounts'
+import { useFeatureFlags } from '../../hooks/useFeatureFlags'
 
 function usePendingRecsCount(): number {
   const [count, setCount] = useState(0)
@@ -43,6 +44,7 @@ const LEARN_ROUTES = [
   '/how-it-works',
   '/playbook',
   '/how-backtesting-works',
+  '/how-evaluations-work',
   '/strategies',
   '/guardrails',
   '/circuit-breakers',
@@ -116,6 +118,7 @@ export function Sidebar() {
   const isLearnRoute = LEARN_ROUTES.some((p) => location.pathname.startsWith(p))
   const { accounts } = useAccounts()
   const pendingRecs = usePendingRecsCount()
+  const featureFlags = useFeatureFlags()
 
   return (
     <aside
@@ -132,9 +135,21 @@ export function Sidebar() {
         <NavLink to="/reasoning" className={linkClass} style={({ isActive }) => linkStyle(isActive)}>
           Reasoning
         </NavLink>
+        <NavLink to="/evaluations" className={linkClass} style={({ isActive }) => linkStyle(isActive)}>
+          Evaluations
+        </NavLink>
         <NavLink to="/watchlist" className={linkClass} style={({ isActive }) => linkStyle(isActive)}>
           Watchlist
         </NavLink>
+        {featureFlags.strategy_health_enabled && (
+          <NavLink
+            to="/strategy-health"
+            className={linkClass}
+            style={({ isActive }) => linkStyle(isActive)}
+          >
+            Strategy Health
+          </NavLink>
+        )}
       </SidebarSection>
 
       <SidebarSection label="Research" storageKey="research" defaultOpen={true}>
@@ -214,6 +229,9 @@ export function Sidebar() {
         </NavLink>
         <NavLink to="/how-backtesting-works" className={linkClass} style={({ isActive }) => linkStyle(isActive)}>
           How Backtesting Works
+        </NavLink>
+        <NavLink to="/how-evaluations-work" className={linkClass} style={({ isActive }) => linkStyle(isActive)}>
+          How Evaluations Work
         </NavLink>
         <NavLink to="/guardrails" className={linkClass} style={({ isActive }) => linkStyle(isActive)}>
           Guardrails

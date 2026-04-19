@@ -186,7 +186,7 @@ const ROUTING_ROWS = [
   { regime: 'NEUTRAL or BULL', iv: 'MODERATE or HIGH', strategy: 'Bull Put Spread (Adaptive)', note: 'Spread yield ≥ 0.1%' },
   { regime: 'BEAR or NEUTRAL', iv: 'MODERATE or HIGH', strategy: 'Bear Call Spread (Adaptive)', note: 'Spread yield ≥ 0.1%' },
   { regime: 'BULL', iv: 'LOW (IVR < 30)', strategy: 'Long Call Vertical (Adaptive)', note: 'IV must not be overvalued per ORATS' },
-  { regime: 'Any (non-CRASH)', iv: 'MODERATE or HIGH', strategy: 'Wheel (CSP → CC)', note: 'Dedicated account' },
+  { regime: 'Any (non-CRASH)', iv: 'MODERATE or HIGH', strategy: 'Standard Wheel (CSP → CC)', note: 'Dedicated account' },
   { regime: 'CRASH', iv: 'Any', strategy: 'No new positions', note: '' },
   { regime: 'EUPHORIA', iv: 'Any', strategy: 'Wheel only (cautious)', note: '' },
 ]
@@ -203,7 +203,7 @@ export function Strategies() {
       {/* --- Wheel --- */}
       <AccountSection
         accent="var(--accent-wheel, var(--accent))"
-        header="Wheel Strategy — Income Through Stock Ownership"
+        header="Standard Wheel — Income Through Stock Ownership"
         tagline="A three-phase income strategy that cycles automatically."
       >
         <Prose>
@@ -314,14 +314,14 @@ export function Strategies() {
         </ul>
       </AccountSection>
 
-      {/* --- Conservative Wheel --- */}
+      {/* --- Turnover Wheel --- */}
       <AccountSection
         accent="var(--accent-wheel, var(--accent))"
-        header="Conservative Wheel — Shorter-DTE Variant"
-        tagline="A second wheel account running a shorter-DTE, cost-basis-driven variant. Same market, different rules — we compare results against the original Wheel over time."
+        header="Turnover Wheel — Higher-Turnover Variant"
+        tagline="A second wheel account designed for fast share turnover — shorter CC cycles, no delta cap on CC strike, cost-basis-only selection. Same market as the original Wheel; different philosophy."
       >
         <Prose>
-          The Conservative Wheel runs the same four-phase cycle as the original Wheel, but follows a different
+          The Turnover Wheel runs the same four-phase cycle as the original Wheel, but follows a different
           philosophy for the covered call phase. The idea: get rid of assigned shares quickly and return to
           selling cash-secured puts, which are more capital-efficient. Paper-traded in its own Alpaca account
           so we can compare results directly against the original Wheel.
@@ -342,7 +342,7 @@ export function Strategies() {
             title="Shorter covered calls (7–14 DTE)"
             bullets={[
               'Original Wheel: CCs are 21–35 days out',
-              'Conservative: CCs are 7–14 days out',
+              'Turnover: CCs are 7–14 days out',
               'More CC cycles per year, faster share turnover',
             ]}
           >
@@ -353,19 +353,21 @@ export function Strategies() {
             title="Cost-basis strike selection"
             bullets={[
               'Original Wheel: strike must be above the upper Bollinger Band AND above cost basis',
-              'Conservative: strike must be above cost basis, period',
+              'Turnover: strike must be above cost basis, period',
               'No technical-indicator filter on CC strike',
+              'No delta cap on the short call — the cost-basis filter is the sole strike constraint',
             ]}
           >
-            We remove the Bollinger Band check. As long as the strike is above our net cost basis (so we can't
-            lock in a loss), the bot can sell the CC. The tradeoff: we may sell CCs closer to the money than the
-            original Wheel would, increasing assignment frequency.
+            We remove both the Bollinger Band check and the delta cap that the standard Wheel uses on covered calls.
+            As long as the strike is above our net cost basis (so we can't lock in a loss), the bot can sell the CC
+            at any delta the market is offering. The tradeoff: we may sell CCs much closer to the money — sometimes
+            ITM — which dramatically increases assignment frequency. That's the goal here, not a bug.
           </SubCard>
           <SubCard
             title="Smaller, more diversified positions"
             bullets={[
               'Original Wheel: max 10% of buying power per position, 5 concurrent',
-              'Conservative: max 5% of buying power per position, 10 concurrent',
+              'Turnover: max 5% of buying power per position, 10 concurrent',
               'Spreads capital across more names',
             ]}
           >
@@ -375,25 +377,36 @@ export function Strategies() {
           <SubCard
             title="More roll flexibility"
             bullets={[
-              'Original Wheel: max 2 rolls, new contract must return to target delta range',
-              'Conservative: max 3 rolls, wider delta window',
+              'Original Wheel: max 2 rolls',
+              'Turnover: max 3 rolls, wider delta window',
               'Rolls still require net credit (never debit)',
             ]}
           >
-            The original Wheel gives up on a position after two rolls. The Conservative Wheel allows one more
+            The original Wheel gives up on a position after two rolls. The Turnover Wheel allows one more
             roll attempt and widens the acceptable delta range on the replacement contract (short put within
             −0.40, short call within 0.45). Net-credit requirement is unchanged — no rolls for a debit.
           </SubCard>
+        </div>
+
+        <div
+          className="mt-3 p-3 rounded text-xs"
+          style={{
+            backgroundColor: 'color-mix(in srgb, var(--accent) 8%, transparent)',
+            color: 'var(--text-secondary)',
+            borderLeft: '3px solid var(--accent)',
+          }}
+        >
+          <strong>Why no delta cap?</strong> The Turnover Wheel's goal is fast share turnover — get called away, return to selling puts. Capping short-call delta would slow that turnover by pushing strikes further OTM. Cost basis is the only hard rule because it's the only rule that prevents locking in a loss; everything else about the CC leg is optimized for speed of cycle rather than safety margin on the strike.
         </div>
 
         <Subheading>What's the same as the original Wheel</Subheading>
         <ul className="space-y-1.5 text-sm" style={{ color: 'var(--text-secondary)' }}>
           <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> CSP entry: target delta −0.20 to −0.30, 21–35 DTE, IV Rank ≥ 30</li>
           <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Earnings avoidance: no entries within 21 days of an earnings announcement</li>
-          <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Open interest minimum: ≥ 200 contracts per leg</li>
+          <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Open interest minimum: ≥ 200 (CSP entry)</li>
           <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> 50% profit close on both CSPs and CCs</li>
           <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> All universal guardrails apply — OCC regex validation, limit orders only, qty = 1, credit-sign enforcement</li>
-          <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Watchlist: starts as a copy of the original Wheel's watchlist (AAPL, MSFT, AMD, GOOGL, AMZN, JPM, GS, XOM, CVX, JNJ, UNH, SPY)</li>
+          <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Watchlist: starts as a copy of the original Wheel's watchlist; current contents are shown on the Watchlist page</li>
         </ul>
 
         <div
@@ -404,11 +417,7 @@ export function Strategies() {
             borderLeft: '3px solid var(--accent)',
           }}
         >
-          <strong>Why run two wheels?</strong> Paper trading lets us test philosophies without risking real capital.
-          The two wheels run on the same watchlist and same market conditions, so performance differences come
-          from the rule differences listed above rather than stock selection or timing. Give it at least three
-          months before reading too much into the comparison — options strategies don't produce meaningful
-          signal in a few weeks.
+          <strong>Why run both Wheels?</strong> Paper trading lets us test two philosophies in parallel without risking real capital. Both wheels run on the same watchlist and same market conditions, so performance differences come from the rule differences listed above rather than stock selection or timing. The Turnover Wheel is the more aggressive of the two on a per-position basis (no CC delta cap, shorter cycles); the standard Wheel is more aggressive on a per-position-size basis (10% BP per position vs. 5%). Give it at least three months before reading too much into the comparison — options strategies don't produce meaningful signal in a few weeks.
         </div>
       </AccountSection>
 
@@ -593,6 +602,17 @@ export function Strategies() {
           <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Earnings must NOT fall between the two expirations</li>
           <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Stock must be range-bound (within Bollinger Bands)</li>
         </ul>
+
+        <div
+          className="mt-3 p-3 rounded text-xs"
+          style={{
+            backgroundColor: 'color-mix(in srgb, var(--accent) 8%, transparent)',
+            color: 'var(--text-secondary)',
+            borderLeft: '3px solid var(--accent)',
+          }}
+        >
+          <strong>Why this strategy?</strong> Calendar Spread fills a gap in the strategy lineup: it's the only strategy that enters in NEUTRAL regime + LOW/MODERATE IV. Iron Condor and Iron Butterfly require HIGH IV, the Wheel skews toward moderate IV with directional bias via assignment, and the credit/debit spreads all require a directional view. When the market is quiet <em>and</em> options are cheap, Calendar Spread is the only thing that runs — it's also the bot's only vega-positive strategy, so it profits from IV expansion rather than contraction.
+        </div>
 
         <Subheading>Risk profile</Subheading>
         <div className="grid gap-3 md:grid-cols-3">
@@ -787,8 +807,8 @@ export function Strategies() {
         <div className="grid gap-3 md:grid-cols-2 mt-3">
           <SubCard title="Position Sizing Caps">
             <ul className="space-y-1 text-xs" style={{ color: 'var(--text-secondary)' }}>
-              <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Wheel: max 10% of buying power per CSP, max 5 concurrent positions</li>
-              <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Conservative Wheel: max 5% of buying power per CSP, max 10 concurrent positions</li>
+              <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Standard Wheel: max 10% of buying power per CSP, max 5 concurrent positions</li>
+              <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Turnover Wheel: max 5% of buying power per CSP, max 10 concurrent positions</li>
               <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Iron Condor: max loss ≤ 5% of buying power</li>
               <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Credit spreads: max loss ≤ 2% of buying power per spread</li>
               <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Debit spreads: max risk ≤ 1% of buying power</li>

@@ -43,7 +43,7 @@ class StrategyRouter:
         Returns:
             List of strategy name strings.
         """
-        active: list[str] = ["wheel", "conservative_wheel"]
+        active: list[str] = ["wheel", "turnover_wheel"]
 
         regime = context.get("confirmed_market_regime", "NEUTRAL")
 

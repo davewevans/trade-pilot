@@ -4,6 +4,8 @@ import logging
 import sqlite3
 from datetime import datetime, timezone
 
+from database.db import db_retry
+
 logger = logging.getLogger(__name__)
 
 
@@ -13,6 +15,7 @@ class ApiUsageRepository:
     def __init__(self, conn: sqlite3.Connection):
         self._conn = conn
 
+    @db_retry()
     def record_api_call(
         self,
         *,
