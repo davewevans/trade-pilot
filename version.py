@@ -5,10 +5,10 @@ section to CHANGELOG.md. Other modules read this via ``settings.VERSION``
 rather than importing this file directly.
 """
 
-VERSION = "1.6.0"
-VERSION_DATE = "2026-04-18"
+VERSION = "1.7.0"
+VERSION_DATE = "2026-04-19"
 VERSION_NOTES = (
-    "9-phase ORATS quota hardening: process singleton lock, API usage ledger with rolling caps, "
-    "pre-flight budget checks, structured call logging, ntfy threshold alerts, admin kill switch, "
-    "and sweep resume safety — following the 2026-04-17 incident that exhausted the monthly budget."
+    "Adds How Evaluations Work instructional Learn page documenting the monthly scoring pipeline, "
+    "flag detection thresholds, spot-check workflow, and operator review process; "
+    "updates Python runtime to 3.14.2."
 )
