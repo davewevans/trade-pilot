@@ -804,7 +804,7 @@ export function Strategies() {
         <Prose>
           Individual strategy parameters don't tell the full story. The bot also enforces portfolio-wide limits:
         </Prose>
-        <div className="grid gap-3 md:grid-cols-2 mt-3">
+        <div className="grid gap-3 md:grid-cols-3 mt-3">
           <SubCard title="Position Sizing Caps">
             <ul className="space-y-1 text-xs" style={{ color: 'var(--text-secondary)' }}>
               <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Standard Wheel: max 10% of buying power per CSP, max 5 concurrent positions</li>
@@ -828,6 +828,15 @@ export function Strategies() {
               <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Blocks new entries the day of and the trading day before FOMC / CPI / NFP</li>
               <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Existing positions manage normally through events</li>
               <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Event schedule populated from <code className="font-mono">data/macro_events.json</code></li>
+            </ul>
+          </SubCard>
+          <SubCard title="Anti-Crowding Across Accounts">
+            <ul className="space-y-1 text-xs" style={{ color: 'var(--text-secondary)' }}>
+              <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Before opening a new position, the bot checks whether the same directional-risk family (short-put, short-call, long-directional) is already open on that underlying in any other account</li>
+              <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Blocks correlated stacking: e.g. a bull put spread on AAPL prevents a new wheel CSP on AAPL and vice versa</li>
+              <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Iron condors block both sides (short-put and short-call family) on the same underlying</li>
+              <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Exception: Standard Wheel and Turnover Wheel are allowed to coexist on the same underlying — this is the comparative-experiment design</li>
+              <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Management actions (roll, close) are never blocked — the check only fires on net-new entries</li>
             </ul>
           </SubCard>
         </div>

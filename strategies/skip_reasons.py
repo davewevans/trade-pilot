@@ -15,6 +15,7 @@ class SkipGate(str, Enum):
     NO_CANDIDATE = "no_candidate"
     DATA_MISSING = "data_missing"
     HALTED = "halted"
+    PORTFOLIO = "portfolio"
 
 
 class SkipReason(str, Enum):
@@ -55,6 +56,7 @@ class SkipReason(str, Enum):
     SCHEMA_INVALID = "schema_invalid"
     DATA_MISSING = "data_missing"
     UNKNOWN = "unknown"
+    ANTI_CROWDING_CROSS_ACCOUNT = "anti_crowding_cross_account"
 
 
 REASON_TO_GATE = {
@@ -89,4 +91,5 @@ REASON_TO_GATE = {
     SkipReason.SCHEMA_INVALID: SkipGate.LLM_OUTPUT,
     SkipReason.DATA_MISSING: SkipGate.DATA_MISSING,
     SkipReason.UNKNOWN: SkipGate.PRE_CHECK,
+    SkipReason.ANTI_CROWDING_CROSS_ACCOUNT: SkipGate.PORTFOLIO,
 }

@@ -894,6 +894,20 @@ def portfolio_greeks(account: str | None = Query(default=None)):
         return JSONResponse(status_code=500, content={"error": "aggregation failed"})
 
 
+@app.get("/api/book-exposure")
+def book_exposure():
+    """Return the current cross-account book-exposure view.
+
+    Derived from strategy state files; no broker API calls.
+    """
+    try:
+        from data.book_exposure import compute_cross_account_book_exposure
+        return compute_cross_account_book_exposure()
+    except Exception:
+        logger.exception("book-exposure failed")
+        return JSONResponse(status_code=500, content={"error": "aggregation failed"})
+
+
 @app.get("/api/account-portfolios")
 def all_account_portfolios():
     """Return a summary of all accounts for the dashboard cards.

@@ -117,6 +117,14 @@ class SkipCode:
     data/logs/schema_failures.jsonl for diagnosis. Rare when structured
     outputs are active, but caught here to prevent decision-cycle crashes."""
 
+    # ── Portfolio-level (cross-account) ───────────────────────
+
+    ANTI_CROWDING_CROSS_ACCOUNT = "ANTI_CROWDING_CROSS_ACCOUNT"
+    """A position in the same directional-risk family (short_put / short_call /
+    long_directional) is already open on this underlying in another account.
+    See config.DIRECTIONAL_FAMILY_MAP. Wheel and Turnover Wheel are exceptions
+    — they are allowed to coexist by design (comparative-experiment setup)."""
+
     # ── Fallback ───────────────────────────────────────────────
 
     OTHER = "OTHER"
@@ -137,6 +145,7 @@ class SkipCode:
         CIRCUIT_BREAKER_ACTIVE,
         CONFIDENCE_LOW, STRIKE_BELOW_COST_BASIS,
         SCHEMA_INVALID,
+        ANTI_CROWDING_CROSS_ACCOUNT,
         OTHER,
     )
 

@@ -308,6 +308,15 @@ class Settings:
             os.getenv("DROP_COPY_GRACE_CYCLES", "2")
         )
 
+        # ── Cross-account anti-crowding ────────────────────────
+        # Blocks net-new entries when the same directional-risk family is already
+        # open on the same underlying in another account. Management actions
+        # (roll, close) are never blocked. Kill switch: set to "false" to bypass
+        # the pre-check while keeping book_exposure visible in Claude context.
+        self.CROSS_ACCOUNT_ANTI_CROWDING_ENABLED: bool = (
+            os.getenv("CROSS_ACCOUNT_ANTI_CROWDING_ENABLED", "true").lower() == "true"
+        )
+
         # ── Macro event block ─────────────────────────────────
         # Hard-blocks new entries the day of and the trading day before any Tier 1
         # macro event (FOMC, CPI, NFP) listed in data/macro_events.json.
@@ -411,6 +420,59 @@ class Settings:
         "long_call_vertical":  ("ALPACA_PAPER1_API_KEY", "ALPACA_PAPER1_SECRET_KEY"),
         "iron_butterfly":      ("ALPACA_PAPER4_API_KEY", "ALPACA_PAPER4_SECRET_KEY"),
         "calendar_spread":     ("ALPACA_PAPER5_API_KEY", "ALPACA_PAPER5_SECRET_KEY"),
+    }
+
+    # Maps each strategy_type to the directional-risk families it occupies.
+    # A strategy may occupy multiple families (iron_condor is both short_put AND
+    # short_call — its put side and call side are in separate families).
+    # `same_underlying_peers` is the list of strategy_types allowed to coexist
+    # on the same underlying within that family (e.g. wheel + turnover_wheel by
+    # design, to support side-by-side variant comparison on the same watchlist).
+    #
+    # NOTE: adaptive_spreads is intentionally NOT in this map. At runtime,
+    # positions opened by the adaptive_spreads composite strategy carry the
+    # concrete sub-strategy name (bull_put_spread / bear_call_spread /
+    # long_call_vertical), not "adaptive_spreads". check_anti_crowding() raises
+    # ValueError if an unknown strategy_type is ever passed in.
+    DIRECTIONAL_FAMILY_MAP: dict[str, dict] = {
+        "wheel": {
+            "families": ["short_put"],
+            "same_underlying_peers": {"short_put": ["turnover_wheel"]},
+        },
+        "turnover_wheel": {
+            "families": ["short_put"],
+            "same_underlying_peers": {"short_put": ["wheel"]},
+        },
+        "bull_put_spread": {
+            "families": ["short_put"],
+            "same_underlying_peers": {"short_put": []},
+        },
+        "bear_call_spread": {
+            "families": ["short_call"],
+            "same_underlying_peers": {"short_call": []},
+        },
+        "iron_condor": {
+            "families": ["short_put", "short_call"],
+            "same_underlying_peers": {"short_put": [], "short_call": []},
+        },
+        "iron_butterfly": {
+            "families": ["short_put", "short_call"],
+            "same_underlying_peers": {"short_put": [], "short_call": []},
+        },
+        "long_call_vertical": {
+            "families": ["long_directional"],
+            "same_underlying_peers": {"long_directional": []},
+        },
+        # Calendar spread is vega-positive, theta-positive, delta-neutral at
+        # entry — fundamentally a vol play, not a directional one. Not
+        # classified into any family until live data tells us what crowding
+        # looks like for vol plays. Until then: it blocks nothing, nothing
+        # blocks it. Revisit after calendar_spread goes active and accumulates
+        # decisions.
+        "calendar_spread": {
+            "families": [],
+            "same_underlying_peers": {},
+        },
     }
 
     # Turnover Wheel position sizing (differs from standard wheel)

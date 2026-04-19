@@ -411,6 +411,44 @@ def run() -> None:
                 )
                 continue
 
+            # ── Anti-crowding pre-check (IDLE entry only) ───────────
+            if state.value == "IDLE":
+                from data.book_exposure import check_anti_crowding as _check_ac
+                from strategies.skip_reasons import SkipGate, SkipReason
+                _ac_allowed, _ac_reason = _check_ac(symbol, "wheel")
+                if not _ac_allowed:
+                    logger.info("%s wheel anti-crowding skip: %s", symbol, _ac_reason)
+                    journal.append({
+                        "symbol": None,
+                        "underlying": symbol,
+                        "wheel_state": state.value,
+                        "action": "skip",
+                        "skip_reason": "anti_crowding_cross_account",
+                        "reasoning": _ac_reason,
+                        "confidence": None,
+                        "status": "skipped",
+                        "strategy_type": "wheel_csp",
+                        "iv_rank": context.get("iv_rank"),
+                    })
+                    if recorder is not None:
+                        recorder.record_decision(
+                            strategy_type="wheel",
+                            underlying=symbol,
+                            action="SKIP",
+                            wheel_state=state.value,
+                            reasoning=_ac_reason,
+                            context=context,
+                            skip_gate=SkipGate.PORTFOLIO,
+                            skip_reason_code=SkipReason.ANTI_CROWDING_CROSS_ACCOUNT,
+                            job_run_id=job_run_id,
+                            pre_check_verdict="SKIP",
+                            prompt_version=None,
+                        )
+                    report_lines.append(
+                        f"**{symbol}** -- SKIPPED (anti-crowding: {_ac_reason})"
+                    )
+                    continue
+
             import time as _time
             _t0_ask = _time.monotonic()
             decision = advisor.ask(context, state)
@@ -738,6 +776,44 @@ def run() -> None:
                         f"**{symbol}** [TW] -- SKIPPED (liquidity floor: {_tw_liq_skip.get('skip_reason')})"
                     )
                     continue
+
+                # ── Anti-crowding pre-check (IDLE entry only) ───────────
+                if tw_state.value == "IDLE":
+                    from data.book_exposure import check_anti_crowding as _check_ac_tw
+                    from strategies.skip_reasons import SkipGate, SkipReason
+                    _ac_allowed, _ac_reason = _check_ac_tw(symbol, "turnover_wheel")
+                    if not _ac_allowed:
+                        logger.info("%s [TW] anti-crowding skip: %s", symbol, _ac_reason)
+                        journal.append({
+                            "symbol": None,
+                            "underlying": symbol,
+                            "wheel_state": tw_state.value,
+                            "action": "skip",
+                            "skip_reason": "anti_crowding_cross_account",
+                            "reasoning": _ac_reason,
+                            "confidence": None,
+                            "status": "skipped",
+                            "strategy_type": "turnover_wheel_csp",
+                            "iv_rank": context.get("iv_rank"),
+                        })
+                        if recorder is not None:
+                            recorder.record_decision(
+                                strategy_type="turnover_wheel",
+                                underlying=symbol,
+                                action="SKIP",
+                                wheel_state=tw_state.value,
+                                reasoning=_ac_reason,
+                                context=context,
+                                skip_gate=SkipGate.PORTFOLIO,
+                                skip_reason_code=SkipReason.ANTI_CROWDING_CROSS_ACCOUNT,
+                                job_run_id=job_run_id,
+                                pre_check_verdict="SKIP",
+                                prompt_version=None,
+                            )
+                        report_lines.append(
+                            f"**{symbol}** [TW] -- SKIPPED (anti-crowding: {_ac_reason})"
+                        )
+                        continue
 
                 import time as _time
                 _t0_ask = _time.monotonic()
@@ -1157,15 +1233,34 @@ def run() -> None:
                             "%s best candidate: %s (score=%.2f)",
                             strategy_name, best_symbol, best_score,
                         )
-                        decision = strat.run_cycle(spread_ctx, advisor)
-                        _spread_used_advisor = True
-                        # Tag the winning underlying so _handle_spread_open uses it.
-                        if decision.get("action") == "OPEN":
-                            decision["underlying"] = best_symbol
-                        # S11: pre-checks passed (this symbol was the winner),
-                        # so the deterministic path would have OPENed. Anything
-                        # else here is a Claude override.
-                        decision["_pre_check_would_have"] = "OPEN"
+                        # ── Anti-crowding pre-check ────────────────────────────
+                        from data.book_exposure import check_anti_crowding as _check_ac_sp
+                        _ac_allowed, _ac_reason = _check_ac_sp(best_symbol, strategy_name)
+                        if not _ac_allowed:
+                            logger.info(
+                                "%s anti-crowding skip for %s: %s",
+                                strategy_name, best_symbol, _ac_reason,
+                            )
+                            decision = {
+                                "action": "SKIP",
+                                "reasoning": _ac_reason,
+                                "skip_reason": "anti_crowding_cross_account",
+                                "skip_reason_code": None,
+                                "underlying": best_symbol,
+                            }
+                            # Store the code so the gate-mapping block below routes correctly
+                            from strategies.skip_reasons import SkipReason as _SR
+                            decision["skip_reason_code"] = _SR.ANTI_CROWDING_CROSS_ACCOUNT
+                        else:
+                            decision = strat.run_cycle(spread_ctx, advisor)
+                            _spread_used_advisor = True
+                            # Tag the winning underlying so _handle_spread_open uses it.
+                            if decision.get("action") == "OPEN":
+                                decision["underlying"] = best_symbol
+                            # S11: pre-checks passed (this symbol was the winner),
+                            # so the deterministic path would have OPENed. Anything
+                            # else here is a Claude override.
+                            decision["_pre_check_would_have"] = "OPEN"
                 action = decision.get("action", "SKIP")
                 logger.info("%s decision: %s", strategy_name, action)
 
@@ -1202,6 +1297,9 @@ def run() -> None:
                         if _dict_code == SkipReason.SCHEMA_INVALID:
                             _spread_skip_gate = SkipGate.LLM_OUTPUT
                             _spread_skip_reason_code = SkipReason.SCHEMA_INVALID
+                        elif _dict_code == SkipReason.ANTI_CROWDING_CROSS_ACCOUNT:
+                            _spread_skip_gate = SkipGate.PORTFOLIO
+                            _spread_skip_reason_code = SkipReason.ANTI_CROWDING_CROSS_ACCOUNT
                         elif "no_candidates" in (_raw_skip or ""):
                             _spread_skip_gate = SkipGate.NO_CANDIDATE
                             _spread_skip_reason_code = SkipReason.NO_CANDIDATES_FOUND

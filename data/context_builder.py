@@ -490,6 +490,14 @@ class ContextBuilder:
             logger.warning("Failed to load portfolio patterns", exc_info=True)
             context["portfolio_patterns"] = None
 
+        # Cross-account book exposure (for anti-crowding pre-check visibility)
+        try:
+            from data.book_exposure import compute_cross_account_book_exposure
+            context["book_exposure"] = compute_cross_account_book_exposure()
+        except Exception:
+            logger.warning("Failed to compute book exposure", exc_info=True)
+            context["book_exposure"] = None
+
         # ── SPX technicals (for regime derivation) ─────────
         if symbol.upper() != "SPY":
             try:

@@ -25,6 +25,7 @@ _GATE_TO_BUCKET: dict[str, str] = {
     "no_candidate":    "skip_no_candidate",
     "data_missing":    "skip_data_missing",
     "halted":          "skip_halted",
+    "portfolio":       "skip_portfolio",
 }
 
 _DECISION_BUCKETS = (
@@ -40,6 +41,7 @@ _DECISION_BUCKETS = (
     "skip_no_candidate",
     "skip_data_missing",
     "skip_halted",
+    "skip_portfolio",
     "skip_unclassified",
     "hold",
     "actions_proposed",
