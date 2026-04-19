@@ -248,6 +248,13 @@ class Settings:
             os.getenv("STRATEGY_HEALTH_PAGE_ENABLED", "true").lower() == "true"
         )
 
+        # Turnover Wheel strategy enable flag.
+        # Set TURNOVER_WHEEL_ENABLED=false to exclude it from the active
+        # strategy list without touching any other configuration.
+        self.TURNOVER_WHEEL_ENABLED: bool = (
+            os.getenv("TURNOVER_WHEEL_ENABLED", "true").lower() == "true"
+        )
+
         # Create required directories
         self.DATA_DIR.mkdir(parents=True, exist_ok=True)
         self.LOG_DIR.mkdir(parents=True, exist_ok=True)

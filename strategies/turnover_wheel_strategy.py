@@ -9,13 +9,12 @@ import json
 import logging
 import os
 import shutil
-from datetime import date, datetime, timedelta
+from datetime import datetime
 from enum import Enum
 from pathlib import Path
 
 from brokers.base import BaseBroker
 from config import settings
-from data import market_data
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +89,11 @@ class TurnoverWheelStrategy:
         self.cost_basis: float | None = None
         self.total_premium_collected: float = 0.0
         self.roll_count: int = 0
+        # Price of the underlying at the time of initial CSP fill (not rolls).
+        # Used to track entry price context for cycle analysis.
+        # Set once on first SHORT_PUT detection; never overwritten on rolls.
+        # Cleared when the cycle completes (IDLE reset).
+        self.underlying_price_at_entry: float | None = None
 
         self._load_state()
 
@@ -121,6 +125,9 @@ class TurnoverWheelStrategy:
                 data.get("total_premium_collected", 0.0) or 0.0
             )
             self.roll_count = int(data.get("roll_count", 0) or 0)
+            # backward compat: missing field → None, no crash
+            upae = data.get("underlying_price_at_entry")
+            self.underlying_price_at_entry = float(upae) if upae is not None else None
             logger.info(
                 "Loaded turnover wheel state: symbol=%s state=%s", self.symbol, self.state.value
             )
@@ -137,6 +144,7 @@ class TurnoverWheelStrategy:
             "cost_basis": self.cost_basis,
             "total_premium_collected": self.total_premium_collected,
             "roll_count": self.roll_count,
+            "underlying_price_at_entry": self.underlying_price_at_entry,
             "updated_at": datetime.now().isoformat(),
         }
         from utils.fileio import atomic_json_write
@@ -179,6 +187,32 @@ class TurnoverWheelStrategy:
             if occ_type == "P" and qty < 0:
                 self.state = TurnoverWheelState.SHORT_PUT
                 self.open_position = pos
+                # Capture underlying price at first CSP detection (not on rolls).
+                # roll_count > 0 means we've already been in SHORT_PUT before;
+                # underlying_price_at_entry being None means this is a fresh entry.
+                if self.underlying_price_at_entry is None:
+                    try:
+                        from data import market_data as _md
+                        _tech = _md.get_stock_technicals(root)
+                        _uprice = _tech.get("current_price") if _tech else None
+                        if _uprice is not None:
+                            self.underlying_price_at_entry = float(_uprice)
+                        else:
+                            # Fall back to strike price from the OCC symbol
+                            from utils.occ import extract_strike
+                            _strike = extract_strike(pos_symbol)
+                            if _strike is not None:
+                                self.underlying_price_at_entry = float(_strike)
+                                logger.warning(
+                                    "Turnover wheel: could not fetch current_price for %s — "
+                                    "using strike %.2f as underlying_price_at_entry",
+                                    root, _strike,
+                                )
+                    except Exception:
+                        logger.warning(
+                            "Turnover wheel: failed to capture underlying_price_at_entry for %s",
+                            root, exc_info=True,
+                        )
                 self.save_state()
                 logger.info("Turnover wheel reconciled state → SHORT_PUT (short put position found)")
                 return self.state
@@ -229,6 +263,7 @@ class TurnoverWheelStrategy:
         self.cost_basis = None
         self.total_premium_collected = 0.0
         self.roll_count = 0
+        self.underlying_price_at_entry = None
         self.save_state()
         logger.info("Turnover wheel reconciled state → IDLE (no positions for %s)", symbol)
         return self.state
@@ -336,182 +371,7 @@ class TurnoverWheelStrategy:
 
         return None
 
-    # ── context building ─────────────────────────────────────
-
-    def build_context(self, symbol: str) -> dict:
-        """Assemble the full context dict for Claude to make a decision.
-
-        Gathers account info, current positions, technicals, the relevant
-        option chain slice, earnings date, and IV rank. Each section is
-        clearly labelled so it can be used as a structured prompt body.
-
-        The put chain uses a 14–35 DTE window (matching the standard wheel).
-        The call chain uses a 5–21 DTE window, slightly wider than the 7–14
-        target, to give Claude contracts on either side of the ideal window.
-
-        Args:
-            symbol: The underlying ticker (e.g. "SPY").
-
-        Returns:
-            Dict with sections: account, turnover_wheel_state, positions,
-            technicals, option_chain_puts, option_chain_calls, earnings,
-            iv_rank, turnover_wheel_cost_basis.
-        """
-        self.symbol = symbol
-        today = date.today()
-
-        # CSP puts: 14-35 DTE window (same as standard wheel — slightly wider
-        # than the 21-35 entry rule so Claude sees nearby contracts)
-        put_min_dte = today + timedelta(days=14)
-        put_max_dte = today + timedelta(days=35)
-
-        # Covered calls: 5-21 DTE window (slightly wider than the 7-14 target)
-        cc_min_dte = today + timedelta(days=5)
-        cc_max_dte = today + timedelta(days=21)
-
-        # ── account ──────────────────────────────────────────
-        account = self.broker.get_account()
-
-        # ── current state ────────────────────────────────────
-        current_state = self.get_current_state(symbol)
-
-        # ── open positions & orders ──────────────────────────
-        positions = self.broker.get_positions()
-        open_orders = self.broker.get_orders(status="open")
-
-        # ── technicals ───────────────────────────────────────
-        try:
-            technicals = market_data.get_stock_technicals(symbol)
-        except Exception:
-            logger.exception("Failed to fetch technicals for %s", symbol)
-            technicals = {}
-
-        current_price = technicals.get("current_price", 0)
-
-        # ── option chain: filter to strike ±5% ───────────────
-        strike_low = current_price * 0.95
-        strike_high = current_price * 1.05
-
-        put_chain = self._filter_chain(
-            symbol, "put", put_min_dte, put_max_dte, strike_low, strike_high
-        )
-        call_chain = self._filter_chain(
-            symbol, "call", cc_min_dte, cc_max_dte, strike_low, strike_high
-        )
-
-        # ── earnings ─────────────────────────────────────────
-        earnings_date = market_data.get_earnings_date(symbol)
-
-        # ── IV rank ──────────────────────────────────────────
-        try:
-            iv_rank = market_data.get_iv_rank(symbol)
-        except Exception:
-            logger.exception("Failed to compute IV rank for %s", symbol)
-            iv_rank = None
-
-        return {
-            "account": {
-                "buying_power": account.get("buying_power"),
-                "cash": account.get("cash"),
-                "options_trading_level": account.get("options_trading_level"),
-            },
-            "turnover_wheel_state": {
-                "symbol": symbol,
-                "state": current_state.value,
-                "open_position": self.open_position,
-            },
-            "positions": positions,
-            "open_orders": open_orders,
-            "technicals": technicals,
-            "option_chain_puts": put_chain,
-            "option_chain_calls": call_chain,
-            "earnings": {
-                "next_earnings_date": earnings_date,
-                "days_until_earnings": (
-                    (date.fromisoformat(earnings_date) - today).days
-                    if earnings_date
-                    else None
-                ),
-            },
-            "iv_rank": iv_rank,
-            "turnover_wheel_cost_basis": (
-                {
-                    "effective_cost_basis": self.cost_basis,
-                    "assignment_price": float(
-                        (self.open_position or {}).get("avg_entry_price", 0) or 0
-                    ),
-                    "total_premium_collected": self.total_premium_collected,
-                    "roll_count": self.roll_count,
-                }
-                if current_state in (TurnoverWheelState.LONG_STOCK, TurnoverWheelState.SHORT_CALL)
-                else None
-            ),
-            "metadata": {
-                "symbol": symbol,
-                "timestamp": datetime.now().isoformat(),
-                "put_dte_range": f"{put_min_dte} to {put_max_dte}",
-                "cc_dte_range": f"{cc_min_dte} to {cc_max_dte}",
-                "strike_range": f"{strike_low:.2f} to {strike_high:.2f}",
-            },
-        }
-
     # ── helpers ──────────────────────────────────────────────
-
-    def _filter_chain(
-        self,
-        symbol: str,
-        option_type: str,
-        min_exp: date,
-        max_exp: date,
-        strike_low: float,
-        strike_high: float,
-    ) -> list[dict]:
-        """Fetch option contracts and enrich with snapshot data.
-
-        Args:
-            symbol: Underlying ticker.
-            option_type: "call" or "put".
-            min_exp: Earliest acceptable expiration date.
-            max_exp: Latest acceptable expiration date.
-            strike_low: Minimum strike price.
-            strike_high: Maximum strike price.
-
-        Returns:
-            List of contract dicts with snapshot data merged in.
-        """
-        contracts = self.broker.get_option_contracts(
-            underlying_symbol=symbol, option_type=option_type
-        )
-
-        # Filter to DTE window and strike range
-        filtered = []
-        for c in contracts:
-            exp = c.get("expiration_date", "")
-            try:
-                exp_date = date.fromisoformat(exp)
-            except ValueError:
-                continue
-
-            strike = c.get("strike_price", 0)
-            if min_exp <= exp_date <= max_exp and strike_low <= strike <= strike_high:
-                filtered.append(c)
-
-        if not filtered:
-            return []
-
-        # Enrich with snapshot data (bid/ask, greeks, IV)
-        occ_symbols = [c["symbol"] for c in filtered]
-        try:
-            snapshots = market_data.get_option_snapshot(occ_symbols)
-        except Exception:
-            logger.exception("Failed to fetch snapshots for %s chain", option_type)
-            return filtered  # return contracts without snapshot data
-
-        for c in filtered:
-            snap = snapshots.get(c["symbol"], {})
-            c["snapshot"] = snap
-
-        return filtered
 
     @staticmethod
     def _occ_option_type(occ_symbol: str) -> str | None:

@@ -1,6 +1,7 @@
 """Tests for strategies.strategy_router.StrategyRouter."""
 
 import pytest
+from unittest.mock import patch
 
 from strategies.strategy_router import StrategyRouter
 
@@ -8,6 +9,20 @@ from strategies.strategy_router import StrategyRouter
 @pytest.fixture
 def router():
     return StrategyRouter()
+
+
+@pytest.fixture(autouse=True)
+def disable_turnover_wheel(monkeypatch):
+    """Disable Turnover Wheel flag in all tests unless they explicitly test it.
+
+    The existing tests were written when turnover_wheel was unconditionally
+    included; patching settings lets those assertions remain unchanged.
+    Tests that specifically test the flag (in test_turnover_wheel.py) override
+    this by passing their own patch in their test body.
+    """
+    with patch("strategies.strategy_router.settings") as mock_settings:
+        mock_settings.TURNOVER_WHEEL_ENABLED = False
+        yield mock_settings
 
 
 def _all_idle():
