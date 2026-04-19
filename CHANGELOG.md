@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.1] - 2026-04-19
+
+### Changed
+- About page: replaced "Three Accounts" section with a six-strategy overview (Wheel, Turnover Wheel, Iron Condor, Bull Put Spread, Bear Call Spread, Long Call Vertical); removed all account-name references; corrected Python version from 3.11+ to 3.14.2.
+
 ## [1.7.0] - 2026-04-19
 
 ## [1.6.0] - 2026-04-18

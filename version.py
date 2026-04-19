@@ -5,10 +5,9 @@ section to CHANGELOG.md. Other modules read this via ``settings.VERSION``
 rather than importing this file directly.
 """
 
-VERSION = "1.7.0"
+VERSION = "1.7.1"
 VERSION_DATE = "2026-04-19"
 VERSION_NOTES = (
-    "Adds How Evaluations Work instructional Learn page documenting the monthly scoring pipeline, "
-    "flag detection thresholds, spot-check workflow, and operator review process; "
-    "updates Python runtime to 3.14.2."
+    "Updates the About page to replace the Three Accounts section with a six-strategy overview "
+    "and corrects the Python version label from 3.11+ to 3.14.2."
 )
