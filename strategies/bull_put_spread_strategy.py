@@ -423,6 +423,31 @@ class BullPutSpreadStrategy:
         order_id = order.get("id")
         logger.info("Bull put spread order placed: %s", order_id)
 
+        if order_id:
+            try:
+                from data.shadow_execution import record_submission as _shadow_record
+                from utils.occ import parse_occ as _parse_occ
+                _shadow_legs = []
+                for _leg in legs:
+                    _parsed = _parse_occ(_leg["symbol"])
+                    _opt = _parsed["option_type"].lower() if _parsed else "unknown"
+                    _short = _leg["position_intent"] in ("sell_to_open", "buy_to_close")
+                    _shadow_legs.append({
+                        "contract_symbol": _leg["symbol"],
+                        "leg_role": f"{'short' if _short else 'long'}_{_opt}",
+                        "side": _leg["side"],
+                        "position_intent": _leg["position_intent"],
+                    })
+                _shadow_record(
+                    strategy_type="bull_put_spread",
+                    action="open_spread",
+                    legs=_shadow_legs,
+                    net_limit_price=decision["limit_price"],
+                    alpaca_order_id=order_id,
+                )
+            except Exception:
+                logger.debug("shadow_execution recording failed (non-fatal)", exc_info=True)
+
         if self.spread_tracker:
             spread_id = self.spread_tracker.register_spread(
                 strategy_type="bull_put_spread",
@@ -487,6 +512,35 @@ class BullPutSpreadStrategy:
             return False
 
         close_order_id = (close_order or {}).get("id")
+
+        if close_order_id and limit_price is not None:
+            try:
+                from data.shadow_execution import record_submission as _shadow_record
+                from utils.occ import parse_occ as _parse_occ
+                _intent_map = {"sell_to_open": "buy_to_close", "buy_to_open": "sell_to_close"}
+                _side_map = {"sell": "buy", "buy": "sell"}
+                _shadow_legs = []
+                for _leg in spread["legs"]:
+                    _parsed = _parse_occ(_leg["symbol"])
+                    _opt = _parsed["option_type"].lower() if _parsed else "unknown"
+                    _intent = _intent_map.get(_leg["position_intent"], _leg["position_intent"])
+                    _short = _intent in ("sell_to_open", "buy_to_close")
+                    _shadow_legs.append({
+                        "contract_symbol": _leg["symbol"],
+                        "leg_role": f"{'short' if _short else 'long'}_{_opt}",
+                        "side": _side_map.get(_leg["side"], _leg["side"]),
+                        "position_intent": _intent,
+                    })
+                _shadow_record(
+                    strategy_type="bull_put_spread",
+                    action="close_spread",
+                    legs=_shadow_legs,
+                    net_limit_price=limit_price,
+                    alpaca_order_id=close_order_id,
+                )
+            except Exception:
+                logger.debug("shadow_execution recording failed (non-fatal)", exc_info=True)
+
         # PENDING_CLOSE until reconciliation confirms the close filled.
         self.spread_tracker.mark_pending_close(spread_id, close_order_id)
 

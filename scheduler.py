@@ -30,6 +30,7 @@ from jobs import (
     post_market,
     pre_close,
     pre_market,
+    shadow_capture,
     weekly_report,
 )
 
@@ -145,6 +146,7 @@ def register_jobs() -> None:
         "market_close": market_close.run,
         "post_market": post_market.run,
         "portfolio_refresh": portfolio_refresh.run,
+        "shadow_capture": shadow_capture.run,
         "weekly_report": weekly_report.run,
         "monthly_evaluation": _monthly_eval_wrapper,
         "orats_cache_cleanup": _cleanup_orats_cache,

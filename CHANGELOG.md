@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Fill Realism Measurement (Shadow Execution)**: measurement-only subsystem that captures real-time NBBO (via ORATS primary, Alpaca fallback) at order submission and at +30s, +2min, +15min, and EOD, then classifies each snapshot as `always_fillable`, `sometimes_fillable`, `not_fillable`, or `data_unavailable`. Results aggregate into a per-strategy fill-realism score visible on the Strategy Health page. Gated by `SHADOW_EXECUTION_ENABLED` env var (default true). This is a blended signal — paper limits use Alpaca's 15-min-delayed data but are measured against real-time NBBO — so `not_fillable` does not isolate any single failure mode (strategy over-reaching vs. stale feed vs. true illiquidity).
+- `shadow_executions` and `shadow_execution_legs` SQLite tables with per-snapshot bid/mid/ask and classification columns.
+- `ShadowExecutionRepository` with `insert_submission`, `get_due`, `update_capture`, `recompute_completed`, and `get_fill_realism_aggregates`.
+- `data/shadow_execution.py`: `classify_fillability()` pure function, `record_submission()` hook (call at order placement), `fetch_leg_quotes_for_capture()` for the follow-up job.
+- `jobs/shadow_capture.py`: 1-minute interval job that processes pending t30s/t2m/t15m/EOD rows; permanent failure after 1 trading day or 5 attempts; all exceptions swallowed.
+- Hooks in `main.py` (`execute_decision`) and all spread strategies (`bull_put_spread`, `bear_call_spread`, `iron_condor`, `iron_butterfly`, `long_call_vertical`) at entry and exit. Calendar spread explicitly excluded (`# NOT YET ACTIVE`).
+- `GET /api/fill-realism?days=90` endpoint returning per-strategy aggregates; returns 404 when flag is off.
+- `shadow_execution_enabled` field added to `GET /api/health` response.
+- Fill Realism summary panel on the Strategy Health frontend page, color-coded by gate threshold (green ≥ gate%, yellow ≥ gate%−20, red below; gray "insufficient data" below gate sample).
+- `FILL_REALISM_GATE_SAMPLE` (100) and `FILL_REALISM_GATE_PCT` (80.0) constants in `config.py`.
+
 ## [1.8.0] - 2026-04-19
 
 ### Added

@@ -263,6 +263,14 @@ class Settings:
             os.getenv("MACRO_EVENT_BLOCK_ENABLED", "true").lower() == "true"
         )
 
+        # ── Fill realism / shadow execution ───────────────────
+        # Measurement-only NBBO capture around every order submit.
+        # When false, all shadow_execution code is a no-op — no DB writes,
+        # no ORATS calls, no schedule job activity.
+        self.SHADOW_EXECUTION_ENABLED: bool = (
+            os.getenv("SHADOW_EXECUTION_ENABLED", "true").lower() == "true"
+        )
+
         # Create required directories
         self.DATA_DIR.mkdir(parents=True, exist_ok=True)
         self.LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -542,6 +550,17 @@ SCHEDULE: list[dict] = [
             "P&L, win rate, strategy breakdown, and circuit breaker events."
         ),
     },
+    # ── Shadow execution follow-up capture (interval, weekdays) ─────────────
+    {
+        "job": "shadow_capture",
+        "type": "interval",
+        "interval_minutes": 1,
+        "label": "Shadow execution capture",
+        "description": (
+            "Follow-up NBBO capture for pending shadow-execution rows. "
+            "Measurement-only; no order side effects."
+        ),
+    },
     # ── Daily maintenance job ────────────────────────────────────────────────
     {
         "job": "orats_cache_cleanup",
@@ -570,6 +589,15 @@ SCHEDULE: list[dict] = [
 ]
 
 settings = Settings()
+
+
+# ── Fill-realism gate thresholds (PROVISIONAL) ─────────────────────────────────
+# Empirical, not theoretical. At n=100, the standard error on a true 80% rate is
+# ±4% (95% CI ≈ 72–88%), which is tight enough for a go/no-go gate but narrow
+# enough that these should be revisited once the first strategy crosses 100
+# closed trades and we see what the realised distribution looks like.
+FILL_REALISM_GATE_SAMPLE: int = 100
+FILL_REALISM_GATE_PCT: float = 80.0
 
 
 # ── Claude API pricing ────────────────────────────────────────────────────────

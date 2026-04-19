@@ -204,6 +204,8 @@ def execute_decision(broker, decision: dict) -> dict | None:
             )
             return None
 
+    _strategy_type = decision.get("strategy_type", "")
+
     if action in ("sell_put", "sell_call"):
         result = broker.place_order(
             symbol=decision["symbol"],
@@ -214,6 +216,22 @@ def execute_decision(broker, decision: dict) -> dict | None:
             limit_price=decision.get("limit_price"),
         )
         _confirm_fill(result, limit_price_used=decision.get("limit_price"))
+        try:
+            from data.shadow_execution import record_submission as _shadow_record
+            _shadow_record(
+                strategy_type=_strategy_type,
+                action=action,
+                legs=[{
+                    "contract_symbol": decision["symbol"],
+                    "leg_role": "single",
+                    "side": "sell",
+                    "position_intent": "sell_to_open",
+                }],
+                net_limit_price=-abs(decision.get("limit_price") or 0),
+                alpaca_order_id=(result or {}).get("id"),
+            )
+        except Exception:
+            logger.debug("shadow_execution recording failed (non-fatal)", exc_info=True)
 
     elif action == "close":
         # Buy-to-close the existing short option position.
@@ -226,6 +244,22 @@ def execute_decision(broker, decision: dict) -> dict | None:
             limit_price=decision.get("limit_price"),
         )
         _confirm_fill(result, limit_price_used=decision.get("limit_price"))
+        try:
+            from data.shadow_execution import record_submission as _shadow_record
+            _shadow_record(
+                strategy_type=_strategy_type,
+                action="close_short",
+                legs=[{
+                    "contract_symbol": decision["symbol"],
+                    "leg_role": "single",
+                    "side": "buy",
+                    "position_intent": "buy_to_close",
+                }],
+                net_limit_price=+abs(decision.get("limit_price") or 0),
+                alpaca_order_id=(result or {}).get("id"),
+            )
+        except Exception:
+            logger.debug("shadow_execution recording failed (non-fatal)", exc_info=True)
 
     elif action == "roll":
         # Roll = buy-to-close existing short option, then sell-to-open replacement.
@@ -256,6 +290,25 @@ def execute_decision(broker, decision: dict) -> dict | None:
         logger.info("Roll: buy-to-close %s submitted (order %s)", existing_symbol, close_id)
 
         close_status = _confirm_fill(close_result, limit_price_used=close_limit)
+
+        # Record the close leg before checking for abort
+        try:
+            from data.shadow_execution import record_submission as _shadow_record
+            _shadow_record(
+                strategy_type=_strategy_type,
+                action="roll_close",
+                legs=[{
+                    "contract_symbol": existing_symbol,
+                    "leg_role": "single",
+                    "side": "buy",
+                    "position_intent": "buy_to_close",
+                }],
+                net_limit_price=+abs(close_limit or 0),
+                alpaca_order_id=close_id,
+            )
+        except Exception:
+            logger.debug("shadow_execution recording failed (non-fatal)", exc_info=True)
+
         if close_status in ("canceled", "cancelled", "rejected"):
             logger.warning(
                 "Roll: close leg %s was %s — NOT placing replacement sell order",
@@ -274,6 +327,24 @@ def execute_decision(broker, decision: dict) -> dict | None:
         open_id = (open_result or {}).get("id")
         logger.info("Roll: sell-to-open %s submitted (order %s)", decision["symbol"], open_id)
         _confirm_fill(open_result, limit_price_used=decision.get("limit_price"))
+
+        try:
+            from data.shadow_execution import record_submission as _shadow_record
+            _shadow_record(
+                strategy_type=_strategy_type,
+                action="roll_open",
+                legs=[{
+                    "contract_symbol": decision["symbol"],
+                    "leg_role": "single",
+                    "side": "sell",
+                    "position_intent": "sell_to_open",
+                }],
+                net_limit_price=-abs(decision.get("limit_price") or 0),
+                alpaca_order_id=(open_result or {}).get("id"),
+            )
+        except Exception:
+            logger.debug("shadow_execution recording failed (non-fatal)", exc_info=True)
+
         result = open_result
 
     else:
