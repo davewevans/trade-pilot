@@ -1,0 +1,23 @@
+{
+  "id": "stop_reason_max_tokens__iron_condor__idle",
+  "description": "Iron condor IDLE: Anthropic returns stop_reason='max_tokens' (response cut off). _safe_skip_spread must fire and return action='SKIP' with the stop reason in skip_reason.",
+  "failure_mode": "stop_reason_max_tokens",
+  "advisor": {
+    "method": "ask_spread",
+    "strategy_type": "iron_condor",
+    "phase": "idle"
+  },
+  "mocked_api": {
+    "stop_reason": "max_tokens",
+    "response_payload": {}
+  },
+  "context": {},
+  "assertions": {
+    "safe_skip_triggered": true,
+    "parse_layer": {
+      "should_raise": false,
+      "returned_action": "SKIP",
+      "returned_skip_reason_contains": "max_tokens"
+    }
+  }
+}

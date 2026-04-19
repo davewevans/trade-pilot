@@ -1,0 +1,56 @@
+{
+  "id": "wrong_sign_debit__long_call_vertical__idle",
+  "description": "Long call vertical IDLE: schema-valid OPEN payload where limit_price is NEGATIVE (-0.80). Debit spreads must have a positive limit_price (net debit paid). Parse passes; validate_long_call_vertical_entry rejects on the sign check.",
+  "failure_mode": "semantic_sign_violation",
+  "advisor": {
+    "method": "ask_spread",
+    "strategy_type": "long_call_vertical",
+    "phase": "idle"
+  },
+  "mocked_api": {
+    "stop_reason": "end_turn",
+    "response_payload": {
+      "action": "OPEN",
+      "long_call_symbol": "AAPL260524C00200000",
+      "short_call_symbol": "AAPL260524C00210000",
+      "expiration": "2026-05-24",
+      "dte": 35,
+      "long_call_strike": 200.0,
+      "short_call_strike": 210.0,
+      "net_debit": 0.80,
+      "max_gain": 920.0,
+      "break_even": 208.0,
+      "price_target": 215.0,
+      "limit_price": -0.80,
+      "reasoning": {
+        "macro": "BULL trend confirmed — debit spread entry warranted",
+        "fundamental": "Earnings clear at 45 days",
+        "technical": "Breaking above resistance with volume",
+        "volatility": "LOW IV environment favours debit structure",
+        "selection": "AAPL 200/210 call spread, 35 DTE",
+        "risk": "Max loss capped at net debit paid"
+      },
+      "confidence": "high",
+      "skip_reason": null
+    }
+  },
+  "context": {},
+  "guardrail_args": {
+    "account": {"buying_power": 100000},
+    "context": {},
+    "open_spreads": []
+  },
+  "assertions": {
+    "safe_skip_triggered": false,
+    "parse_layer": {
+      "should_raise": false,
+      "returned_action": "OPEN",
+      "returned_skip_reason_contains": null
+    },
+    "guardrail_layer": {
+      "should_validate": false,
+      "rejection_reason_contains": ["positive", "debit"],
+      "classify_rejection_to": "OTHER"
+    }
+  }
+}

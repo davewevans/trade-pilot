@@ -1,0 +1,53 @@
+{
+  "id": "occ_underlying_mismatch__wheel__idle",
+  "description": "Wheel IDLE (known gap): Claude returns a schema-valid sell_put decision where the OCC symbol's root (MSFT) does not match the underlying being analysed (AAPL). The guardrail validates OCC format and buying power but has no check that the returned symbol's root matches context.symbol — so it passes. This fixture documents the gap.",
+  "failure_mode": "occ_underlying_mismatch",
+  "known_gap": true,
+  "gap_note": "validate() / _check_sell_put() validates OCC format and checks buying power, duplicates, and earnings proximity, but never asserts that extract_root(decision['symbol']) == context['symbol']. A cross-stock order could be submitted. Fix: add a root-vs-context.symbol assertion in _check_sell_put, or in a pre-guardrail normalisation step.",
+  "advisor": {
+    "method": "ask",
+    "strategy_type": "wheel",
+    "phase": "idle"
+  },
+  "mocked_api": {
+    "stop_reason": "end_turn",
+    "response_payload": {
+      "action": "sell_put",
+      "symbol": "MSFT260524P00200000",
+      "qty": 1,
+      "order_type": "limit",
+      "limit_price": 1.25,
+      "reasoning": {
+        "macro": "Stable macro, suitable for premium selling",
+        "fundamental": "AAPL fundamentals strong — solid CSP candidate",
+        "technical": "Above 200MA, near support",
+        "volatility": "IVR at 38 — acceptable for CSP entry",
+        "selection": "200P 5/24 selected for AAPL wheel",
+        "risk": "Within position size limits"
+      },
+      "confidence": "high",
+      "skip_reason": null
+    }
+  },
+  "context": {
+    "symbol": "AAPL"
+  },
+  "guardrail_args": {
+    "account": {"buying_power": 250000},
+    "positions": [],
+    "context": {"earnings": {"days_until_earnings": 45}}
+  },
+  "assertions": {
+    "safe_skip_triggered": false,
+    "parse_layer": {
+      "should_raise": false,
+      "returned_action": "sell_put",
+      "returned_skip_reason_contains": null
+    },
+    "guardrail_layer": {
+      "should_validate": true,
+      "rejection_reason_contains": [],
+      "classify_rejection_to": null
+    }
+  }
+}

@@ -1,0 +1,46 @@
+{
+  "id": "hallucinated_reasoning__iron_condor__idle",
+  "description": "Iron condor IDLE (known gap / eval baseline): Claude returns a schema-valid SKIP where all free-text reasoning fields contain physically impossible data — IVR of 347, earnings 'on Feb 30', RSI at 156. The schema allows any string in reasoning fields; guardrails don't inspect reasoning prose. This fixture is a regression baseline: parse passes, SKIP is recorded, no crash. Closing this gap requires a semantic eval layer.",
+  "failure_mode": "hallucinated_reasoning",
+  "known_gap": true,
+  "gap_note": "The structured output schema constrains reasoning fields to non-null strings but not their semantic content. Impossible values (IVR>100, non-existent dates, RSI>100) pass silently. Fix: add an eval-layer step that cross-references reasoning prose against the actual market_context before recording the decision, flagging statistically implausible values.",
+  "advisor": {
+    "method": "ask_spread",
+    "strategy_type": "iron_condor",
+    "phase": "idle"
+  },
+  "mocked_api": {
+    "stop_reason": "end_turn",
+    "response_payload": {
+      "action": "SKIP",
+      "put_short_symbol": null,
+      "put_long_symbol": null,
+      "call_short_symbol": null,
+      "call_long_symbol": null,
+      "expiration": null,
+      "dte": null,
+      "total_credit": null,
+      "max_loss": null,
+      "limit_price": null,
+      "reasoning": {
+        "macro": "Market IVR of 347 is the highest reading in decades — far too extreme for an iron condor",
+        "fundamental": "Earnings on Feb 30 make this entry inadvisable for the upcoming expiration",
+        "technical": "RSI at 156 on the weekly chart signals unprecedented overbought conditions",
+        "volatility": "IVR 347 exceeds every historical threshold — skipping on volatility regime uncertainty",
+        "selection": "No valid condor geometry is achievable at these volatility levels",
+        "risk": "Skip — extreme risk environment precludes all premium-selling structures"
+      },
+      "confidence": "high",
+      "skip_reason": "IVR of 347 is beyond all normal ranges — skipping iron condor entry"
+    }
+  },
+  "context": {},
+  "assertions": {
+    "safe_skip_triggered": false,
+    "parse_layer": {
+      "should_raise": false,
+      "returned_action": "SKIP",
+      "returned_skip_reason_contains": null
+    }
+  }
+}

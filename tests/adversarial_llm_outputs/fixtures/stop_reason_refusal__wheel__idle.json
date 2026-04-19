@@ -1,0 +1,23 @@
+{
+  "id": "stop_reason_refusal__wheel__idle",
+  "description": "Wheel IDLE: Anthropic returns stop_reason='refusal' instead of a JSON payload. _safe_skip_wheel must fire and return action='skip' with the stop reason in skip_reason.",
+  "failure_mode": "stop_reason_refusal",
+  "advisor": {
+    "method": "ask",
+    "strategy_type": "wheel",
+    "phase": "idle"
+  },
+  "mocked_api": {
+    "stop_reason": "refusal",
+    "response_payload": {}
+  },
+  "context": {},
+  "assertions": {
+    "safe_skip_triggered": true,
+    "parse_layer": {
+      "should_raise": false,
+      "returned_action": "skip",
+      "returned_skip_reason_contains": "refusal"
+    }
+  }
+}
