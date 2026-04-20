@@ -3438,34 +3438,12 @@ def evaluations_flagged_decisions(month: str):
         if not isinstance(flags, list):
             flags = []
 
+        from evaluation.decision_hydration import hydrate_decisions
+
         result_flags = []
         for flag in flags:
             decision_ids = flag.get("lowest_scoring_decisions") or []
-            decisions = []
-            if decision_ids:
-                placeholders = ",".join(["?"] * len(decision_ids))
-                decision_rows = conn.execute(
-                    f"SELECT * FROM decisions WHERE id IN ({placeholders})",
-                    decision_ids,
-                ).fetchall()
-                decision_map = {r["id"]: dict(r) for r in decision_rows}
-
-                for did in decision_ids:
-                    d = decision_map.get(did)
-                    if d is None:
-                        continue
-                    if d.get("context_json"):
-                        try:
-                            d["context"] = json.loads(d["context_json"])
-                        except (json.JSONDecodeError, TypeError):
-                            d["context"] = None
-                    if isinstance(d.get("reasoning"), str):
-                        try:
-                            d["reasoning"] = json.loads(d["reasoning"])
-                        except (json.JSONDecodeError, TypeError):
-                            pass
-                    d["scores"] = scores_repo.get_by_decision(did)
-                    decisions.append(d)
+            decisions = hydrate_decisions(decision_ids, conn, scores_repo)
 
             result_flags.append({
                 "strategy": flag.get("strategy"),

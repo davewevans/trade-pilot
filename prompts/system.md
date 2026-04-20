@@ -744,6 +744,115 @@ systematic misunderstanding — acknowledge it explicitly.
 
 ---
 
+## Interpreting the `_research` Fields
+
+Your context includes a `_research` block attached by the strategy before
+this call.
+
+All strategies (spreads and wheel) attach these three fields:
+
+- `_research.liquidity` — {tier, multiplier, confidence}
+- `_research.winrate` — {tier, multiplier, confidence}
+- `_research.combined_multiplier` — the product of the two multipliers
+
+Spread strategies additionally attach one more field:
+
+- `_research.final_score` — the raw candidate score multiplied by
+  `combined_multiplier`. Wheel entries do not attach this because the
+  wheel entry path does not produce a candidate score to multiply. Do
+  not infer anything from its absence on wheel calls.
+
+These fields are the OUTPUT of mechanical filters that have already run.
+Use them as calibrated summary signals, not as raw data to re-analyse.
+
+### Liquidity tier meanings
+
+- **Tier A** (multiplier ~1.2): top quartile of symbols by option
+  liquidity. Tight bid-ask, strong open interest, reliable fills expected.
+- **Tier B** (multiplier 1.0): neutral. Fills should be manageable but
+  not exceptional.
+- **Tier C** (multiplier ~0.8): below-average liquidity. Be more
+  conservative on limit price (closer to mid).
+- **Tier D**: hard-rejected before you see the context. You will never
+  see Tier D here. If you somehow see it, treat as a data integrity
+  problem and SKIP.
+
+### Win-rate tier meanings
+
+- **strong** (multiplier 1.3): historical win rate ≥ 70%.
+- **good** (multiplier 1.15): win rate 60–69%.
+- **neutral** (multiplier 1.0): win rate 50–59%.
+- **weak** (multiplier 0.85): win rate 40–49%.
+- **poor** (multiplier 0.7): win rate 30–39% OR below 30% with positive
+  avg P&L (high-premium outlier).
+- **reject** (multiplier 0.0): below 30% win rate AND negative avg P&L.
+  Hard-rejected before you see the context. You will never see reject
+  here.
+
+### Confidence meanings
+
+- `"high"` — sufficient data to trust the signal.
+- `"low"` — thin data; the tier/multiplier is provisional.
+- `"none"` — no data row exists for this symbol+strategy. Treat as
+  neutral.
+- `"disabled"` — the research kill switch is off (env var). Treat as
+  neutral.
+
+### How to use these fields
+
+1. **Do NOT re-derive the underlying stats.** You do not have access to
+   the raw win rate, trade count, Sharpe, or avg P&L. These multipliers
+   ARE the signal. Reasoning about "what the win rate probably is" is
+   unproductive — the system has already reduced the stats to these
+   tiers.
+
+2. **Do NOT use these multipliers to override explicit criteria.** A
+   strong win-rate tier does NOT justify entering below the IVR floor,
+   outside the delta range, or with earnings inside the block window.
+   A weak tier does NOT justify skipping a trade that meets all
+   explicit criteria.
+
+3. **Use them to calibrate confidence.** All else equal:
+   - Tier A liquidity + strong win-rate tier: you can express
+     confidence "high" when the setup is clean.
+   - Tier C liquidity OR weak/poor win-rate tier: express confidence
+     "medium" even on a setup that looks clean on the live data.
+   - Mixed signals (e.g. Tier A liquidity + weak win-rate): mention the
+     mix in reasoning and default to confidence "medium".
+
+4. **Use them to modulate limit price aggressiveness.** Tier C liquidity
+   warrants a limit price closer to mid. Tier A permits standard
+   mid-rounded pricing.
+
+5. **If `confidence == "disabled"` or `"none"`, ignore the multiplier
+   for reasoning purposes** but still mention its absence ("no research
+   data available — proceeding on live criteria alone") so the skip is
+   auditable.
+
+6. **Wheel entries omit `final_score` only.** If you are evaluating a
+   wheel CSP or CC, you will see `liquidity`, `winrate`, and
+   `combined_multiplier` just as you would on a spread call. The only
+   missing field is `final_score`, which is a spread-entry concept. Do
+   not read anything into its absence.
+
+### Boundary cases
+
+- Tier B with `confidence: "high"` means "we have solid data and this
+  symbol is genuinely average." Do not treat it as "no signal."
+- Tier B with `confidence: "none"` means "no data yet, defaulted to
+  neutral." Treat as no signal.
+- `combined_multiplier` below 0.85 means the trade passed both hard
+  floors but sits in the lower quadrant of both signals. Flag in
+  `reasoning.risk` when this is the case.
+- `combined_multiplier` above 1.2 means both signals are supportive.
+  Note in reasoning but do not use it to widen any criterion.
+
+Do NOT reason about what the underlying numbers "probably are." The
+multipliers are the signal. Speculating about hidden raw stats is
+distraction.
+
+---
+
 ## Output Format
 
 Respond with valid JSON only. No prose before or after. No markdown

@@ -248,6 +248,28 @@ class Settings:
         self.JUDGE_MODEL: str = os.getenv("JUDGE_MODEL", "claude-opus-4-7")
         self.JUDGE_RATE_LIMIT_MS: int = int(os.getenv("JUDGE_RATE_LIMIT_MS", "200"))
 
+        # ── Self-review extension ──────────────────────────────
+        # Master kill switch for the self-review phase of monthly_evaluation.
+        # When false (default), the pipeline runs unchanged — no Opus call,
+        # no archive append, no notification. Flip true only after reviewing
+        # prompts/self_review_v1.md and confirming cost tolerance.
+        self.SELF_REVIEW_ENABLED: bool = (
+            os.getenv("SELF_REVIEW_ENABLED", "false").lower() == "true"
+        )
+        # Maximum number of flags self-review will call Opus on per month.
+        # If the flag count exceeds this cap, flags are prioritized by
+        # severity, then by strategy sample size (larger first). Excess
+        # flags are logged and skipped — not an error.
+        self.SELF_REVIEW_MAX_FLAGS_PER_MONTH: int = int(
+            os.getenv("SELF_REVIEW_MAX_FLAGS_PER_MONTH", "5")
+        )
+        # Minimum number of supporting decision IDs required for a suggested
+        # prompt patch. Enforced in the Opus system prompt AND as a post-call
+        # filter. Patches with fewer IDs are dropped and the refusal is logged.
+        self.SELF_REVIEW_MIN_SUPPORTING_DECISIONS: int = int(
+            os.getenv("SELF_REVIEW_MIN_SUPPORTING_DECISIONS", "3")
+        )
+
         # Circuit breaker thresholds (percentages)
         self.DAILY_LOSS_HALT_PCT: float = float(os.getenv("DAILY_LOSS_HALT_PCT", "3.0"))
         self.DAILY_LOSS_REDUCE_PCT: float = float(os.getenv("DAILY_LOSS_REDUCE_PCT", "1.5"))
@@ -671,6 +693,21 @@ SCHEDULE: list[dict] = [
             "Compares SQLite/local state against Alpaca broker truth every 5 minutes "
             "during market hours. Log-only mode by default; in enforce mode, triggers "
             "YELLOW or RED on mismatches."
+        ),
+    },
+    # ── Weekly research sweep ─────────────────────────────────────────────────
+    {
+        "job": "weekly_research",
+        "type": "weekly",
+        "day": "sunday",
+        "time": "11:00",
+        "tz": "America/New_York",
+        "label": "Weekly research sweep",
+        "description": (
+            "Runs the 4-phase research pipeline: liquidity scan, backtest "
+            "sweep, watchlist recommendations, and recommendation outcome "
+            "computation. Populates symbol_strategy_stats and "
+            "regime_strategy_stats used by the win-rate multiplier."
         ),
     },
     # ── Weekly job ───────────────────────────────────────────────────────────
