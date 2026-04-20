@@ -25,6 +25,13 @@ def run() -> None:
     except Exception:
         logger.warning("Failed to reset source health daily counts", exc_info=True)
 
+    def _sh_record(source: str, success: bool, detail: str = "") -> None:
+        try:
+            from data.source_health import SourceHealth
+            SourceHealth().record(source, success, detail)
+        except Exception:
+            logger.warning("SourceHealth.record failed for %s", source, exc_info=True)
+
     from brokers.broker_factory import get_broker
     from data.context_builder import ContextBuilder
     from data.state_writer import StateWriter
@@ -162,8 +169,10 @@ def run() -> None:
     iv_ranks: dict[str, dict] = {}
     try:
         iv_ranks = market_data.get_orats_iv_rank_batch(list(settings.WATCHLIST))
+        _sh_record("ORATS", bool(iv_ranks))
     except Exception:
         logger.exception("Batch IV rank screen failed")
+        _sh_record("ORATS", False, "Batch IV rank screen failed")
 
     if iv_ranks:
         briefing_lines.append("**IV Rank screen (ORATS):**")
@@ -181,11 +190,16 @@ def run() -> None:
         briefing_lines.append("")
 
     # ── Per-symbol fundamentals & news ──────────────────────
+    _yfinance_ok = False
+    _alpaca_news_ok = False
 
     for symbol in settings.WATCHLIST:
         try:
             fundamentals = market_data.get_fundamentals(symbol)
+            _yfinance_ok = True
+
             news = _fetch_news(symbol)
+            _alpaca_news_ok = True
 
             dte = fundamentals.get("days_to_earnings")
             dte_str = f"{dte}d away" if dte is not None else "N/A"
@@ -210,24 +224,41 @@ def run() -> None:
             logger.exception("Pre-market failed for %s — continuing", symbol)
             briefing_lines.append(f"{symbol} | ERROR — see logs")
 
+    _sh_record("yfinance", _yfinance_ok, "" if _yfinance_ok else "All per-symbol fundamentals failed")
+    _sh_record("Alpaca News", _alpaca_news_ok, "" if _alpaca_news_ok else "All per-symbol news fetches failed")
+
     # ── Macro data (once) ───────────────────────────────────
+    vix = None
+    vix_regime = "?"
     try:
         vix = market_data.get_vix()
         vix_regime = market_data.interpret_vix(vix) if vix is not None else "?"
-        fg = market_data.get_fear_greed_index() or {}
-        rfr = market_data.get_risk_free_rate()
-
-        vix_str = f"{vix:.1f} ({vix_regime})" if vix is not None else "N/A"
-        fg_str = f"{fg.get('score', 0):.0f} ({fg.get('rating', '?')})" if fg.get("score") else "N/A"
-        rfr_str = f"{rfr * 100:.2f}%" if rfr is not None else "N/A"
-
-        macro_line = f"Macro: VIX={vix_str} | F&G={fg_str} | RFR={rfr_str}"
-        logger.info(macro_line)
-        briefing_lines.append("")
-        briefing_lines.append(macro_line)
     except Exception:
-        logger.exception("Failed to fetch macro data")
-        briefing_lines.append("Macro: ERROR — see logs")
+        logger.exception("Failed to fetch VIX")
+    _sh_record("yfinance", vix is not None, "" if vix is not None else "VIX fetch failed")
+
+    fg: dict = {}
+    try:
+        fg = market_data.get_fear_greed_index() or {}
+    except Exception:
+        logger.exception("Failed to fetch Fear & Greed index")
+    _sh_record("CNN Fear & Greed", bool(fg.get("score")), "" if fg.get("score") else "Fear & Greed fetch failed")
+
+    rfr = None
+    try:
+        rfr = market_data.get_risk_free_rate()
+    except Exception:
+        logger.exception("Failed to fetch risk-free rate")
+    _sh_record("FRED", rfr is not None, "" if rfr is not None else "Risk-free rate fetch failed")
+
+    vix_str = f"{vix:.1f} ({vix_regime})" if vix is not None else "N/A"
+    fg_str = f"{fg.get('score', 0):.0f} ({fg.get('rating', '?')})" if fg.get("score") else "N/A"
+    rfr_str = f"{rfr * 100:.2f}%" if rfr is not None else "N/A"
+
+    macro_line = f"Macro: VIX={vix_str} | F&G={fg_str} | RFR={rfr_str}"
+    logger.info(macro_line)
+    briefing_lines.append("")
+    briefing_lines.append(macro_line)
 
     # ── Write daily report section ──────────────────────────
     append_section("Pre-Market Briefing (6:00 AM ET)", "\n".join(briefing_lines))
