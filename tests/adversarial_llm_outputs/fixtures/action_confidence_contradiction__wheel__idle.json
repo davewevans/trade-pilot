@@ -1,0 +1,53 @@
+{
+  "id": "action_confidence_contradiction__wheel__idle",
+  "description": "Wheel IDLE (known gap): Claude returns action='sell_put' with confidence='low' and no skip_reason. system.md instructs Claude to always skip when confidence is low, but there is no code-level enforcement of that rule. The guardrail passes — this documents that the confidence-action pairing is not a hard code check.",
+  "failure_mode": "action_confidence_contradiction",
+  "known_gap": true,
+  "gap_note": "system.md states: 'If confidence is low, always prefer skip over forcing a trade.' This is enforced by the prompt only, not in guardrails.py or any post-advisor check. A low-confidence trade can reach order execution. Fix: add a pre-execution check in the strategy layer (or in Guardrails.validate) that rejects action != 'skip' when confidence == 'low'.",
+  "advisor": {
+    "method": "ask",
+    "strategy_type": "wheel",
+    "phase": "idle"
+  },
+  "mocked_api": {
+    "stop_reason": "end_turn",
+    "response_payload": {
+      "action": "sell_put",
+      "symbol": "AAPL260524P00200000",
+      "qty": 1,
+      "order_type": "limit",
+      "limit_price": 1.25,
+      "reasoning": {
+        "macro": "Mixed signals — uncertain direction",
+        "fundamental": "Some concern about revenue growth deceleration",
+        "technical": "At resistance — unclear breakout",
+        "volatility": "IVR moderate, not ideal but within range",
+        "selection": "200P selected despite reservations",
+        "risk": "Proceeding despite low conviction — risk elevated"
+      },
+      "confidence": "low",
+      "skip_reason": null
+    }
+  },
+  "context": {
+    "symbol": "AAPL"
+  },
+  "guardrail_args": {
+    "account": {"buying_power": 250000},
+    "positions": [],
+    "context": {"earnings": {"days_until_earnings": 45}}
+  },
+  "assertions": {
+    "safe_skip_triggered": false,
+    "parse_layer": {
+      "should_raise": false,
+      "returned_action": "sell_put",
+      "returned_skip_reason_contains": null
+    },
+    "guardrail_layer": {
+      "should_validate": true,
+      "rejection_reason_contains": [],
+      "classify_rejection_to": null
+    }
+  }
+}

@@ -15,6 +15,7 @@ from database.repositories.scorecard_repository import ScorecardRepository
 from database.repositories.strategy_health import StrategyHealthRepository
 from database.repositories.strategy_states import StrategyStateRepository
 from database.repositories.token_usage_repository import TokenUsageRepository
+from database.repositories.shadow_execution import ShadowExecutionRepository
 from database.repositories.trades import TradeRepository
 
 __all__ = [
@@ -30,6 +31,7 @@ __all__ = [
     "MonthlyEvaluationsRepository",
     "OutcomeRepository",
     "ScorecardRepository",
+    "ShadowExecutionRepository",
     "StrategyHealthRepository",
     "StrategyStateRepository",
     "TokenUsageRepository",

@@ -127,6 +127,26 @@ class WheelStrategy:
         atomic_json_write(Path(STATE_FILE), data)
         logger.info("State saved: symbol=%s state=%s", self.symbol, self.state.value)
 
+    @classmethod
+    def read_persisted_state(cls, symbol: str) -> dict | None:
+        """Return the raw persisted state dict without touching the broker.
+
+        Used by reconciliation jobs to read local state for comparison against
+        broker truth. Returns None if no state file exists or the stored symbol
+        does not match. Never modifies state.
+        """
+        if not os.path.exists(STATE_FILE):
+            return None
+        try:
+            with open(STATE_FILE, "r") as f:
+                data = json.load(f)
+            if data.get("symbol") == symbol:
+                return data
+            return None
+        except Exception:
+            logger.exception("WheelStrategy.read_persisted_state: failed to read %s", STATE_FILE)
+            return None
+
     # ── state reconciliation ─────────────────────────────────
 
     def get_current_state(self, symbol: str) -> WheelState:

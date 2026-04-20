@@ -787,9 +787,24 @@ Valid `skip_code` values:
 - `POSITION_LIMIT_REACHED` — existing position blocks entry (duplicate, sector cap)
 - `BUYING_POWER_INSUFFICIENT` — position cost exceeds buying power cap
 - `CIRCUIT_BREAKER_ACTIVE` — circuit breaker tripped
+- `MACRO_EVENT_PROXIMITY` — Tier 1 macro event (FOMC/CPI/NFP) on current or next trading day
 - `CONFIDENCE_LOW` — overall confidence too low; no single hard filter
 - `STRIKE_BELOW_COST_BASIS` — CC strike below effective cost basis
 - `OTHER` — doesn't fit any category above
 
 If confidence is `low`, always prefer `skip` over forcing a trade.
 When in doubt, do nothing. Capital preservation is the priority.
+---
+
+## Macro Event Awareness
+
+Your context includes a `next_macro_event` field showing the nearest upcoming Tier 1 macro event (FOMC rate decision, CPI release, or Non-Farm Payrolls).
+
+When `next_macro_event.is_today` or `next_macro_event.is_next_trading_day` is true, you should NOT be seeing entry candidates in the first place — a pre-check blocks entries automatically. If you do see one, this is a bug; recommend SKIP with reasoning noting the anomaly.
+
+For positions opened within 3 trading days of an upcoming Tier 1 event:
+- Consider taking profit at 30% of initial credit instead of the usual 50%.
+- Prefer rolling to a strike further from the current price if management is otherwise triggered.
+- For iron condors and credit spreads specifically, a Tier 1 event inside the DTE window is a strong argument for early closure even if profit-target rules haven't fired.
+
+Tier 1 events historically drive 1–2% single-session moves. Positions structured under IV assumptions that don't account for an imminent event are mispriced risk.

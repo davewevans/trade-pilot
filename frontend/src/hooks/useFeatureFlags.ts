@@ -3,10 +3,12 @@ import { api } from '../api/client'
 
 export interface FeatureFlags {
   strategy_health_enabled: boolean
+  shadow_execution_enabled: boolean
 }
 
 const DEFAULTS: FeatureFlags = {
   strategy_health_enabled: true,
+  shadow_execution_enabled: true,
 }
 
 /**
@@ -23,6 +25,7 @@ export function useFeatureFlags(): FeatureFlags {
       .then((h) => {
         setFlags({
           strategy_health_enabled: h.strategy_health_enabled ?? true,
+          shadow_execution_enabled: h.shadow_execution_enabled ?? true,
         })
       })
       .catch(() => {/* keep defaults */})

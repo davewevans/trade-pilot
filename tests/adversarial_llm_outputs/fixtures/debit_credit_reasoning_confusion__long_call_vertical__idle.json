@@ -1,0 +1,66 @@
+{
+  "id": "debit_credit_reasoning_confusion__long_call_vertical__idle",
+  "description": "Long call vertical IDLE (known gap / eval baseline): Claude returns a schema-valid OPEN where the structured fields are correct (positive limit_price, positive net_debit) but the free-text reasoning claims 'net credit received' and 'credit structure'. A debit spread pays premium; the reasoning prose is internally inconsistent with the numeric fields. Parse passes, all guardrails pass — this is a known gap in semantic prose validation.",
+  "failure_mode": "debit_credit_reasoning_confusion",
+  "known_gap": true,
+  "gap_note": "Guardrails validate numeric fields (limit_price sign, net_debit range) but not the consistency of free-text reasoning prose with those numerics. Claude can describe a debit spread as a credit structure without any code rejection. Fix: eval layer that flags reasoning.volatility or reasoning.selection containing 'credit' when the strategy is a debit spread.",
+  "advisor": {
+    "method": "ask_spread",
+    "strategy_type": "long_call_vertical",
+    "phase": "idle"
+  },
+  "mocked_api": {
+    "stop_reason": "end_turn",
+    "response_payload": {
+      "action": "OPEN",
+      "long_call_symbol": "AAPL260524C00200000",
+      "short_call_symbol": "AAPL260524C00210000",
+      "expiration": "2026-05-24",
+      "dte": 35,
+      "long_call_strike": 200.0,
+      "short_call_strike": 210.0,
+      "net_debit": 0.80,
+      "max_gain": 920.0,
+      "break_even": 208.0,
+      "price_target": 215.0,
+      "limit_price": 0.80,
+      "reasoning": {
+        "macro": "BULL regime confirmed — positioning for upside move in AAPL",
+        "fundamental": "Earnings clear at 60 days — earnings risk not a factor",
+        "technical": "Above 200MA with bullish momentum structure",
+        "volatility": "Net credit received of $0.80 from selling the call vertical — IV crush benefit",
+        "selection": "AAPL 200/210 call spread — credit structure locks in $0.80 premium received",
+        "risk": "Max loss capped at the credit received; limited downside"
+      },
+      "confidence": "high",
+      "skip_reason": null
+    }
+  },
+  "context": {
+    "confirmed_market_regime": "BULL",
+    "iv_environment": "LOW",
+    "fundamentals": {"days_to_earnings": 60}
+  },
+  "guardrail_args": {
+    "account": {"buying_power": 100000},
+    "context": {
+      "confirmed_market_regime": "BULL",
+      "iv_environment": "LOW",
+      "fundamentals": {"days_to_earnings": 60}
+    },
+    "open_spreads": []
+  },
+  "assertions": {
+    "safe_skip_triggered": false,
+    "parse_layer": {
+      "should_raise": false,
+      "returned_action": "OPEN",
+      "returned_skip_reason_contains": null
+    },
+    "guardrail_layer": {
+      "should_validate": true,
+      "rejection_reason_contains": [],
+      "classify_rejection_to": null
+    }
+  }
+}

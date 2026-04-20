@@ -20,7 +20,10 @@ from zoneinfo import ZoneInfo
 
 import schedule
 
+from utils.clock_drift import check_and_halt_on_drift
+
 from jobs import (
+    drop_copy_reconcile,
     expiry_guard,
     market_close,
     market_open,
@@ -30,6 +33,7 @@ from jobs import (
     post_market,
     pre_close,
     pre_market,
+    shadow_capture,
     weekly_report,
 )
 
@@ -54,7 +58,15 @@ def safe_run(job_fn, job_name: str) -> None:
     traceback is logged but the error is **not** re-raised so the
     scheduler loop keeps running.  A "critical" notification is fired
     on job crash so the operator is alerted immediately.
+
+    A clock-drift pre-flight runs before the job body. If the host clock
+    has drifted beyond the configured threshold the job is skipped and
+    HALTED.lock is written. The check fails open on network errors.
     """
+    if not check_and_halt_on_drift(job_name):
+        logger.info("=== SKIPPING: %s — clock drift halt active ===", job_name)
+        return
+
     logger.info("=== STARTING: %s ===", job_name)
     t0 = time.monotonic()
     try:
@@ -145,6 +157,8 @@ def register_jobs() -> None:
         "market_close": market_close.run,
         "post_market": post_market.run,
         "portfolio_refresh": portfolio_refresh.run,
+        "drop_copy_reconcile": drop_copy_reconcile.run,
+        "shadow_capture": shadow_capture.run,
         "weekly_report": weekly_report.run,
         "monthly_evaluation": _monthly_eval_wrapper,
         "orats_cache_cleanup": _cleanup_orats_cache,

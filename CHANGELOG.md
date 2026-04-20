@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.9.0] - 2026-04-19
+
+### Added
+- **Broker-Truth State Reconciliation**: two-phase reconciliation subsystem that compares Alpaca broker positions, cash, and open orders against local state (`strategy_states` SQLite table, `wheel_state.json`, `turnover_wheel_state.json`, `open_spreads.json`). Phase 1 runs once at boot (`startup_broker_reconcile`); Phase 2 runs every 5 minutes during market hours (`drop_copy_reconcile`). Severity is "yellow" when any position delta exceeds `DROP_COPY_POS_MISMATCH_USD` / `DROP_COPY_POS_MISMATCH_PCT` or cash delta exceeds `DROP_COPY_CASH_MISMATCH_USD`; "red" when an untracked filled order is detected or delta exceeds `STARTUP_RECONCILE_HALT_THRESHOLD_USD`. Defaults to `DROP_COPY_ENFORCEMENT_MODE=log_only` — diffs are computed and written to reports but no state is mutated and no HALTED.lock is written. Flip to `enforce` only after a clean log-only week.
+- `jobs/_broker_snapshot.py`: shared broker fetch layer; groups strategies by credential pair, captures per-account failures without aborting.
+- `jobs/_reconcile_logic.py`: pure helpers — `derive_wheel_state_from_positions()`, `reconstruct_spread_identities()`, `classify_untracked_positions()`.
+- `jobs/_reconcile_diff.py`: pure diff engine producing `ReconcileDiff` with severity, position/cash/order sub-diffs, and per-item deltas.
+- `jobs/startup_broker_reconcile.py`: boot-time reconcile; writes `data/startup_reconcile_report.json`; in enforce+red mode writes HALTED.lock and `main.py` exits 1.
+- `jobs/drop_copy_reconcile.py`: 5-minute market-hours reconcile; writes `data/drop_copy_last_report.json`; grace period (`DROP_COPY_GRACE_CYCLES`, default 2 cycles) before any action; in enforce+yellow mode writes `data/drop_copy_block.json` to suppress new entries; clears block when severity returns to "none".
+- `SkipReason.DROP_COPY_BLOCK` skip code: gates new entries in `market_open.py` when `drop_copy_block.json` is present without halting management cycles. Visible in the Skip Reasons UI under the Circuit Breaker category.
+- "Drop-copy block" row added to the Circuit Breaker section of the Skip Reasons frontend page.
+
+- **Fill Realism Measurement (Shadow Execution)**: measurement-only subsystem that captures real-time NBBO (via ORATS primary, Alpaca fallback) at order submission and at +30s, +2min, +15min, and EOD, then classifies each snapshot as `always_fillable`, `sometimes_fillable`, `not_fillable`, or `data_unavailable`. Results aggregate into a per-strategy fill-realism score visible on the Strategy Health page. Gated by `SHADOW_EXECUTION_ENABLED` env var (default true). This is a blended signal — paper limits use Alpaca's 15-min-delayed data but are measured against real-time NBBO — so `not_fillable` does not isolate any single failure mode (strategy over-reaching vs. stale feed vs. true illiquidity).
+- `shadow_executions` and `shadow_execution_legs` SQLite tables with per-snapshot bid/mid/ask and classification columns.
+- `ShadowExecutionRepository` with `insert_submission`, `get_due`, `update_capture`, `recompute_completed`, and `get_fill_realism_aggregates`.
+- `data/shadow_execution.py`: `classify_fillability()` pure function, `record_submission()` hook (call at order placement), `fetch_leg_quotes_for_capture()` for the follow-up job.
+- `jobs/shadow_capture.py`: 1-minute interval job that processes pending t30s/t2m/t15m/EOD rows; permanent failure after 1 trading day or 5 attempts; all exceptions swallowed.
+- Hooks in `main.py` (`execute_decision`) and all spread strategies (`bull_put_spread`, `bear_call_spread`, `iron_condor`, `iron_butterfly`, `long_call_vertical`) at entry and exit. Calendar spread explicitly excluded (`# NOT YET ACTIVE`).
+- `GET /api/fill-realism?days=90` endpoint returning per-strategy aggregates; returns 404 when flag is off.
+- `shadow_execution_enabled` field added to `GET /api/health` response.
+- Fill Realism summary panel on the Strategy Health frontend page, color-coded by gate threshold (green ≥ gate%, yellow ≥ gate%−20, red below; gray "insufficient data" below gate sample).
+- `FILL_REALISM_GATE_SAMPLE` (100) and `FILL_REALISM_GATE_PCT` (80.0) constants in `config.py`.
+
 ## [1.8.0] - 2026-04-19
 
 ### Added

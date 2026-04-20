@@ -624,3 +624,23 @@ class TestScoringOrchestratorIdempotency:
         rows = scores_repo.get_by_decision(5)
         dims = json.loads(rows[0]["dimension_scores_json"])
         assert any(d["dimension"] == "rule_adherence" for d in dims)
+
+
+# ── SCHEMA_INVALID skip-validity structural check ──────────────────────────────
+
+class TestSchemaInvalidSkipValidity:
+
+    def test_schema_invalid_skip_passes_structural_check(self, scorer):
+        """SCHEMA_INVALID is a valid SkipCode and has no context check — always scores 1.0."""
+        d = _decision(
+            action="SKIP",
+            skip_reason_code=SkipCode.SCHEMA_INVALID,
+            context={},
+        )
+        results = scorer.score_decision(d)
+        assert len(results) == 1
+        r = results[0]
+        assert r["dimension"] == "skip_validity_structural"
+        assert r["score"] == 1.0
+        assert r["score_metadata"]["skip_reason_code"] == SkipCode.SCHEMA_INVALID
+

@@ -19,6 +19,25 @@ exists and revisit decisions later.
 
 ## [Unreleased]
 
+### Changed
+- `frontend/src/pages/HowBacktestingWorks.tsx` Section 7 rewritten. Header renamed
+  from "How Backtests Feed Into Live Decisions" to "What the Backtester Powers". The
+  four "Live"-badged cards that falsely claimed Claude's context includes `backtest_stats`,
+  similar-trade outcomes, environment-match aggregates, and a backtest-vs-reality gap
+  signal were replaced with (a) a single accurate card explaining the Sunday sweep writes
+  to `symbol_strategy_stats` / `regime_strategy_stats` and that `pre_check_entry` consumes
+  those via `BacktestStatsRepository.get_winrate_multiplier()` — not `context_builder` —
+  and (b) a callout noting the Backtest Intel page UI is scaffolded but all three API
+  endpoints (`/api/backtest/similar-trades`, `/api/backtest/environment-match`,
+  `/api/backtest/reality-check`) have no backend implementation.
+- `tests/integration/test_context_builder_truth_audit.py`: removed the three `xfail`
+  parametrized cases (`backtest_stats`, `research.liquidity`, `research.winrate`). The
+  dashboard claims they were guarding against no longer exist; the test cases are no longer
+  applicable. All 20 remaining parametrized cases are unchanged.
+- Design principle (R8): research layer data is gated upstream in `pre_check_entry` via
+  multiplier/floor logic. Wiring the same data into Claude's prompt risks double-counting
+  and overfitting to a noisy prior. Deterministic rules belong in code, not prompts.
+
 ### Added
 - Wheel strategy now participates in liquidity scoring for new CSP and CC
   entries. `WheelStrategy` gains `STRATEGY_TYPE_MAP` and `liquidity_repo`

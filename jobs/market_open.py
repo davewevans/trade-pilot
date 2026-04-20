@@ -104,6 +104,56 @@ def run() -> None:
         logger.info("=== MARKET OPEN JOB COMPLETE (halted) ===")
         return
 
+    # ── Drop-copy reconcile blocker ──────────────────────────────────────────
+    # Set by jobs/drop_copy_reconcile.py when a persistent mismatch is detected
+    # in enforce mode. Management actions (rolls, closes) remain allowed;
+    # only new entries are gated. Cleared automatically on a clean cycle.
+    drop_copy_block_path = settings.SNAPSHOTS_DIR / "drop_copy_block.json"
+    drop_copy_blocked = drop_copy_block_path.exists()
+    if drop_copy_blocked:
+        logger.warning(
+            "Drop-copy block active — new entries suppressed this cycle "
+            "(block file: %s)", drop_copy_block_path,
+        )
+
+    # ── Macro event block ────────────────────────────────────────────────────
+    if settings.MACRO_EVENT_BLOCK_ENABLED:
+        from data.macro_calendar import is_blocked as _macro_is_blocked
+        _macro_blocked, _macro_reason = _macro_is_blocked(et_now)
+        if _macro_blocked:
+            logger.info("MACRO EVENT BLOCK ACTIVE: %s — skipping all entries", _macro_reason)
+            append_section(
+                "Market Open Decisions (10:00 AM ET)",
+                f"**MACRO BLOCK** — {_macro_reason}. No new entries.",
+            )
+            logger.info("=== MARKET OPEN JOB COMPLETE (macro blocked) ===")
+            return
+
+    # Record macro calendar coverage health for dashboard visibility
+    try:
+        from data.macro_calendar import fomc_coverage_days as _fcd
+        from data.source_health import SourceHealth as _SH
+        _msh = _SH()
+        _days = _fcd(et_now)
+        if _days < 30:
+            _msh.record(
+                "Macro Calendar", False,
+                f"FOMC/CPI coverage only {_days} days out — populate data/macro_events.json",
+            )
+            logger.warning(
+                "Macro calendar FOMC/CPI coverage: only %d days out — populate data/macro_events.json",
+                _days,
+            )
+        elif _days < 60:
+            _msh.record(
+                "Macro Calendar", True,
+                f"FOMC/CPI coverage {_days} days out (< 60 — consider adding more dates)",
+            )
+        else:
+            _msh.record("Macro Calendar", True, f"FOMC/CPI coverage {_days} days out")
+    except Exception:
+        logger.warning("Failed to record macro calendar health", exc_info=True)
+
     logger.info(
         "Circuit breaker: %s | Daily P&L: %.2f%% | Drawdown: %.2f%% | Multiplier: %.1f",
         cb_status.status, cb_status.daily_pnl_pct, cb_status.drawdown_pct,
@@ -278,14 +328,18 @@ def run() -> None:
     #   0.5 → YELLOW: spreads blocked entirely (qty=1 → 0); wheel
     #         entries require high Claude confidence (>= 0.75)
     #   0.0 → RED:    all new entries blocked
-    block_all_new_entries = (size_multiplier == 0.0)
+    cb_is_red = (size_multiplier == 0.0)
+    block_all_new_entries = cb_is_red or drop_copy_blocked
     reduced_risk = (size_multiplier == 0.5)
     WHEEL_YELLOW_CONFIDENCE_FLOOR = 0.75
     WHEEL_ENTRY_ACTIONS = ("sell_put", "sell_call")
 
-    if block_all_new_entries:
+    if block_all_new_entries and cb_is_red:
         logger.warning("Circuit breaker RED — no new entries this cycle (management still allowed)")
         report_lines.append("**Circuit breaker RED** — no new entries allowed (existing positions managed normally)")
+    elif block_all_new_entries and drop_copy_blocked:
+        logger.warning("Drop-copy block active — no new entries this cycle (management still allowed)")
+        report_lines.append("**Drop-copy block** — new entries suppressed until mismatch resolves (management still allowed)")
     elif reduced_risk:
         logger.warning(
             "Circuit breaker YELLOW (multiplier=0.5) — spread entries blocked; "
@@ -357,6 +411,44 @@ def run() -> None:
                 )
                 continue
 
+            # ── Anti-crowding pre-check (IDLE entry only) ───────────
+            if state.value == "IDLE":
+                from data.book_exposure import check_anti_crowding as _check_ac
+                from strategies.skip_reasons import SkipGate, SkipReason
+                _ac_allowed, _ac_reason = _check_ac(symbol, "wheel")
+                if not _ac_allowed:
+                    logger.info("%s wheel anti-crowding skip: %s", symbol, _ac_reason)
+                    journal.append({
+                        "symbol": None,
+                        "underlying": symbol,
+                        "wheel_state": state.value,
+                        "action": "skip",
+                        "skip_reason": "anti_crowding_cross_account",
+                        "reasoning": _ac_reason,
+                        "confidence": None,
+                        "status": "skipped",
+                        "strategy_type": "wheel_csp",
+                        "iv_rank": context.get("iv_rank"),
+                    })
+                    if recorder is not None:
+                        recorder.record_decision(
+                            strategy_type="wheel",
+                            underlying=symbol,
+                            action="SKIP",
+                            wheel_state=state.value,
+                            reasoning=_ac_reason,
+                            context=context,
+                            skip_gate=SkipGate.PORTFOLIO,
+                            skip_reason_code=SkipReason.ANTI_CROWDING_CROSS_ACCOUNT,
+                            job_run_id=job_run_id,
+                            pre_check_verdict="SKIP",
+                            prompt_version=None,
+                        )
+                    report_lines.append(
+                        f"**{symbol}** -- SKIPPED (anti-crowding: {_ac_reason})"
+                    )
+                    continue
+
             import time as _time
             _t0_ask = _time.monotonic()
             decision = advisor.ask(context, state)
@@ -398,6 +490,11 @@ def run() -> None:
                 })
                 if recorder is not None:
                     from strategies.skip_reasons import SkipGate, SkipReason
+                    _wheel_skip_code = decision.get("skip_reason_code") or SkipReason.CLAUDE_SKIP
+                    _wheel_skip_gate = (
+                        SkipGate.LLM_OUTPUT if _wheel_skip_code == SkipReason.SCHEMA_INVALID
+                        else SkipGate.CLAUDE_SKIP
+                    )
                     recorder.record_decision(
                         strategy_type="wheel", underlying=symbol,
                         action="SKIP",
@@ -406,8 +503,8 @@ def run() -> None:
                         confidence=decision.get("confidence"),
                         context=context,
                         research_metadata=context.get("_research"),
-                        skip_gate=SkipGate.CLAUDE_SKIP,
-                        skip_reason_code=SkipReason.CLAUDE_SKIP,
+                        skip_gate=_wheel_skip_gate,
+                        skip_reason_code=_wheel_skip_code,
                         job_run_id=job_run_id,
                         pre_check_verdict=_wheel_pcv,
                         prompt_version=advisor.prompt_version,
@@ -505,7 +602,9 @@ def run() -> None:
             decision_action = decision.get("action")
             if decision_action in WHEEL_ENTRY_ACTIONS:
                 cb_skip_reason = None
-                if block_all_new_entries:
+                if drop_copy_blocked and not cb_is_red:
+                    cb_skip_reason = "drop_copy_block — new entries suppressed pending reconcile"
+                elif block_all_new_entries:
                     cb_skip_reason = "circuit breaker RED — new entries blocked"
                 elif reduced_risk:
                     conf = decision.get("confidence") or 0
@@ -530,11 +629,12 @@ def run() -> None:
                     })
                     if recorder is not None:
                         from strategies.skip_reasons import SkipGate, SkipReason
-                        _cb_reason_code = (
-                            SkipReason.CIRCUIT_BREAKER_RED
-                            if block_all_new_entries
-                            else SkipReason.CIRCUIT_BREAKER_YELLOW
-                        )
+                        if drop_copy_blocked and not cb_is_red:
+                            _cb_reason_code = SkipReason.DROP_COPY_BLOCK
+                        elif block_all_new_entries:
+                            _cb_reason_code = SkipReason.CIRCUIT_BREAKER_RED
+                        else:
+                            _cb_reason_code = SkipReason.CIRCUIT_BREAKER_YELLOW
                         recorder.record_decision(
                             strategy_type="wheel", underlying=symbol,
                             action="SKIP",
@@ -677,6 +777,44 @@ def run() -> None:
                     )
                     continue
 
+                # ── Anti-crowding pre-check (IDLE entry only) ───────────
+                if tw_state.value == "IDLE":
+                    from data.book_exposure import check_anti_crowding as _check_ac_tw
+                    from strategies.skip_reasons import SkipGate, SkipReason
+                    _ac_allowed, _ac_reason = _check_ac_tw(symbol, "turnover_wheel")
+                    if not _ac_allowed:
+                        logger.info("%s [TW] anti-crowding skip: %s", symbol, _ac_reason)
+                        journal.append({
+                            "symbol": None,
+                            "underlying": symbol,
+                            "wheel_state": tw_state.value,
+                            "action": "skip",
+                            "skip_reason": "anti_crowding_cross_account",
+                            "reasoning": _ac_reason,
+                            "confidence": None,
+                            "status": "skipped",
+                            "strategy_type": "turnover_wheel_csp",
+                            "iv_rank": context.get("iv_rank"),
+                        })
+                        if recorder is not None:
+                            recorder.record_decision(
+                                strategy_type="turnover_wheel",
+                                underlying=symbol,
+                                action="SKIP",
+                                wheel_state=tw_state.value,
+                                reasoning=_ac_reason,
+                                context=context,
+                                skip_gate=SkipGate.PORTFOLIO,
+                                skip_reason_code=SkipReason.ANTI_CROWDING_CROSS_ACCOUNT,
+                                job_run_id=job_run_id,
+                                pre_check_verdict="SKIP",
+                                prompt_version=None,
+                            )
+                        report_lines.append(
+                            f"**{symbol}** [TW] -- SKIPPED (anti-crowding: {_ac_reason})"
+                        )
+                        continue
+
                 import time as _time
                 _t0_ask = _time.monotonic()
                 decision = advisor.ask_turnover_wheel(context, tw_state)
@@ -715,6 +853,11 @@ def run() -> None:
                     })
                     if recorder is not None:
                         from strategies.skip_reasons import SkipGate, SkipReason
+                        _tw_skip_code = decision.get("skip_reason_code") or SkipReason.CLAUDE_SKIP
+                        _tw_skip_gate = (
+                            SkipGate.LLM_OUTPUT if _tw_skip_code == SkipReason.SCHEMA_INVALID
+                            else SkipGate.CLAUDE_SKIP
+                        )
                         recorder.record_decision(
                             strategy_type="turnover_wheel", underlying=symbol,
                             action="SKIP",
@@ -723,8 +866,8 @@ def run() -> None:
                             confidence=decision.get("confidence"),
                             context=context,
                             research_metadata=context.get("_research"),
-                            skip_gate=SkipGate.CLAUDE_SKIP,
-                            skip_reason_code=SkipReason.CLAUDE_SKIP,
+                            skip_gate=_tw_skip_gate,
+                            skip_reason_code=_tw_skip_code,
                             job_run_id=job_run_id,
                             pre_check_verdict=_tw_pcv,
                             prompt_version=advisor.prompt_version,
@@ -817,7 +960,9 @@ def run() -> None:
                 tw_decision_action = decision.get("action")
                 if tw_decision_action in WHEEL_ENTRY_ACTIONS:
                     cb_skip_reason = None
-                    if block_all_new_entries:
+                    if drop_copy_blocked and not cb_is_red:
+                        cb_skip_reason = "drop_copy_block — new entries suppressed pending reconcile"
+                    elif block_all_new_entries:
                         cb_skip_reason = "circuit breaker RED — new entries blocked"
                     elif reduced_risk:
                         conf = decision.get("confidence") or 0
@@ -842,11 +987,12 @@ def run() -> None:
                         })
                         if recorder is not None:
                             from strategies.skip_reasons import SkipGate, SkipReason
-                            _cb_reason_code = (
-                                SkipReason.CIRCUIT_BREAKER_RED
-                                if block_all_new_entries
-                                else SkipReason.CIRCUIT_BREAKER_YELLOW
-                            )
+                            if drop_copy_blocked and not cb_is_red:
+                                _cb_reason_code = SkipReason.DROP_COPY_BLOCK
+                            elif block_all_new_entries:
+                                _cb_reason_code = SkipReason.CIRCUIT_BREAKER_RED
+                            else:
+                                _cb_reason_code = SkipReason.CIRCUIT_BREAKER_YELLOW
                             recorder.record_decision(
                                 strategy_type="turnover_wheel", underlying=symbol,
                                 action="SKIP",
@@ -1087,15 +1233,34 @@ def run() -> None:
                             "%s best candidate: %s (score=%.2f)",
                             strategy_name, best_symbol, best_score,
                         )
-                        decision = strat.run_cycle(spread_ctx, advisor)
-                        _spread_used_advisor = True
-                        # Tag the winning underlying so _handle_spread_open uses it.
-                        if decision.get("action") == "OPEN":
-                            decision["underlying"] = best_symbol
-                        # S11: pre-checks passed (this symbol was the winner),
-                        # so the deterministic path would have OPENed. Anything
-                        # else here is a Claude override.
-                        decision["_pre_check_would_have"] = "OPEN"
+                        # ── Anti-crowding pre-check ────────────────────────────
+                        from data.book_exposure import check_anti_crowding as _check_ac_sp
+                        _ac_allowed, _ac_reason = _check_ac_sp(best_symbol, strategy_name)
+                        if not _ac_allowed:
+                            logger.info(
+                                "%s anti-crowding skip for %s: %s",
+                                strategy_name, best_symbol, _ac_reason,
+                            )
+                            decision = {
+                                "action": "SKIP",
+                                "reasoning": _ac_reason,
+                                "skip_reason": "anti_crowding_cross_account",
+                                "skip_reason_code": None,
+                                "underlying": best_symbol,
+                            }
+                            # Store the code so the gate-mapping block below routes correctly
+                            from strategies.skip_reasons import SkipReason as _SR
+                            decision["skip_reason_code"] = _SR.ANTI_CROWDING_CROSS_ACCOUNT
+                        else:
+                            decision = strat.run_cycle(spread_ctx, advisor)
+                            _spread_used_advisor = True
+                            # Tag the winning underlying so _handle_spread_open uses it.
+                            if decision.get("action") == "OPEN":
+                                decision["underlying"] = best_symbol
+                            # S11: pre-checks passed (this symbol was the winner),
+                            # so the deterministic path would have OPENed. Anything
+                            # else here is a Claude override.
+                            decision["_pre_check_would_have"] = "OPEN"
                 action = decision.get("action", "SKIP")
                 logger.info("%s decision: %s", strategy_name, action)
 
@@ -1128,12 +1293,19 @@ def run() -> None:
                     if action == "SKIP":
                         from strategies.skip_reasons import SkipGate, SkipReason
                         _raw_skip = decision.get("skip_reason", "")
-                        if "no_candidates" in (_raw_skip or ""):
+                        _dict_code = decision.get("skip_reason_code")
+                        if _dict_code == SkipReason.SCHEMA_INVALID:
+                            _spread_skip_gate = SkipGate.LLM_OUTPUT
+                            _spread_skip_reason_code = SkipReason.SCHEMA_INVALID
+                        elif _dict_code == SkipReason.ANTI_CROWDING_CROSS_ACCOUNT:
+                            _spread_skip_gate = SkipGate.PORTFOLIO
+                            _spread_skip_reason_code = SkipReason.ANTI_CROWDING_CROSS_ACCOUNT
+                        elif "no_candidates" in (_raw_skip or ""):
                             _spread_skip_gate = SkipGate.NO_CANDIDATE
                             _spread_skip_reason_code = SkipReason.NO_CANDIDATES_FOUND
                         else:
                             _spread_skip_gate = SkipGate.CLAUDE_SKIP
-                            _spread_skip_reason_code = SkipReason.CLAUDE_SKIP
+                            _spread_skip_reason_code = _dict_code or SkipReason.CLAUDE_SKIP
                     # pre_check_verdict: MANAGE for open-position management cycles;
                     # OPEN if winner found (pre-check passed); SKIP if no candidates.
                     _spread_pcv = (
@@ -1179,16 +1351,16 @@ def run() -> None:
                     })
 
                 if action == "OPEN":
-                    # Circuit-breaker entry gate. Spreads always trade qty=1,
-                    # so YELLOW (multiplier 0.5 → 0 contracts) and RED both
-                    # block new OPENs. CLOSE is intentionally not gated below
-                    # so existing risk can always be taken off the table.
+                    # Circuit-breaker / drop-copy entry gate. Spreads always trade
+                    # qty=1, so YELLOW (multiplier 0.5 → 0 contracts), RED, and
+                    # drop-copy block all gate new OPENs. CLOSE is never gated.
                     if block_all_new_entries or reduced_risk:
-                        cb_reason = (
-                            "circuit breaker RED — new entries blocked"
-                            if block_all_new_entries
-                            else "circuit breaker YELLOW — spread entries blocked (qty 1→0)"
-                        )
+                        if drop_copy_blocked and not cb_is_red and not reduced_risk:
+                            cb_reason = "drop_copy_block — new entries suppressed pending reconcile"
+                        elif block_all_new_entries:
+                            cb_reason = "circuit breaker RED — new entries blocked"
+                        else:
+                            cb_reason = "circuit breaker YELLOW — spread entries blocked (qty 1→0)"
                         logger.warning("%s CB GATED: %s", strategy_name, cb_reason)
                         report_lines.append(f"**{strategy_name}** -- SKIPPED ({cb_reason})")
                     else:

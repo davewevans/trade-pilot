@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react'
+import { api, FillRealismResponse } from '../api/client'
+import { useFeatureFlags } from '../hooks/useFeatureFlags'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -182,6 +184,22 @@ export function StrategyHealth() {
   const [showDetail, setShowDetail] = useState(false)
   const [weekIndex, setWeekIndex] = useState(0) // 0 = most recent week
 
+  const featureFlags = useFeatureFlags()
+  const [fillRealism, setFillRealism] = useState<FillRealismResponse | null>(null)
+  const [fillRealismLoading, setFillRealismLoading] = useState(false)
+
+  useEffect(() => {
+    if (!featureFlags.shadow_execution_enabled) return
+    setFillRealismLoading(true)
+    api
+      .fillRealism()
+      .then((d) => {
+        setFillRealism(d)
+        setFillRealismLoading(false)
+      })
+      .catch(() => setFillRealismLoading(false))
+  }, [featureFlags.shadow_execution_enabled])
+
   const WEEKS_BACK = 12
 
   useEffect(() => {
@@ -251,6 +269,11 @@ export function StrategyHealth() {
 
   return (
     <div className="space-y-4">
+      {/* ── Fill Realism summary ──────────────────────────────────────────── */}
+      {featureFlags.shadow_execution_enabled && (
+        <FillRealismSection data={fillRealism} loading={fillRealismLoading} />
+      )}
+
       {/* ── Warning banner (always visible, not dismissible) ─────────────── */}
       <div
         className="rounded-lg p-4 text-sm leading-relaxed"
@@ -415,6 +438,161 @@ export function StrategyHealth() {
       <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
         Generated {data.generated_at} UTC · paper mode
       </p>
+    </div>
+  )
+}
+
+// ── Fill Realism section ──────────────────────────────────────────────────────
+
+function realismColor(pct: number, gatePct: number): string {
+  if (pct >= gatePct) return 'var(--green)'
+  if (pct >= gatePct - 20) return '#f59e0b'
+  return 'var(--red)'
+}
+
+function RealismCell({
+  pct,
+  sampleSize,
+  gateSample,
+  gatePct,
+}: {
+  pct: number | null
+  sampleSize: number
+  gateSample: number
+  gatePct: number
+}) {
+  if (sampleSize < gateSample) {
+    return (
+      <Td>
+        <span className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+          n={sampleSize}, insufficient data
+        </span>
+      </Td>
+    )
+  }
+  if (pct === null) {
+    return (
+      <Td>
+        <span style={{ color: 'var(--text-muted)' }}>—</span>
+      </Td>
+    )
+  }
+  return (
+    <Td>
+      <span style={{ color: realismColor(pct, gatePct), fontWeight: 600 }}>
+        {pct.toFixed(1)}%
+      </span>
+    </Td>
+  )
+}
+
+function FillRealismSection({
+  data,
+  loading,
+}: {
+  data: FillRealismResponse | null
+  loading: boolean
+}) {
+  return (
+    <div
+      className="rounded-lg p-4"
+      style={{ border: '1px solid var(--border)', backgroundColor: 'var(--bg-card)' }}
+    >
+      <h2 className="text-sm font-semibold mb-3" style={{ color: 'var(--text-primary)' }}>
+        Fill Realism (90-day)
+      </h2>
+      <p className="text-xs mb-3 leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+        Measures whether paper-submitted limit prices would have filled against the real NBBO
+        (ORATS primary, Alpaca fallback). A blended signal because paper limits use Alpaca's
+        15-min-delayed quotes but are measured against real-time NBBO at submission and follow-up
+        intervals.
+      </p>
+
+      {loading && (
+        <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
+          Loading fill realism data…
+        </p>
+      )}
+
+      {!loading && !data && (
+        <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
+          No fill realism data yet.
+        </p>
+      )}
+
+      {!loading && data && data.strategies.length === 0 && (
+        <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
+          No shadow executions recorded yet.
+        </p>
+      )}
+
+      {!loading && data && data.strategies.length > 0 && (
+        <div className="overflow-x-auto rounded-lg" style={{ border: '1px solid var(--border)' }}>
+          <table className="w-full border-collapse text-left">
+            <thead>
+              <tr style={{ backgroundColor: 'var(--bg-secondary)' }}>
+                <Th>Strategy</Th>
+                <Th title="Total snapshots in the window">Sample</Th>
+                <Th title="% fillable at T+2min (always_fillable + sometimes_fillable); excludes data_unavailable from denominator">
+                  T+2m realism
+                </Th>
+                <Th title="% fillable at EOD; excludes data_unavailable from denominator">
+                  EOD realism
+                </Th>
+                <Th title={`Gate: sample ≥ ${data.gate_sample} AND realism ≥ ${data.gate_pct}%`}>
+                  Gate
+                </Th>
+                <Th title="Snapshots where NBBO was unavailable or crossed — excluded from realism %">
+                  Data unavail.
+                </Th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.strategies.map((row) => (
+                <tr key={row.strategy_type} style={{ borderBottom: '1px solid var(--border)' }}>
+                  <Td style={{ fontWeight: 600 }}>{row.strategy_type}</Td>
+                  <Td>{row.sample_size}</Td>
+                  <RealismCell
+                    pct={row.t2m_realism_pct}
+                    sampleSize={row.sample_size}
+                    gateSample={data.gate_sample}
+                    gatePct={data.gate_pct}
+                  />
+                  <RealismCell
+                    pct={row.eod_realism_pct}
+                    sampleSize={row.eod_sample_size}
+                    gateSample={data.gate_sample}
+                    gatePct={data.gate_pct}
+                  />
+                  <Td>
+                    {row.gate_met ? (
+                      <span style={{ color: 'var(--green)', fontWeight: 600 }}>Pass</span>
+                    ) : (
+                      <span style={{ color: 'var(--red)' }}>Fail</span>
+                    )}
+                  </Td>
+                  <Td>
+                    {row.data_unavailable_count > 0 ? (
+                      <span style={{ color: 'var(--text-muted)' }}>
+                        {row.data_unavailable_count}
+                      </span>
+                    ) : (
+                      <span style={{ color: 'var(--text-muted)' }}>—</span>
+                    )}
+                  </Td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {!loading && data && (
+        <p className="text-xs mt-2" style={{ color: 'var(--text-muted)' }}>
+          Gate threshold: sample ≥ {data.gate_sample} · realism ≥ {data.gate_pct}% · green ≥{' '}
+          {data.gate_pct}% · yellow ≥ {data.gate_pct - 20}% · red &lt; {data.gate_pct - 20}%
+        </p>
+      )}
     </div>
   )
 }

@@ -7,12 +7,15 @@ class SkipGate(str, Enum):
     PRE_CHECK = "pre_check"
     GUARDRAIL = "guardrail"
     CIRCUIT_BREAKER = "circuit_breaker"
+    MACRO_EVENT = "macro_event"
     LIQUIDITY_FLOOR = "liquidity_floor"
     WINRATE_FLOOR = "winrate_floor"
     CLAUDE_SKIP = "claude_skip"
+    LLM_OUTPUT = "llm_output"
     NO_CANDIDATE = "no_candidate"
     DATA_MISSING = "data_missing"
     HALTED = "halted"
+    PORTFOLIO = "portfolio"
 
 
 class SkipReason(str, Enum):
@@ -41,14 +44,19 @@ class SkipReason(str, Enum):
     GUARDRAIL_SYMBOL_FORMAT = "guardrail_symbol_format"
     GUARDRAIL_SHARED_CAPITAL = "guardrail_shared_capital"
     GUARDRAIL_OTHER = "guardrail_other"
+    # macro event
+    MACRO_EVENT_PROXIMITY = "macro_event_proximity"
     # system
     CIRCUIT_BREAKER_RED = "circuit_breaker_red"
     CIRCUIT_BREAKER_YELLOW = "circuit_breaker_yellow"
     BOT_HALTED = "bot_halted"
+    DROP_COPY_BLOCK = "drop_copy_block"
     CLAUDE_SKIP = "claude_skip"
     CLAUDE_ERROR = "claude_error"
+    SCHEMA_INVALID = "schema_invalid"
     DATA_MISSING = "data_missing"
     UNKNOWN = "unknown"
+    ANTI_CROWDING_CROSS_ACCOUNT = "anti_crowding_cross_account"
 
 
 REASON_TO_GATE = {
@@ -73,11 +81,15 @@ REASON_TO_GATE = {
     SkipReason.GUARDRAIL_SYMBOL_FORMAT: SkipGate.GUARDRAIL,
     SkipReason.GUARDRAIL_SHARED_CAPITAL: SkipGate.GUARDRAIL,
     SkipReason.GUARDRAIL_OTHER: SkipGate.GUARDRAIL,
+    SkipReason.MACRO_EVENT_PROXIMITY: SkipGate.MACRO_EVENT,
     SkipReason.CIRCUIT_BREAKER_RED: SkipGate.CIRCUIT_BREAKER,
     SkipReason.CIRCUIT_BREAKER_YELLOW: SkipGate.CIRCUIT_BREAKER,
     SkipReason.BOT_HALTED: SkipGate.HALTED,
+    SkipReason.DROP_COPY_BLOCK: SkipGate.CIRCUIT_BREAKER,
     SkipReason.CLAUDE_SKIP: SkipGate.CLAUDE_SKIP,
     SkipReason.CLAUDE_ERROR: SkipGate.CLAUDE_SKIP,
+    SkipReason.SCHEMA_INVALID: SkipGate.LLM_OUTPUT,
     SkipReason.DATA_MISSING: SkipGate.DATA_MISSING,
     SkipReason.UNKNOWN: SkipGate.PRE_CHECK,
+    SkipReason.ANTI_CROWDING_CROSS_ACCOUNT: SkipGate.PORTFOLIO,
 }

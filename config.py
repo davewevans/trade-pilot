@@ -197,6 +197,16 @@ class Settings:
         # ntfy server URL. Defaults to the public ntfy.sh server.
         # Override for self-hosted deployments (e.g. "https://ntfy.example.com").
         self.NTFY_SERVER: str = os.getenv("NTFY_SERVER", "https://ntfy.sh")
+
+        # ── Clock drift fail-safe ──────────────────────────────
+        # Set CLOCK_DRIFT_HALT_ENABLED=false to disable the check entirely.
+        self.CLOCK_DRIFT_HALT_ENABLED: bool = os.getenv("CLOCK_DRIFT_HALT_ENABLED", "true").lower() == "true"
+        # Drift exceeding this threshold (in seconds, strict >) triggers a halt.
+        self.CLOCK_DRIFT_THRESHOLD_SECONDS: int = int(os.getenv("CLOCK_DRIFT_THRESHOLD_SECONDS", "30"))
+        # Per-attempt HTTP timeout when fetching reference time from Alpaca.
+        self.CLOCK_DRIFT_FETCH_TIMEOUT_SECONDS: float = float(os.getenv("CLOCK_DRIFT_FETCH_TIMEOUT_SECONDS", "3.0"))
+        # Number of fetch attempts before giving up and failing open.
+        self.CLOCK_DRIFT_FETCH_MAX_RETRIES: int = int(os.getenv("CLOCK_DRIFT_FETCH_MAX_RETRIES", "3"))
         # Controls severity of fill notifications.
         # "true" (default) → critical (immediate push); "false" → info (digest only).
         self.ALERT_FILLS: bool = os.getenv("ALERT_FILLS", "true").lower() == "true"
@@ -253,6 +263,74 @@ class Settings:
         # strategy list without touching any other configuration.
         self.TURNOVER_WHEEL_ENABLED: bool = (
             os.getenv("TURNOVER_WHEEL_ENABLED", "true").lower() == "true"
+        )
+
+        # ── Drop-copy reconciliation ──────────────────────────────────────────
+        # Kill switches. Both default to True for paper. Flip either to False
+        # to disable without code changes.
+        self.STARTUP_RECONCILE_ENABLED: bool = (
+            os.getenv("STARTUP_RECONCILE_ENABLED", "true").lower() == "true"
+        )
+        self.DROP_COPY_RECONCILE_ENABLED: bool = (
+            os.getenv("DROP_COPY_RECONCILE_ENABLED", "true").lower() == "true"
+        )
+
+        # Enforcement mode:
+        #   "log_only" → compute diffs, write report, NEVER overwrite local state
+        #                and NEVER write HALTED.lock. First-week default.
+        #   "enforce"  → overwrite local state on mismatch; HALT above threshold.
+        # Flip to "enforce" only after one week of clean log-only runs.
+        self.DROP_COPY_ENFORCEMENT_MODE: str = os.getenv(
+            "DROP_COPY_ENFORCEMENT_MODE", "log_only"
+        ).lower()
+
+        # Thresholds — all USD unless suffixed _PCT.
+        # Position value mismatch that triggers YELLOW + ntfy (enforce mode).
+        self.DROP_COPY_POS_MISMATCH_USD: float = float(
+            os.getenv("DROP_COPY_POS_MISMATCH_USD", "100")
+        )
+        self.DROP_COPY_POS_MISMATCH_PCT: float = float(
+            os.getenv("DROP_COPY_POS_MISMATCH_PCT", "1.0")
+        )
+        # Cash mismatch that triggers YELLOW + ntfy (enforce mode).
+        self.DROP_COPY_CASH_MISMATCH_USD: float = float(
+            os.getenv("DROP_COPY_CASH_MISMATCH_USD", "100")
+        )
+        # Startup reconcile HALT threshold. Cumulative abs(position value delta)
+        # across all accounts above this → write HALTED.lock (enforce mode).
+        self.STARTUP_RECONCILE_HALT_THRESHOLD_USD: float = float(
+            os.getenv("STARTUP_RECONCILE_HALT_THRESHOLD_USD", "500")
+        )
+        # Grace: mismatch must be observed on N consecutive drop-copy cycles
+        # before any enforcement action. Tolerates snapshot-write / reconcile-read
+        # races. 2 means "seen twice in a row, ~5–10 min apart."
+        self.DROP_COPY_GRACE_CYCLES: int = int(
+            os.getenv("DROP_COPY_GRACE_CYCLES", "2")
+        )
+
+        # ── Cross-account anti-crowding ────────────────────────
+        # Blocks net-new entries when the same directional-risk family is already
+        # open on the same underlying in another account. Management actions
+        # (roll, close) are never blocked. Kill switch: set to "false" to bypass
+        # the pre-check while keeping book_exposure visible in Claude context.
+        self.CROSS_ACCOUNT_ANTI_CROWDING_ENABLED: bool = (
+            os.getenv("CROSS_ACCOUNT_ANTI_CROWDING_ENABLED", "true").lower() == "true"
+        )
+
+        # ── Macro event block ─────────────────────────────────
+        # Hard-blocks new entries the day of and the trading day before any Tier 1
+        # macro event (FOMC, CPI, NFP) listed in data/macro_events.json.
+        # Management cycles (rolls, closes) are never blocked.
+        self.MACRO_EVENT_BLOCK_ENABLED: bool = (
+            os.getenv("MACRO_EVENT_BLOCK_ENABLED", "true").lower() == "true"
+        )
+
+        # ── Fill realism / shadow execution ───────────────────
+        # Measurement-only NBBO capture around every order submit.
+        # When false, all shadow_execution code is a no-op — no DB writes,
+        # no ORATS calls, no schedule job activity.
+        self.SHADOW_EXECUTION_ENABLED: bool = (
+            os.getenv("SHADOW_EXECUTION_ENABLED", "true").lower() == "true"
         )
 
         # Create required directories
@@ -342,6 +420,59 @@ class Settings:
         "long_call_vertical":  ("ALPACA_PAPER1_API_KEY", "ALPACA_PAPER1_SECRET_KEY"),
         "iron_butterfly":      ("ALPACA_PAPER4_API_KEY", "ALPACA_PAPER4_SECRET_KEY"),
         "calendar_spread":     ("ALPACA_PAPER5_API_KEY", "ALPACA_PAPER5_SECRET_KEY"),
+    }
+
+    # Maps each strategy_type to the directional-risk families it occupies.
+    # A strategy may occupy multiple families (iron_condor is both short_put AND
+    # short_call — its put side and call side are in separate families).
+    # `same_underlying_peers` is the list of strategy_types allowed to coexist
+    # on the same underlying within that family (e.g. wheel + turnover_wheel by
+    # design, to support side-by-side variant comparison on the same watchlist).
+    #
+    # NOTE: adaptive_spreads is intentionally NOT in this map. At runtime,
+    # positions opened by the adaptive_spreads composite strategy carry the
+    # concrete sub-strategy name (bull_put_spread / bear_call_spread /
+    # long_call_vertical), not "adaptive_spreads". check_anti_crowding() raises
+    # ValueError if an unknown strategy_type is ever passed in.
+    DIRECTIONAL_FAMILY_MAP: dict[str, dict] = {
+        "wheel": {
+            "families": ["short_put"],
+            "same_underlying_peers": {"short_put": ["turnover_wheel"]},
+        },
+        "turnover_wheel": {
+            "families": ["short_put"],
+            "same_underlying_peers": {"short_put": ["wheel"]},
+        },
+        "bull_put_spread": {
+            "families": ["short_put"],
+            "same_underlying_peers": {"short_put": []},
+        },
+        "bear_call_spread": {
+            "families": ["short_call"],
+            "same_underlying_peers": {"short_call": []},
+        },
+        "iron_condor": {
+            "families": ["short_put", "short_call"],
+            "same_underlying_peers": {"short_put": [], "short_call": []},
+        },
+        "iron_butterfly": {
+            "families": ["short_put", "short_call"],
+            "same_underlying_peers": {"short_put": [], "short_call": []},
+        },
+        "long_call_vertical": {
+            "families": ["long_directional"],
+            "same_underlying_peers": {"long_directional": []},
+        },
+        # Calendar spread is vega-positive, theta-positive, delta-neutral at
+        # entry — fundamentally a vol play, not a directional one. Not
+        # classified into any family until live data tells us what crowding
+        # looks like for vol plays. Until then: it blocks nothing, nothing
+        # blocks it. Revisit after calendar_spread goes active and accumulates
+        # decisions.
+        "calendar_spread": {
+            "families": [],
+            "same_underlying_peers": {},
+        },
     }
 
     # Turnover Wheel position sizing (differs from standard wheel)
@@ -521,6 +652,17 @@ SCHEDULE: list[dict] = [
             "equity balances, open positions, circuit breaker status, and spread reconciliation."
         ),
     },
+    {
+        "job": "drop_copy_reconcile",
+        "type": "interval",
+        "interval_minutes": 5,
+        "label": "Drop-copy reconcile",
+        "description": (
+            "Compares SQLite/local state against Alpaca broker truth every 5 minutes "
+            "during market hours. Log-only mode by default; in enforce mode, triggers "
+            "YELLOW or RED on mismatches."
+        ),
+    },
     # ── Weekly job ───────────────────────────────────────────────────────────
     {
         "job": "weekly_report",
@@ -532,6 +674,17 @@ SCHEDULE: list[dict] = [
         "description": (
             "Generates and emails the weekly performance summary: "
             "P&L, win rate, strategy breakdown, and circuit breaker events."
+        ),
+    },
+    # ── Shadow execution follow-up capture (interval, weekdays) ─────────────
+    {
+        "job": "shadow_capture",
+        "type": "interval",
+        "interval_minutes": 1,
+        "label": "Shadow execution capture",
+        "description": (
+            "Follow-up NBBO capture for pending shadow-execution rows. "
+            "Measurement-only; no order side effects."
         ),
     },
     # ── Daily maintenance job ────────────────────────────────────────────────
@@ -562,6 +715,15 @@ SCHEDULE: list[dict] = [
 ]
 
 settings = Settings()
+
+
+# ── Fill-realism gate thresholds (PROVISIONAL) ─────────────────────────────────
+# Empirical, not theoretical. At n=100, the standard error on a true 80% rate is
+# ±4% (95% CI ≈ 72–88%), which is tight enough for a go/no-go gate but narrow
+# enough that these should be revisited once the first strategy crosses 100
+# closed trades and we see what the realised distribution looks like.
+FILL_REALISM_GATE_SAMPLE: int = 100
+FILL_REALISM_GATE_PCT: float = 80.0
 
 
 # ── Claude API pricing ────────────────────────────────────────────────────────

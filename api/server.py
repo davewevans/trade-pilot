@@ -642,7 +642,37 @@ def health():
         "version_date": settings.VERSION_DATE,
         # Feature flags — read by the frontend on each 30s health poll.
         "strategy_health_enabled": settings.STRATEGY_HEALTH_PAGE_ENABLED,
+        "shadow_execution_enabled": settings.SHADOW_EXECUTION_ENABLED,
     }
+
+
+@app.get("/api/fill-realism")
+def fill_realism(days: int = Query(90, ge=1, le=365)):
+    """Per-strategy fill-realism aggregates over the last N days.
+
+    Paper-trading context: score is a blended signal — limits were set
+    using Alpaca delayed quotes and measured against ORATS real-time NBBO.
+    See data/shadow_execution.py module docstring for the full caveat.
+
+    Returns 404 when SHADOW_EXECUTION_ENABLED is False.
+    """
+    if not settings.SHADOW_EXECUTION_ENABLED:
+        return JSONResponse(status_code=404, content={"error": "not found"})
+    conn = _open_db()
+    if conn is None:
+        return JSONResponse(status_code=503, content={"error": "database unavailable"})
+    try:
+        from database.repositories.shadow_execution import ShadowExecutionRepository
+        from config import FILL_REALISM_GATE_SAMPLE, FILL_REALISM_GATE_PCT
+        repo = ShadowExecutionRepository(conn)
+        strategies = repo.get_fill_realism_aggregates(since_days=days)
+        return {
+            "strategies": strategies,
+            "gate_sample": FILL_REALISM_GATE_SAMPLE,
+            "gate_pct": FILL_REALISM_GATE_PCT,
+        }
+    finally:
+        conn.close()
 
 
 @app.get("/api/halt-status")
@@ -861,6 +891,20 @@ def portfolio_greeks(account: str | None = Query(default=None)):
         return compute_portfolio_greeks(account_id=account or None)
     except Exception:
         logger.exception("portfolio-greeks failed")
+        return JSONResponse(status_code=500, content={"error": "aggregation failed"})
+
+
+@app.get("/api/book-exposure")
+def book_exposure():
+    """Return the current cross-account book-exposure view.
+
+    Derived from strategy state files; no broker API calls.
+    """
+    try:
+        from data.book_exposure import compute_cross_account_book_exposure
+        return compute_cross_account_book_exposure()
+    except Exception:
+        logger.exception("book-exposure failed")
         return JSONResponse(status_code=500, content={"error": "aggregation failed"})
 
 

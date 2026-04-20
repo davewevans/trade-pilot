@@ -407,6 +407,77 @@ _SCHEMA_STATEMENTS: tuple[str, ...] = (
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_jsc_score_id ON judge_spot_checks(decision_score_id)",
+    # ── shadow_executions ────────────────────────────────────────────────────
+    # Measurement-only NBBO capture around every order submit.
+    # Statuses: 'pending' | 'captured' | 'failed_retryable' | 'failed_permanent'
+    # Classifications: 'always_fillable' | 'sometimes_fillable' | 'not_fillable' | 'data_unavailable'
+    """
+    CREATE TABLE IF NOT EXISTS shadow_executions (
+        id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+        submitted_at        TEXT NOT NULL,
+        submitted_at_et     TEXT NOT NULL,
+        strategy_type       TEXT NOT NULL,
+        action              TEXT NOT NULL,
+        underlying          TEXT,
+        alpaca_order_id     TEXT,
+        order_kind          TEXT NOT NULL,
+        is_credit           INTEGER NOT NULL,
+        net_limit_abs       REAL NOT NULL,
+
+        t0_status           TEXT NOT NULL DEFAULT 'pending',
+        t0_attempts         INTEGER NOT NULL DEFAULT 0,
+        t0_class            TEXT,
+        t0_net_bid          REAL, t0_net_mid  REAL, t0_net_ask  REAL, t0_captured_at  TEXT,
+
+        t30s_status         TEXT NOT NULL DEFAULT 'pending',
+        t30s_attempts       INTEGER NOT NULL DEFAULT 0,
+        t30s_class          TEXT,
+        t30s_net_bid        REAL, t30s_net_mid REAL, t30s_net_ask REAL, t30s_captured_at TEXT,
+
+        t2m_status          TEXT NOT NULL DEFAULT 'pending',
+        t2m_attempts        INTEGER NOT NULL DEFAULT 0,
+        t2m_class           TEXT,
+        t2m_net_bid         REAL, t2m_net_mid  REAL, t2m_net_ask  REAL, t2m_captured_at  TEXT,
+
+        t15m_status         TEXT NOT NULL DEFAULT 'pending',
+        t15m_attempts       INTEGER NOT NULL DEFAULT 0,
+        t15m_class          TEXT,
+        t15m_net_bid        REAL, t15m_net_mid REAL, t15m_net_ask REAL, t15m_captured_at TEXT,
+
+        eod_status          TEXT NOT NULL DEFAULT 'pending',
+        eod_attempts        INTEGER NOT NULL DEFAULT 0,
+        eod_class           TEXT,
+        eod_net_bid         REAL, eod_net_mid  REAL, eod_net_ask  REAL, eod_captured_at  TEXT,
+        eod_source_detail   TEXT,
+
+        completed           INTEGER NOT NULL DEFAULT 0
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_shadow_t30s_due  ON shadow_executions(t30s_status, submitted_at)",
+    "CREATE INDEX IF NOT EXISTS idx_shadow_t2m_due   ON shadow_executions(t2m_status, submitted_at)",
+    "CREATE INDEX IF NOT EXISTS idx_shadow_t15m_due  ON shadow_executions(t15m_status, submitted_at)",
+    "CREATE INDEX IF NOT EXISTS idx_shadow_eod_due   ON shadow_executions(eod_status, submitted_at)",
+    "CREATE INDEX IF NOT EXISTS idx_shadow_strat_sub ON shadow_executions(strategy_type, submitted_at)",
+    # ── shadow_execution_legs ────────────────────────────────────────────────
+    """
+    CREATE TABLE IF NOT EXISTS shadow_execution_legs (
+        id                INTEGER PRIMARY KEY AUTOINCREMENT,
+        shadow_exec_id    INTEGER NOT NULL,
+        contract_symbol   TEXT NOT NULL,
+        leg_role          TEXT NOT NULL,
+        side              TEXT NOT NULL,
+        position_intent   TEXT,
+
+        t0_bid   REAL, t0_ask   REAL, t0_mid   REAL, t0_source   TEXT,
+        t30s_bid REAL, t30s_ask REAL, t30s_mid REAL, t30s_source TEXT,
+        t2m_bid  REAL, t2m_ask  REAL, t2m_mid  REAL, t2m_source  TEXT,
+        t15m_bid REAL, t15m_ask REAL, t15m_mid REAL, t15m_source TEXT,
+        eod_bid  REAL, eod_ask  REAL, eod_mid  REAL, eod_source  TEXT,
+
+        FOREIGN KEY (shadow_exec_id) REFERENCES shadow_executions(id)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_shadow_legs_exec ON shadow_execution_legs(shadow_exec_id)",
 )
 
 

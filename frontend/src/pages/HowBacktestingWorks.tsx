@@ -570,92 +570,43 @@ export function HowBacktestingWorks() {
         </Card>
       </div>
 
-      {/* ── Section 7: Live Decision Connection ─────────────────────── */}
-      <SectionHeader>How Backtests Feed Into Live Decisions</SectionHeader>
+      {/* ── Section 7: What the Backtester Powers ───────────────────── */}
+      <SectionHeader>What the Backtester Powers</SectionHeader>
       <P>
-        The backtester is both a research tool and a live intelligence system. The following
-        features are implemented and actively feeding data into Claude's decision-making context:
+        The backtester generates data that flows into two downstream systems. The Sunday sweep
+        writes per-symbol and per-regime win rates to the database; those stats feed the /research
+        Win Rate Heatmap and the pre-check win-rate multiplier that gates candidates before
+        Claude is ever called. Claude does not receive backtest stats directly in its prompt —
+        the gating runs in code, upstream of the decision.
       </P>
 
-      <div className="grid gap-4 md:grid-cols-2">
-        <Card topAccent="var(--green)">
-          <div
-            className="text-[10px] uppercase tracking-wider font-semibold mb-2"
-            style={{ color: 'var(--green)' }}
-          >
-            Live
-          </div>
-          <CardTitle>Weekly Pre-Computed Stats</CardTitle>
-          <P>
-            Every Sunday at 5:00 PM ET, the bot automatically runs backtests across the full
-            watchlist for each active strategy. Results are persisted to the database and cached
-            as a summary snapshot. When Claude evaluates a trade on Monday morning, its context
-            includes the historical win rate, average P&amp;L, and Sharpe ratio from these
-            backtests. For example: "Bull put spreads on SPY with these parameters have a 68%
-            win rate over 423 historical trades (Sharpe: 1.24)." This gives Claude a statistical
-            baseline backed by ORATS data with realistic slippage modeling. The context builder
-            injects this data as the <code className="font-mono text-xs">backtest_stats</code>{' '}
-            field.
-          </P>
-        </Card>
-        <Card topAccent="var(--green)">
-          <div
-            className="text-[10px] uppercase tracking-wider font-semibold mb-2"
-            style={{ color: 'var(--green)' }}
-          >
-            Live
-          </div>
-          <CardTitle>Similar Trade Matching</CardTitle>
-          <P>
-            When the bot finds a specific candidate — say SPY bull put spread, IVR 48, delta
-            -0.25, 28 DTE — it searches the backtest trade database for the 5 most similar
-            historical trades using a weighted distance metric across IVR, delta, DTE, regime,
-            and VIX. Their individual outcomes are included in Claude's context: "Three of five
-            similar trades were profitable. Winners averaged +$71, losers averaged -$215. Both
-            losers occurred during VIX spikes above 25." Claude factors in whether today's
-            conditions look more like the winners or the losers.
-          </P>
-        </Card>
-        <Card topAccent="var(--green)">
-          <div
-            className="text-[10px] uppercase tracking-wider font-semibold mb-2"
-            style={{ color: 'var(--green)' }}
-          >
-            Live
-          </div>
-          <CardTitle>Environment Matching</CardTitle>
-          <P>
-            At decision time, the bot queries the backtest database filtered by conditions
-            matching the current market environment — IVR range, market regime, SMA position,
-            and VIX level. This provides aggregate statistics: "In similar conditions (IVR 40-55,
-            VIX 16-22, above 50-SMA), SPY bull put spreads had a 74% win rate across 89
-            historical trades." This is broader than Similar Trade Matching — it gives a
-            statistical overview of how the strategy performs in this type of environment.
-          </P>
-        </Card>
-        <Card topAccent="var(--green)">
-          <div
-            className="text-[10px] uppercase tracking-wider font-semibold mb-2"
-            style={{ color: 'var(--green)' }}
-          >
-            Live
-          </div>
-          <CardTitle>Backtest vs Reality</CardTitle>
-          <P>
-            The bot compares its actual live trading performance to what the backtest predicted
-            for the same strategy, symbol, and conditions. If backtests predicted a 68% win rate
-            but live trading shows 45%, the gap is flagged in Claude's context and in the weekly
-            report. Severity levels (LOW/MODERATE/HIGH) help Claude calibrate its confidence.
-            Early on, most gaps will show HIGH severity due to small sample sizes — this is
-            expected and the bot accounts for it.
-          </P>
-        </Card>
-      </div>
+      <Card topAccent="var(--accent)">
+        <div
+          className="text-[10px] uppercase tracking-wider font-semibold mb-2"
+          style={{ color: 'var(--accent)' }}
+        >
+          Upstream Gate
+        </div>
+        <CardTitle>Weekly Pre-Computed Stats</CardTitle>
+        <P>
+          Every Sunday at 5:00 PM ET, the bot automatically runs backtests across the full
+          watchlist for each active strategy. Results are persisted to the database as
+          per-symbol and per-regime win-rate summaries. These stats are consumed by two systems:
+          the <strong>/research Win Rate Heatmap</strong> (operator visibility) and the{' '}
+          <strong>pre-check win-rate multiplier</strong>, which boosts, downranks, or
+          hard-rejects candidates before Claude is called. The context builder does not inject a{' '}
+          <code className="font-mono text-xs">backtest_stats</code> field — candidates that
+          reach Claude have already passed the win-rate gate.
+        </P>
+      </Card>
 
       <Callout>
-        You can explore all four of these intelligence features interactively at{' '}
-        <strong>Research → Backtest Intel</strong>. The page shows live environment match results,
-        similar trade lookups, and the full backtest vs. reality comparison table.
+        The <strong>Research → Backtest Intel</strong> page is scaffolded with three
+        operator-facing lookup tools — similar-trade lookup, environment match, and
+        backtest-vs-reality comparison — but none of the three API endpoints have a backend
+        implementation yet. When they ship, this page will surface how historical backtest data
+        relates to current trading conditions. None of these features currently inject data into
+        Claude's prompt.
       </Callout>
 
       {/* ── Section 8: Limitations ──────────────────────────────────── */}

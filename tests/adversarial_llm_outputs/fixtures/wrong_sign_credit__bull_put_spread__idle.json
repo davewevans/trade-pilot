@@ -1,0 +1,54 @@
+{
+  "id": "wrong_sign_credit__bull_put_spread__idle",
+  "description": "Bull put spread IDLE: schema-valid OPEN payload where limit_price is POSITIVE (+0.85). Credit spreads must have a negative limit_price (net credit received). Parse passes; validate_bull_put_spread_entry rejects on the sign check.",
+  "failure_mode": "semantic_sign_violation",
+  "advisor": {
+    "method": "ask_spread",
+    "strategy_type": "bull_put_spread",
+    "phase": "idle"
+  },
+  "mocked_api": {
+    "stop_reason": "end_turn",
+    "response_payload": {
+      "action": "OPEN",
+      "short_put_symbol": "AAPL260524P00200000",
+      "long_put_symbol": "AAPL260524P00195000",
+      "expiration": "2026-05-24",
+      "dte": 35,
+      "short_put_strike": 200.0,
+      "long_put_strike": 195.0,
+      "net_credit": 0.85,
+      "max_loss": 415.0,
+      "limit_price": 0.85,
+      "reasoning": {
+        "macro": "Market stable, bull trend intact",
+        "fundamental": "AAPL strong, earnings 45 days out",
+        "technical": "Above 200MA, RSI neutral",
+        "volatility": "IVR at 52 — premium selling conditions met",
+        "selection": "200/195 put spread, 35 DTE, $0.85 credit",
+        "risk": "Max loss $415, within per-trade limits"
+      },
+      "confidence": "high",
+      "skip_reason": null
+    }
+  },
+  "context": {},
+  "guardrail_args": {
+    "account": {"buying_power": 100000},
+    "context": {"fundamentals": {"days_to_earnings": 45}},
+    "open_spreads": []
+  },
+  "assertions": {
+    "safe_skip_triggered": false,
+    "parse_layer": {
+      "should_raise": false,
+      "returned_action": "OPEN",
+      "returned_skip_reason_contains": null
+    },
+    "guardrail_layer": {
+      "should_validate": false,
+      "rejection_reason_contains": ["negative", "credit"],
+      "classify_rejection_to": "OTHER"
+    }
+  }
+}

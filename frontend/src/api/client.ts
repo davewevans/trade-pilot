@@ -358,8 +358,30 @@ export interface SpotCheckSubmitResponse {
   }
 }
 
+export interface FillRealismRow {
+  strategy_type: string
+  sample_size: number
+  always_count: number
+  sometimes_count: number
+  not_fillable_count: number
+  data_unavailable_count: number
+  t2m_realism_pct: number | null
+  eod_sample_size: number
+  eod_realism_pct: number | null
+  gate_met: boolean
+}
+
+export interface FillRealismResponse {
+  strategies: FillRealismRow[]
+  gate_sample: number
+  gate_pct: number
+}
+
 export const api = {
   health: () => get<HealthStatus>('/api/health'),
+
+  fillRealism: (days = 90) =>
+    get<FillRealismResponse>(`/api/fill-realism?days=${days}`),
 
   portfolio: (account?: string) =>
     get<Portfolio>(`/api/portfolio${account ? `?account=${account}` : ''}`),

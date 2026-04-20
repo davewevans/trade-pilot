@@ -333,6 +333,105 @@ export function ClaudesPlaybook() {
         ))}
       </div>
 
+      {/* Section 6b: Macro Calendar */}
+      <SectionHeader>Macro Calendar</SectionHeader>
+      <Card>
+        <CardTitle>Tier 1 macro events modify entry, management, and closure behavior.</CardTitle>
+        <CardBody>
+          Every context package includes a{' '}
+          <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>next_macro_event</span> field
+          showing the nearest upcoming FOMC rate decision, CPI release, or Non-Farm Payrolls — with
+          hours-until and trading-day-proximity flags. New entries are blocked the day of and the trading
+          day before any Tier 1 event. This block fires before Claude is called, so Claude never sees
+          candidates on restricted days. Management of existing positions is never blocked.
+        </CardBody>
+        <Callout>
+          For positions opened within 3 trading days of an upcoming Tier 1 event, Claude takes profit at
+          30% of initial credit rather than the usual 50%, prefers rolling the position further from price,
+          and treats a Tier 1 event falling inside the position's DTE window as a strong argument for early
+          closure. Tier 1 events historically drive 1–2% single-session moves — a position structured
+          without pricing in an imminent event is carrying mispriced risk.
+        </Callout>
+      </Card>
+      <p className="text-xs mt-2" style={{ color: 'var(--text-muted)' }}>
+        In progress — scoped but not yet shipped. Kill switch:{' '}
+        <code className="text-xs font-mono">MACRO_EVENT_BLOCK_ENABLED</code> (default{' '}
+        <code className="text-xs font-mono">true</code>).
+      </p>
+
+      {/* Section 6c: Cross-Account Anti-Crowding */}
+      <SectionHeader>Cross-Account Anti-Crowding</SectionHeader>
+      <Card>
+        <CardTitle>
+          New entries that would stack the same directional risk on the same underlying are blocked before
+          Claude is called.
+        </CardTitle>
+        <CardBody>
+          Every context package includes a{' '}
+          <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>book_exposure</span> field
+          showing positions across all accounts, grouped by underlying and directional-risk family. A wheel
+          cash-secured put on AAPL and a bull put spread on AAPL are the same directional bet — only one
+          runs at a time. The block fires at the candidate pre-check stage, before Claude sees the
+          candidate at all.
+        </CardBody>
+        <CardBody>
+          One exception: Standard Wheel and Turnover Wheel are explicitly allowed to co-exist on the same
+          underlying. This preserves the comparative experiment between the two variants — blocking one
+          would silently invalidate the test. An open iron condor occupies both short-put and short-call
+          families simultaneously on its underlying, so it blocks both a new wheel put and a new bear call
+          spread on the same name.
+        </CardBody>
+        <Callout>
+          Without cross-account visibility, each per-account Claude call had zero knowledge of what the
+          other accounts were carrying. The bot could silently double or triple correlated short-put
+          exposure across accounts with no diversification benefit. Cross-account anti-crowding closes this
+          gap — it is the largest single decision-quality improvement in the current architecture.
+        </Callout>
+      </Card>
+      <p className="text-xs mt-2" style={{ color: 'var(--text-muted)' }}>
+        Planned — scoped, not yet started. Kill switch:{' '}
+        <code className="text-xs font-mono">CROSS_ACCOUNT_ANTI_CROWDING_ENABLED</code> (default{' '}
+        <code className="text-xs font-mono">true</code>).
+      </p>
+
+      {/* Section 6d: Historical Win-Rate Scoring */}
+      <SectionHeader>Historical Win-Rate Scoring</SectionHeader>
+      <Card>
+        <CardTitle>
+          Candidates are ranked by historical win rate at the (symbol, strategy) level — not just by
+          liquidity.
+        </CardTitle>
+        <CardBody>
+          Research metadata for each candidate includes a{' '}
+          <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>win_rate</span> field drawn from
+          a weekly ORATS backtest sweep over the most recent 6 months. A bounded multiplier (0.8× to 1.2×,
+          no hard exclusion) combines with the existing Phase 1 liquidity multiplier at the candidate
+          pre-check stage. Higher historical performers rank up; lower performers rank down. When the
+          sample size for a (symbol, strategy) pair is below the threshold, the multiplier returns neutral.
+        </CardBody>
+        <CardBody>
+          Claude sees this as ranked context — something like:{' '}
+          <em style={{ color: 'var(--text-primary)' }}>
+            "Tier A liquidity symbol with 64% historical win rate at our parameters"
+          </em>{' '}
+          versus{' '}
+          <em style={{ color: 'var(--text-primary)' }}>
+            "Tier A liquidity but only 42% win rate historically — weaker than it looks."
+          </em>
+        </CardBody>
+        <Callout>
+          Backtests assume mid-price fills. Treat win rates as relative rankings between symbols and
+          strategies, not as absolute expected win rates. This is the only roadmap feature that adds a
+          genuinely new high-quality signal to Claude's input — every other improvement either removes bad
+          inputs or measures what is already happening.
+        </Callout>
+      </Card>
+      <p className="text-xs mt-2" style={{ color: 'var(--text-muted)' }}>
+        Planned — Phase 2 of the research layer; Phase 1 liquidity scoring is already live. Kill switch:{' '}
+        <code className="text-xs font-mono">RESEARCH_WINRATE_MULTIPLIER_ENABLED</code> (default{' '}
+        <code className="text-xs font-mono">false</code> initially — log-only before enforcing).
+      </p>
+
       {/* Section 7: What Claude Does NOT Know */}
       <SectionHeader>What Claude Does NOT Know</SectionHeader>
       <Card>
