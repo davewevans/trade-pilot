@@ -128,6 +128,7 @@ export interface HealthStatus {
   version?: string
   version_date?: string
   strategy_health_enabled?: boolean
+  shadow_execution_enabled?: boolean
 }
 
 export interface HaltInfo {
