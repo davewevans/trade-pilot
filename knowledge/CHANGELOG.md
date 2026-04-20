@@ -19,7 +19,38 @@ exists and revisit decisions later.
 
 ## [Unreleased]
 
+### Operator notes
+- Before the next deploy, set `RESEARCH_WINRATE_MULTIPLIER_ENABLED=false`
+  in Render environment variables. After the first successful Sunday
+  weekly_research sweep, verify that `symbol_strategy_stats` contains
+  rows via `/api/research/winrate/symbol-stats`. Review the multiplier
+  distribution. When comfortable, flip to `true` and redeploy.
+
+### Added
+- `weekly_research` job is now scheduled (Sunday 11:00 ET). It was
+  previously CLI-only, which left `symbol_strategy_stats` and
+  `regime_strategy_stats` unpopulated since the feature shipped.
+
+### Fixed
+- Research sweep recomputes stats on any run that primed ≥ 1 pair,
+  not only when the full watchlist is primed. The old gate meant
+  partial runs across multiple Sundays never populated the stats
+  tables — the win-rate multiplier was effectively disabled for all
+  strategies since launch.
+
 ### Changed
+- `prompts/system.md` — corrected wheel/spread `_research` asymmetry
+  description. Wheel strategies attach three `_research` keys (liquidity,
+  winrate, combined_multiplier) — they do not, as previously stated,
+  attach only liquidity. The true asymmetry is one key (`final_score`),
+  structural to the difference between `evaluate_entry_liquidity` and
+  `pre_check_entry`.
+- `prompts/system.md` gains an "Interpreting the `_research` Fields"
+  section that documents the existing liquidity and win-rate multiplier
+  tiers, confidence levels, and how Claude should use them. No new data
+  exposed to Claude; this only explains fields that were already
+  reaching the user message. Aligned with design principle R8 — does
+  not expose the raw stats behind the multipliers.
 - `frontend/src/pages/HowBacktestingWorks.tsx` Section 7 rewritten. Header renamed
   from "How Backtests Feed Into Live Decisions" to "What the Backtester Powers". The
   four "Live"-badged cards that falsely claimed Claude's context includes `backtest_stats`,

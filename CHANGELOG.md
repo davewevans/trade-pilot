@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `weekly_research` job added to the scheduler; runs Sunday 11:00 ET
+  and executes the 4-phase research pipeline (liquidity scan, backtest
+  sweep, watchlist recommendations, outcome computation). Previously
+  defined but never scheduled, leaving `symbol_strategy_stats` and
+  `regime_strategy_stats` empty.
+
+### Fixed
+- Research sweep now recomputes `symbol_strategy_stats` and
+  `regime_strategy_stats` on any run that primed new pairs, not only
+  when the full watchlist is primed. Previous behavior meant partial
+  weekly runs silently left the stats tables empty.
+
+### Changed
+- `RESEARCH_WINRATE_MULTIPLIER_ENABLED` default in `.env.example`
+  flipped from `true` to `false`. Will be flipped back to `true` after
+  the operator verifies the first scheduled sweep populated stats
+  correctly.
+
+### Fixed
+- `prompts/system.md` — corrected the "Interpreting the `_research`
+  Fields" section, which incorrectly stated that wheel entries omit
+  `_research.winrate` and `_research.combined_multiplier`. Both are
+  attached by `WheelStrategy` and `TurnoverWheelStrategy` since commit
+  ce112b4. The actual asymmetry is a single field (`final_score`), which
+  spread `pre_check_entry` attaches and wheel `evaluate_entry_liquidity`
+  does not.
+
+### Changed
+- `prompts/system.md` — added "Interpreting the `_research` Fields"
+  section explaining the liquidity and win-rate multipliers that
+  strategies already attach to context. Prompt-only change; no data
+  wiring.
+
 ## [1.9.3] - 2026-04-20
 
 ### Added

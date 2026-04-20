@@ -26,7 +26,12 @@
       "Bash(py -c \"import ast; ast.parse\\(open\\('data/market_data.py'\\).read\\(\\)\\); print\\('syntax OK'\\)\")",
       "Bash(py:*)",
       "Bash(xargs grep:*)",
-      "Skill(claude-api)"
+      "Skill(claude-api)",
+      "PowerShell(& \"venv\\\\Scripts\\\\pytest.exe\" tests\\\\ -q --tb=short 2>&1 | Select-Object -Last 30)",
+      "PowerShell(& \"venv\\\\Scripts\\\\pytest.exe\" tests\\\\ -q --tb=short | Out-String)",
+      "PowerShell($result = & \"venv\\\\Scripts\\\\pytest.exe\" tests\\\\ -q --tb=short 2>&1; $result | ForEach-Object { $_.ToString\\(\\) })",
+      "PowerShell(Remove-Item *)",
+      "PowerShell(Set-Location \"C:\\\\Users\\\\davew\\\\repos\\\\trade-pilot\"; $result = & venv\\\\Scripts\\\\python.exe -m pytest tests\\\\research\\\\backtesting\\\\test_sweep.py -v --tb=short --no-header 2>&1; $result | ForEach-Object { $_.ToString\\(\\) })"
     ]
   }
 }

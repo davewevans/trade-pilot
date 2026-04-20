@@ -36,6 +36,7 @@ from jobs import (
     pre_market,
     shadow_capture,
     weekly_report,
+    weekly_research,
 )
 
 logger = logging.getLogger("trade-pilot.scheduler")
@@ -174,6 +175,7 @@ def register_jobs() -> None:
         "drop_copy_reconcile": drop_copy_reconcile.run,
         "shadow_capture": shadow_capture.run,
         "weekly_report": weekly_report.run,
+        "weekly_research": weekly_research.run,
         "monthly_evaluation": _monthly_eval_wrapper,
         "orats_cache_cleanup": _cleanup_orats_cache,
     }

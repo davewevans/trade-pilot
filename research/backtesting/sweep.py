@@ -701,8 +701,15 @@ class BacktestSweep:
             and all_progress[(sym, strat)]["last_primed_at"] >= reprime_cutoff
             for sym in full_list for strat in strategies
         )
-        if all_primed and full_list and strategies:
-            logger.info("All pairs primed — recomputing backtest stats")
+        # Recompute stats if this run primed any pairs. Even partial primes
+        # advance the table — incomplete watchlists are better than empty
+        # tables. Guard against empty inputs so recompute is never called with
+        # zero work.
+        if pairs_primed > 0 and full_list and strategies:
+            logger.info(
+                "Recomputing backtest stats (%d pair(s) primed this run; all_primed=%s)",
+                pairs_primed, all_primed,
+            )
             try:
                 stats_result = self.recompute_symbol_stats(lookback_years)
                 regime_result = self.recompute_regime_stats(lookback_years)

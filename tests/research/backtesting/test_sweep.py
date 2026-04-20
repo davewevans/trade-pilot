@@ -354,6 +354,77 @@ def test_run_sweep_respects_max_symbols_per_run(db_and_repo, tmp_path, monkeypat
     assert result["chunk_size"] <= 2
 
 
+# ── run_sweep stats gate ───────────────────────────────────────────────────────
+
+def test_run_sweep_recomputes_stats_on_partial_prime(db_and_repo, tmp_path, monkeypatch):
+    """recompute_*_stats is called when pairs_primed > 0, even if not all pairs are primed."""
+    from config import settings
+    monkeypatch.setattr(settings, "RESEARCH_BACKTEST_MAX_SYMBOLS_PER_RUN", 1)
+    monkeypatch.setattr(settings, "RESEARCH_BACKTEST_LOOKBACK_YEARS", 1)
+    monkeypatch.setattr(settings, "WATCHLIST", ["AAPL", "MSFT"])
+    monkeypatch.setattr(settings, "IRON_CONDOR_WATCHLIST", [])
+    monkeypatch.setattr(settings, "SPREAD_WATCHLIST", [])
+    monkeypatch.setattr(settings, "RESEARCH_BACKTEST_MIN_TRADES_HIGH_CONFIDENCE", 30)
+    monkeypatch.setattr(settings, "RESEARCH_BACKTEST_MIN_TRADES_LOW_CONFIDENCE", 10)
+    monkeypatch.setattr(settings, "RESEARCH_BACKTEST_REGIME_MIN_TRADES", 100)
+
+    sweep, engine, repo = _make_sweep(db_and_repo, tmp_path)
+    engine.run.return_value = _fake_result([])
+
+    with patch.object(sweep, "recompute_symbol_stats", return_value={}) as mock_sym, \
+         patch.object(sweep, "recompute_regime_stats", return_value={}) as mock_reg:
+        sweep.run_sweep(mode="watchlist")
+
+    mock_sym.assert_called_once()
+    mock_reg.assert_called_once()
+
+
+def test_run_sweep_skips_recompute_when_no_pairs_primed(db_and_repo, tmp_path, monkeypatch):
+    """recompute_*_stats is NOT called when all eligible pairs fail (pairs_primed == 0)."""
+    from config import settings
+    monkeypatch.setattr(settings, "RESEARCH_BACKTEST_MAX_SYMBOLS_PER_RUN", 10)
+    monkeypatch.setattr(settings, "RESEARCH_BACKTEST_LOOKBACK_YEARS", 1)
+    monkeypatch.setattr(settings, "WATCHLIST", ["AAPL"])
+    monkeypatch.setattr(settings, "IRON_CONDOR_WATCHLIST", [])
+    monkeypatch.setattr(settings, "SPREAD_WATCHLIST", [])
+    monkeypatch.setattr(settings, "RESEARCH_BACKTEST_MIN_TRADES_HIGH_CONFIDENCE", 30)
+    monkeypatch.setattr(settings, "RESEARCH_BACKTEST_MIN_TRADES_LOW_CONFIDENCE", 10)
+    monkeypatch.setattr(settings, "RESEARCH_BACKTEST_REGIME_MIN_TRADES", 100)
+
+    sweep, engine, repo = _make_sweep(db_and_repo, tmp_path)
+    engine.run.side_effect = RuntimeError("simulated engine failure")
+
+    with patch.object(sweep, "recompute_symbol_stats", return_value={}) as mock_sym, \
+         patch.object(sweep, "recompute_regime_stats", return_value={}) as mock_reg:
+        sweep.run_sweep(mode="watchlist")
+
+    mock_sym.assert_not_called()
+    mock_reg.assert_not_called()
+
+
+def test_run_sweep_skips_recompute_when_full_list_empty(db_and_repo, tmp_path, monkeypatch):
+    """recompute_*_stats is NOT called when no symbols are in the watchlist."""
+    from config import settings
+    monkeypatch.setattr(settings, "RESEARCH_BACKTEST_MAX_SYMBOLS_PER_RUN", 10)
+    monkeypatch.setattr(settings, "RESEARCH_BACKTEST_LOOKBACK_YEARS", 1)
+    monkeypatch.setattr(settings, "WATCHLIST", [])
+    monkeypatch.setattr(settings, "IRON_CONDOR_WATCHLIST", [])
+    monkeypatch.setattr(settings, "SPREAD_WATCHLIST", [])
+    monkeypatch.setattr(settings, "RESEARCH_BACKTEST_MIN_TRADES_HIGH_CONFIDENCE", 30)
+    monkeypatch.setattr(settings, "RESEARCH_BACKTEST_MIN_TRADES_LOW_CONFIDENCE", 10)
+    monkeypatch.setattr(settings, "RESEARCH_BACKTEST_REGIME_MIN_TRADES", 100)
+
+    sweep, engine, repo = _make_sweep(db_and_repo, tmp_path)
+    engine.run.return_value = _fake_result([])
+
+    with patch.object(sweep, "recompute_symbol_stats", return_value={}) as mock_sym, \
+         patch.object(sweep, "recompute_regime_stats", return_value={}) as mock_reg:
+        sweep.run_sweep(mode="watchlist")
+
+    mock_sym.assert_not_called()
+    mock_reg.assert_not_called()
+
+
 # ── Helper unit tests ─────────────────────────────────────────────────────────
 
 def test_compute_max_drawdown_basic():

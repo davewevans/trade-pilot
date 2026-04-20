@@ -673,6 +673,21 @@ SCHEDULE: list[dict] = [
             "YELLOW or RED on mismatches."
         ),
     },
+    # ── Weekly research sweep ─────────────────────────────────────────────────
+    {
+        "job": "weekly_research",
+        "type": "weekly",
+        "day": "sunday",
+        "time": "11:00",
+        "tz": "America/New_York",
+        "label": "Weekly research sweep",
+        "description": (
+            "Runs the 4-phase research pipeline: liquidity scan, backtest "
+            "sweep, watchlist recommendations, and recommendation outcome "
+            "computation. Populates symbol_strategy_stats and "
+            "regime_strategy_stats used by the win-rate multiplier."
+        ),
+    },
     # ── Weekly job ───────────────────────────────────────────────────────────
     {
         "job": "weekly_report",
