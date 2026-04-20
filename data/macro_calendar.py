@@ -171,12 +171,11 @@ def _get_session_pair(now_et: datetime) -> tuple[date | None, date | None]:
     next_session: the NYSE trading day immediately after current_session.
     Returns (None, None) if the calendar lookup fails.
     """
-    import pandas_market_calendars as mcal
-
     today = now_et.date()
     look_ahead = today + timedelta(days=14)
 
     try:
+        import pandas_market_calendars as mcal
         nyse = mcal.get_calendar("NYSE")
         schedule = nyse.schedule(
             start_date=today.isoformat(),

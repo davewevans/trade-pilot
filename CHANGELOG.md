@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.9.3] - 2026-04-20
+
+### Added
+- **Sentry error monitoring**: `sentry-sdk[fastapi]` added to `requirements.txt`; `sentry_sdk.init()` called in `api/server.py` before `app = FastAPI(...)` so all routes are auto-instrumented. DSN is read from `SENTRY_DSN` env var (absent = disabled). Configured with `traces_sample_rate=0.1`, `send_default_pii=False`, environment derived from `RENDER` flag, and `release` set to `settings.VERSION`. `SENTRY_DSN` added to `config.py` Settings and `.env.example`.
+- **Healthchecks.io ping lifecycle**: `utils/healthchecks.py` exposes `ping_start`, `ping_success`, and `ping_fail`; each looks up `HC_PING_URL_<JOB_UPPER>` and respects a global `HEALTHCHECKS_ENABLED` kill switch (default true). `scheduler.py::safe_run` extended at three points: start ping after the clock-drift gate (intentionally suppressed on drift halt), fail ping before `notify()` in the except block, success ping after the heartbeat write in the else block. All pings use a 5-second timeout and catch all exceptions at WARNING. `HEALTHCHECKS_ENABLED` added to `config.py` Settings; all 9 per-job `HC_PING_URL_*` vars and kill switch documented in `.env.example`. 13 new tests in `tests/test_healthchecks.py`.
+
+## [1.9.2] - 2026-04-20
+
+### Fixed
+- `market_open` job crashed at market open with `ModuleNotFoundError: No module named 'pandas_market_calendars'` because the package was used in `data/macro_calendar.py` but never added to `requirements.txt`; added `pandas-market-calendars` to `requirements.txt` and moved the import inside the `try` block so future import failures degrade gracefully (returning `(False, "")` from `is_blocked()`) rather than crashing the job.
+
 ## [1.9.1] - 2026-04-20
 
 ### Fixed

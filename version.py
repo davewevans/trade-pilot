@@ -5,9 +5,9 @@ section to CHANGELOG.md. Other modules read this via ``settings.VERSION``
 rather than importing this file directly.
 """
 
-VERSION = "1.9.1"
+VERSION = "1.9.3"
 VERSION_DATE = "2026-04-20"
 VERSION_NOTES = (
-    "Fixes NameError crash in ORATS IV history cache lookup (503 on every iv-history request) "
-    "and adds the missing /api/backtest/history and /api/backtest/reality-check endpoints."
+    "Adds Sentry error monitoring to the FastAPI server and Healthchecks.io ping lifecycle "
+    "(start/success/fail) to every scheduled job via safe_run."
 )
