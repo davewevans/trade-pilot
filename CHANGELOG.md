@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.9.2] - 2026-04-20
+
+### Fixed
+- `market_open` job crashed at market open with `ModuleNotFoundError: No module named 'pandas_market_calendars'` because the package was used in `data/macro_calendar.py` but never added to `requirements.txt`; added `pandas-market-calendars` to `requirements.txt` and moved the import inside the `try` block so future import failures degrade gracefully (returning `(False, "")` from `is_blocked()`) rather than crashing the job.
+
 ## [1.9.1] - 2026-04-20
 
 ### Fixed

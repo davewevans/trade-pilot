@@ -5,9 +5,9 @@ section to CHANGELOG.md. Other modules read this via ``settings.VERSION``
 rather than importing this file directly.
 """
 
-VERSION = "1.9.1"
+VERSION = "1.9.2"
 VERSION_DATE = "2026-04-20"
 VERSION_NOTES = (
-    "Fixes NameError crash in ORATS IV history cache lookup (503 on every iv-history request) "
-    "and adds the missing /api/backtest/history and /api/backtest/reality-check endpoints."
+    "Fixes market_open crash at market open caused by missing pandas-market-calendars "
+    "dependency; import now guarded inside try block for graceful fallback."
 )
