@@ -161,23 +161,6 @@ function CondorDiagram() {
   )
 }
 
-function InactiveBadge({ color }: { color: string }) {
-  return (
-    <span style={{
-      display: 'inline-block',
-      padding: '2px 8px',
-      borderRadius: '4px',
-      fontSize: '11px',
-      fontWeight: 600,
-      backgroundColor: `color-mix(in srgb, ${color} 15%, transparent)`,
-      color: color,
-      border: `1px solid ${color}`,
-      marginBottom: '12px',
-    }}>
-      INACTIVE — Account configured, not yet activated for trading
-    </span>
-  )
-}
 
 const ROUTING_ROWS = [
   { regime: 'NEUTRAL', iv: 'HIGH (IVR ≥ 50)', strategy: 'Iron Condor (Paper Account 3)', note: 'IV must be overvalued or fair per ORATS forecast' },
@@ -488,8 +471,6 @@ export function Strategies() {
         header="Iron Butterfly — Maximum Premium at the Money"
         tagline="Higher premium than iron condor, tighter profit zone. Not yet active."
       >
-        <InactiveBadge color="var(--purple, #A855F7)" />
-
         <Prose>
           An iron butterfly sells an ATM put and an ATM call at the <strong>same center
           strike</strong>, then buys an OTM put wing below and an OTM call wing above for
@@ -580,8 +561,6 @@ export function Strategies() {
         header="Calendar Spread — Profiting From Time Decay Differentials"
         tagline="Neutral, defined-risk time decay play. Not yet active."
       >
-        <InactiveBadge color="var(--teal, #14B8A6)" />
-
         <Prose>
           A calendar spread sells a short-term option and buys a longer-term option at the same strike.
           The short option decays faster than the long option, and the spread profits from this decay
