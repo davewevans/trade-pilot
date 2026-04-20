@@ -21,6 +21,7 @@ from zoneinfo import ZoneInfo
 import schedule
 
 from utils.clock_drift import check_and_halt_on_drift
+from utils.healthchecks import ping_fail, ping_start, ping_success
 
 from jobs import (
     drop_copy_reconcile,
@@ -67,6 +68,11 @@ def safe_run(job_fn, job_name: str) -> None:
         logger.info("=== SKIPPING: %s — clock drift halt active ===", job_name)
         return
 
+    try:
+        ping_start(job_name)
+    except Exception:
+        logger.warning("healthchecks: ping_start wrapper error for %s", job_name)
+
     logger.info("=== STARTING: %s ===", job_name)
     t0 = time.monotonic()
     try:
@@ -75,6 +81,10 @@ def safe_run(job_fn, job_name: str) -> None:
         import traceback
         tb = traceback.format_exc()
         logger.exception("=== FAILED: %s ===", job_name)
+        try:
+            ping_fail(job_name, reason=tb[:500])
+        except Exception:
+            logger.warning("healthchecks: ping_fail wrapper error for %s", job_name)
         try:
             from notifications import notify
             notify(
@@ -104,6 +114,10 @@ def safe_run(job_fn, job_name: str) -> None:
             _os.replace(str(_tmp), str(_hb_path))
         except Exception:
             pass  # heartbeat write failure must not break the scheduler
+        try:
+            ping_success(job_name)
+        except Exception:
+            logger.warning("healthchecks: ping_success wrapper error for %s", job_name)
 
 
 def _weekday_run(job_fn, job_name: str) -> None:

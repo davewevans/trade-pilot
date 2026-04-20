@@ -197,6 +197,13 @@ class Settings:
 
         # Sentry error monitoring DSN. When unset, Sentry is disabled.
         self.SENTRY_DSN: str = os.getenv("SENTRY_DSN", "")
+
+        # ── Healthchecks.io ────────────────────────────────────
+        # Global kill switch. Set HEALTHCHECKS_ENABLED=false to silence all
+        # pings without removing individual HC_PING_URL_* vars. Default true.
+        self.HEALTHCHECKS_ENABLED: bool = (
+            os.getenv("HEALTHCHECKS_ENABLED", "true").lower() == "true"
+        )
         # ntfy server URL. Defaults to the public ntfy.sh server.
         # Override for self-hosted deployments (e.g. "https://ntfy.example.com").
         self.NTFY_SERVER: str = os.getenv("NTFY_SERVER", "https://ntfy.sh")
