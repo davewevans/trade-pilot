@@ -5,9 +5,9 @@ section to CHANGELOG.md. Other modules read this via ``settings.VERSION``
 rather than importing this file directly.
 """
 
-VERSION = "1.9.3"
+VERSION = "1.10.0"
 VERSION_DATE = "2026-04-20"
 VERSION_NOTES = (
-    "Adds Sentry error monitoring to the FastAPI server and Healthchecks.io ping lifecycle "
-    "(start/success/fail) to every scheduled job via safe_run."
+    "Schedules the weekly_research job and adds a self-review extension to monthly_evaluation "
+    "that uses Opus to propose prompt patches for flagged reasoning dimensions."
 )

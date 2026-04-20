@@ -7,12 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.10.0] - 2026-04-20
+
 ### Added
 - `weekly_research` job added to the scheduler; runs Sunday 11:00 ET
   and executes the 4-phase research pipeline (liquidity scan, backtest
   sweep, watchlist recommendations, outcome computation). Previously
   defined but never scheduled, leaving `symbol_strategy_stats` and
   `regime_strategy_stats` empty.
+- **Self-Review Extension**: new optional phase in `monthly_evaluation`
+  (`SELF_REVIEW_ENABLED`, default false) that calls Opus once per
+  reasoning-quality flag, proposes specific prompt patches, and appends
+  results to the monthly markdown archive. Includes `evaluation/self_reviewer.py`
+  (class + helpers), `evaluation/decision_hydration.py` (extracted from
+  `api/server.py`), `prompts/self_review_v1.md` (8-constraint system prompt),
+  operator-maintained `data/reports/self_review_accepted_log.md`, three new
+  config vars (`SELF_REVIEW_MAX_FLAGS_PER_MONTH`, `SELF_REVIEW_MIN_SUPPORTING_DECISIONS`),
+  and a step-12 ntfy notification when ≥1 patch is suggested. Nothing is
+  auto-applied; all suggestions require manual operator review.
 
 ### Fixed
 - Research sweep now recomputes `symbol_strategy_stats` and
