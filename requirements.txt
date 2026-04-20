@@ -14,3 +14,4 @@ schedule
 fastapi
 uvicorn[standard]>=0.29.0
 psutil
+pandas-market-calendars
