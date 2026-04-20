@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.9.1] - 2026-04-20
+
+### Fixed
+- `ORATSHistorical.get_iv_rank_history()` crashed with `NameError: name 'trade_date' is not defined` on every call, returning 503 from `/api/iv-history`; corrected to use `end_date` for both cache-get and cache-set.
+- Added missing `GET /api/backtest/history` endpoint (frontend polled on mount and after completed runs; was silently returning 404).
+- Added missing `GET /api/backtest/reality-check` endpoint (BacktestIntel page fetched per symbol+strategy pair; now queries `symbol_strategy_stats` for backtest stats and closed `cycles` for live stats, returning win-rate/avg-pnl gap with LOW/MODERATE/HIGH severity).
+
 ## [1.9.0] - 2026-04-19
 
 ### Added
