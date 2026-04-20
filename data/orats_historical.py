@@ -243,7 +243,7 @@ class ORATSHistorical:
         Returns a list of dicts with tradeDate, iv, ivRank1y, etc.
         """
         params_key = f"{symbol.upper()}|{start_date or ''}|{end_date or ''}"
-        cached = _cache_get("hist/ivrank", params_key, trade_date)
+        cached = _cache_get("hist/ivrank", params_key, end_date)
         _job_name = os.environ.get("TRADE_PILOT_JOB_NAME")
         if cached is not None:
             from data.api_ledger import get_ledger
@@ -278,7 +278,7 @@ class ORATSHistorical:
         if _status_code is None:
             return []
 
-        _cache_set("hist/ivrank", params_key, rows, trade_date)
+        _cache_set("hist/ivrank", params_key, rows, end_date)
         return rows
 
     def find_contract_on_date(
