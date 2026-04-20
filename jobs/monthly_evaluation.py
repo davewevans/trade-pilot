@@ -12,8 +12,10 @@ Pipeline for a calendar month M:
   6. Mark a random 10-20% sample of score rows spot_check_pending=True.
   7. Query prior month's judge-operator disagreement rate.
   8. UPSERT monthly_evaluations row.
-  9. Write markdown archive to data/reports/monthly_eval_YYYY-MM.md.
-  10. Fire ntfy notification (warning severity) ONLY when flag count > 0.
+  9. Self-review phase (if SELF_REVIEW_ENABLED and real_flags).
+ 10. Write markdown archive to data/reports/monthly_eval_YYYY-MM.md.
+ 11. Fire ntfy notification (warning severity) ONLY when flag count > 0.
+ 12. Self-review notification (warning severity) when >= 1 patch was suggested.
 
 Entry points:
   - run(month=None): called by scheduler and by main.py --job=monthly_evaluation.
@@ -165,6 +167,7 @@ def _write_markdown_archive(
     disagreement_rate: float | None,
     created_at: str,
     reports_dir: Path,
+    self_review_output: list[dict] | None = None,
 ) -> Path:
     """Write data/reports/monthly_eval_YYYY-MM.md and return the path."""
     lines: list[str] = []
@@ -239,12 +242,176 @@ def _write_markdown_archive(
                 lines.append("_No dimension scores available._")
                 lines.append("")
 
+    # ── Self-Review ────────────────────────────────────────────────────────
+    if self_review_output:
+        lines.append("## Self-Review")
+        lines.append("")
+        for entry in self_review_output:
+            flag = entry.get("flag") or {}
+            output = entry.get("output")
+            skipped_reason = entry.get("skipped_reason")
+            strategy = flag.get("strategy", "unknown")
+            dimension = flag.get("dimension", "unknown")
+            lines.append(f"### Self-Review: {strategy} / {dimension}")
+            lines.append("")
+            if output is None:
+                lines.append(f"Skipped: {skipped_reason or 'unknown'}")
+                lines.append("")
+                continue
+            lines.append(f"**Flag summary:** {output.get('flag_summary', '')}")
+            lines.append("")
+            lines.append(
+                f"**Reasoning failure mode:** {output.get('reasoning_failure_mode', '')}"
+            )
+            lines.append("")
+            patches = output.get("suggested_prompt_patches") or []
+            if patches:
+                lines.append("**Suggested patches:**")
+                lines.append("")
+                for i, patch in enumerate(patches, 1):
+                    ids = patch.get("supporting_decision_ids") or []
+                    id_links = ", ".join(
+                        f"[{d}](/evaluations/{month}/flagged-decisions#decision-{d})"
+                        for d in ids
+                    )
+                    lines.append(
+                        f"{i}. **{patch.get('target_file')}** — "
+                        f"{patch.get('target_section')} "
+                        f"({patch.get('patch_type')})"
+                    )
+                    lines.append("")
+                    lines.append("   ```")
+                    for text_line in (patch.get("exact_text") or "").splitlines():
+                        lines.append(f"   {text_line}")
+                    lines.append("   ```")
+                    lines.append("")
+                    lines.append(f"   *Rationale:* {patch.get('rationale', '')}")
+                    lines.append("")
+                    lines.append(f"   *Supporting decisions:* {id_links}")
+                    lines.append("")
+            candidates = output.get("guardrail_migration_candidates") or []
+            if candidates:
+                lines.append("**Guardrail migration candidates:**")
+                lines.append("")
+                for c in candidates:
+                    ids = c.get("supporting_decision_ids") or []
+                    lines.append(f"- {c.get('observation', '')} *(why code: {c.get('why_code_not_prompt', '')})*")
+                    if ids:
+                        lines.append(f"  Decision IDs: {', '.join(str(d) for d in ids)}")
+                lines.append("")
+            declines = output.get("declined_to_suggest") or []
+            if declines:
+                lines.append("**Declined to suggest:**")
+                lines.append("")
+                for dec in declines:
+                    ids = dec.get("relevant_decision_ids") or []
+                    lines.append(f"- {dec.get('reason', '')} (IDs: {', '.join(str(d) for d in ids)})")
+                lines.append("")
+
     content = "\n".join(lines)
     reports_dir.mkdir(parents=True, exist_ok=True)
     out_path = reports_dir / f"monthly_eval_{month}.md"
     out_path.write_text(content, encoding="utf-8")
     logger.info("monthly_evaluation: markdown archive written to %s", out_path)
     return out_path
+
+
+def _run_self_review(
+    month: str,
+    real_flags: list[dict],
+    conn,
+    scores_repo,
+    settings,
+) -> list[dict]:
+    """Run the self-review phase. Returns one output dict per processed flag.
+
+    Each output dict has shape:
+        {
+            "flag": <original flag dict>,
+            "output": <self-reviewer output dict or None on failure>,
+            "skipped_reason": <str or None>,
+        }
+
+    Flags dropped over the cap are included with output=None and
+    skipped_reason="over_cap".
+    """
+    from pathlib import Path
+    from evaluation.self_reviewer import (
+        SelfReviewer,
+        select_flags_to_review,
+        load_prior_accepted_summaries,
+        load_relevant_prompts,
+    )
+    from evaluation.decision_hydration import hydrate_decisions
+
+    cap = settings.SELF_REVIEW_MAX_FLAGS_PER_MONTH
+    to_review, over_cap = select_flags_to_review(real_flags, cap)
+
+    prior_summaries = load_prior_accepted_summaries(settings.REPORTS_DIR)
+    prompts_dir = Path("prompts")
+    reviewer = SelfReviewer(
+        min_supporting_decisions=settings.SELF_REVIEW_MIN_SUPPORTING_DECISIONS,
+    )
+
+    results: list[dict] = []
+
+    for flag in to_review:
+        decision_ids = flag.get("lowest_scoring_decisions") or []
+        if not decision_ids:
+            logger.warning(
+                "self_review: flag %s/%s has no lowest_scoring_decisions — skipping",
+                flag.get("strategy"), flag.get("dimension"),
+            )
+            results.append({
+                "flag": flag,
+                "output": None,
+                "skipped_reason": "no_lowest_scoring_decisions",
+            })
+            continue
+
+        try:
+            hydrated = hydrate_decisions(decision_ids, conn, scores_repo)
+        except Exception:
+            logger.exception(
+                "self_review: hydration failed for flag %s/%s",
+                flag.get("strategy"), flag.get("dimension"),
+            )
+            results.append({
+                "flag": flag,
+                "output": None,
+                "skipped_reason": "hydration_failed",
+            })
+            continue
+
+        relevant_prompts = load_relevant_prompts(
+            flag.get("strategy", ""), prompts_dir,
+        )
+
+        output = reviewer.review_flag(
+            flag=flag,
+            hydrated_decisions=hydrated,
+            relevant_prompts=relevant_prompts,
+            prior_accepted_summaries=prior_summaries,
+        )
+
+        results.append({
+            "flag": flag,
+            "output": output,
+            "skipped_reason": None if output is not None else "api_or_schema_failure",
+        })
+
+    for flag in over_cap:
+        results.append({
+            "flag": flag,
+            "output": None,
+            "skipped_reason": "over_cap",
+        })
+        logger.info(
+            "self_review: flag %s/%s dropped (exceeds cap of %d)",
+            flag.get("strategy"), flag.get("dimension"), cap,
+        )
+
+    return results
 
 
 # ── Core pipeline ─────────────────────────────────────────────────────────────
@@ -367,6 +534,38 @@ def _run_pipeline(month: str, start_iso: str, end_iso: str, settings) -> None:
         evals_repo.upsert(eval_row)
         logger.info("monthly_evaluation: upserted monthly_evaluations row for %s", month)
 
+        # 9. Self-review phase ─ run only if enabled and flags exist.
+        self_review_output: list[dict] = []
+        if settings.SELF_REVIEW_ENABLED and real_flags:
+            try:
+                self_review_output = _run_self_review(
+                    month=month,
+                    real_flags=real_flags,
+                    conn=db.get_connection(),
+                    scores_repo=scores_repo,
+                    settings=settings,
+                )
+                logger.info(
+                    "monthly_evaluation: self-review produced output for %d of %d flags",
+                    len([r for r in self_review_output if r.get("output") is not None]),
+                    len(real_flags),
+                )
+            except Exception:
+                logger.exception(
+                    "monthly_evaluation: self-review phase failed (non-fatal)"
+                )
+                self_review_output = []
+        else:
+            if not settings.SELF_REVIEW_ENABLED:
+                logger.info(
+                    "monthly_evaluation: self-review skipped "
+                    "(SELF_REVIEW_ENABLED=false)"
+                )
+            elif not real_flags:
+                logger.info(
+                    "monthly_evaluation: self-review skipped (no real flags)"
+                )
+
         # 10. Markdown archive
         _write_markdown_archive(
             month=month,
@@ -378,6 +577,7 @@ def _run_pipeline(month: str, start_iso: str, end_iso: str, settings) -> None:
             disagreement_rate=disagreement_rate,
             created_at=created_at,
             reports_dir=settings.REPORTS_DIR,
+            self_review_output=self_review_output,
         )
 
         # 11. ntfy notification — only when flags are present
@@ -407,6 +607,47 @@ def _run_pipeline(month: str, start_iso: str, end_iso: str, settings) -> None:
             logger.info(
                 "monthly_evaluation: no actionable flags — notification suppressed"
             )
+
+        # 12. Self-review notification ─ fire only when >= 1 patch was suggested.
+        if settings.SELF_REVIEW_ENABLED and self_review_output:
+            total_patches = sum(
+                len((r.get("output") or {}).get("suggested_prompt_patches") or [])
+                for r in self_review_output
+            )
+            total_declines = sum(
+                len((r.get("output") or {}).get("declined_to_suggest") or [])
+                for r in self_review_output
+            )
+            if total_patches >= 1:
+                try:
+                    from notifications import notify
+
+                    notify(
+                        "warning",
+                        f"Self-review suggestions posted for {month}",
+                        (
+                            f"{total_patches} suggested patches, "
+                            f"{total_declines} declines. "
+                            f"Review at data/reports/monthly_eval_{month}.md."
+                        ),
+                        tags=["evaluation", "self_review"],
+                    )
+                    logger.info(
+                        "monthly_evaluation: self-review ntfy sent "
+                        "(%d patches, %d declines)",
+                        total_patches, total_declines,
+                    )
+                except Exception:
+                    logger.warning(
+                        "monthly_evaluation: self-review notification failed (non-fatal)",
+                        exc_info=True,
+                    )
+            else:
+                logger.info(
+                    "monthly_evaluation: self-review produced 0 patches — "
+                    "notification suppressed (%d declines)",
+                    total_declines,
+                )
 
     finally:
         db.close()
