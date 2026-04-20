@@ -29,6 +29,8 @@ import { ResearchGuide } from './pages/ResearchGuide'
 import { Evaluations } from './pages/Evaluations'
 import { EvaluationDetail } from './pages/EvaluationDetail'
 import { StrategyHealth } from './pages/StrategyHealth'
+import { Reliability } from './pages/Reliability'
+import { Measurement } from './pages/Measurement'
 
 export function App() {
   return (
@@ -53,6 +55,8 @@ export function App() {
           <Route path="/strategies" element={<Strategies />} />
           <Route path="/how-it-works" element={<HowItWorks />} />
           <Route path="/playbook" element={<ClaudesPlaybook />} />
+          <Route path="/reliability" element={<Reliability />} />
+          <Route path="/measurement" element={<Measurement />} />
           <Route path="/how-backtesting-works" element={<HowBacktestingWorks />} />
           <Route path="/how-evaluations-work" element={<HowEvaluationsWork />} />
           <Route path="/options-basics" element={<OptionsBasics />} />

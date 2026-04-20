@@ -43,6 +43,8 @@ const LEARN_ROUTES = [
   '/research-guide',
   '/how-it-works',
   '/playbook',
+  '/reliability',
+  '/measurement',
   '/how-backtesting-works',
   '/how-evaluations-work',
   '/strategies',
@@ -223,6 +225,12 @@ export function Sidebar() {
         </NavLink>
         <NavLink to="/playbook" className={linkClass} style={({ isActive }) => linkStyle(isActive)}>
           Claude's Playbook
+        </NavLink>
+        <NavLink to="/reliability" className={linkClass} style={({ isActive }) => linkStyle(isActive)}>
+          Reliability
+        </NavLink>
+        <NavLink to="/measurement" className={linkClass} style={({ isActive }) => linkStyle(isActive)}>
+          Measurement
         </NavLink>
         <NavLink to="/strategies" className={linkClass} style={({ isActive }) => linkStyle(isActive)}>
           Strategies
