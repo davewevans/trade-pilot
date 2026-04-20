@@ -194,6 +194,9 @@ class Settings:
         # ntfy.sh topic name. When unset, ntfy notifications are silently dropped.
         # Set to any unique string (e.g. "trade-pilot-abc123") to enable push alerts.
         self.NTFY_TOPIC: str = os.getenv("NTFY_TOPIC", "")
+
+        # Sentry error monitoring DSN. When unset, Sentry is disabled.
+        self.SENTRY_DSN: str = os.getenv("SENTRY_DSN", "")
         # ntfy server URL. Defaults to the public ntfy.sh server.
         # Override for self-hosted deployments (e.g. "https://ntfy.example.com").
         self.NTFY_SERVER: str = os.getenv("NTFY_SERVER", "https://ntfy.sh")
