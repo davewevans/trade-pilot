@@ -1920,6 +1920,96 @@ async def start_backtest(request: Request):
     return {"job_id": job_id, "status": "queued"}
 
 
+@app.get("/api/backtest/history")
+def get_backtest_history():
+    """Return summary list of all completed/errored backtest jobs (in-memory)."""
+    with _BACKTEST_JOBS_LOCK:
+        jobs = list(_BACKTEST_JOBS.values())
+    summaries = []
+    for job in sorted(jobs, key=lambda j: j.get("created_at", ""), reverse=True):
+        if job.get("status") not in ("complete", "error"):
+            continue
+        result = job.get("result") or {}
+        params = result.get("params") or {}
+        summaries.append({
+            "id": job["job_id"],
+            "strategy": params.get("strategy", ""),
+            "symbols": params.get("symbols", []),
+            "start_date": params.get("start_date", ""),
+            "end_date": params.get("end_date", ""),
+            "total_pnl": result.get("total_pnl", 0.0),
+            "win_rate": result.get("win_rate", 0.0),
+            "sharpe_ratio": None,
+            "total_trades": result.get("total_trades", 0),
+            "created_at": job.get("created_at", ""),
+            "slippage_model": params.get("slippage_model", "orats"),
+        })
+    return summaries
+
+
+@app.get("/api/backtest/reality-check")
+def backtest_reality_check(symbol: str, strategy: str):
+    """Compare live closed-cycle performance vs backtest stats for a symbol+strategy."""
+    conn = _open_db()
+    if conn is None:
+        return JSONResponse(status_code=503, content={"error": "db unavailable"})
+    try:
+        # ── Backtest side ─────────────────────────────────────────
+        bt_row = conn.execute(
+            "SELECT win_rate, avg_pnl_per_trade, trade_count FROM symbol_strategy_stats"
+            " WHERE symbol = ? AND strategy_type = ?",
+            (symbol.upper(), strategy),
+        ).fetchone()
+        if bt_row is None:
+            return JSONResponse(
+                status_code=404,
+                content={"error": f"No backtest data for {symbol}/{strategy}"},
+            )
+        bt_win_rate = float(bt_row[0])
+        bt_avg_pnl = float(bt_row[1])
+        bt_trades = int(bt_row[2])
+
+        # ── Live side: closed cycles ──────────────────────────────
+        live_rows = conn.execute(
+            "SELECT outcome, total_premium FROM cycles"
+            " WHERE underlying = ? AND strategy_type = ? AND status != 'ACTIVE'",
+            (symbol.upper(), strategy),
+        ).fetchall()
+        live_total = len(live_rows)
+        if live_total == 0:
+            live_win_rate = 0.0
+            live_avg_pnl = 0.0
+        else:
+            wins = sum(1 for r in live_rows if r[0] in ("profit", "expired_worthless"))
+            live_win_rate = wins / live_total
+            premiums = [r[1] for r in live_rows if r[1] is not None]
+            live_avg_pnl = sum(premiums) / len(premiums) if premiums else 0.0
+
+        # ── Gap computation ───────────────────────────────────────
+        wr_delta = live_win_rate - bt_win_rate
+        pnl_delta = live_avg_pnl - bt_avg_pnl
+        abs_wr = abs(wr_delta)
+        if abs_wr >= 0.20 or (bt_avg_pnl != 0 and abs(pnl_delta / bt_avg_pnl) >= 0.50):
+            severity = "HIGH"
+        elif abs_wr >= 0.10 or (bt_avg_pnl != 0 and abs(pnl_delta / bt_avg_pnl) >= 0.25):
+            severity = "MODERATE"
+        else:
+            severity = "LOW"
+
+        return {
+            "symbol": symbol.upper(),
+            "strategy": strategy,
+            "backtest": {"win_rate": bt_win_rate, "avg_pnl": bt_avg_pnl, "total_trades": bt_trades},
+            "live": {"win_rate": live_win_rate, "avg_pnl": round(live_avg_pnl, 2), "total_trades": live_total},
+            "gap": {"win_rate_delta": round(wr_delta, 4), "avg_pnl_delta": round(pnl_delta, 2), "severity": severity},
+        }
+    except Exception:
+        logger.exception("backtest/reality-check failed for %s/%s", symbol, strategy)
+        return JSONResponse(status_code=500, content={"error": "query failed"})
+    finally:
+        conn.close()
+
+
 @app.get("/api/backtest/{job_id}")
 def get_backtest_result(job_id: str):
     """Poll for backtest job status and results."""

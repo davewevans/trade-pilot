@@ -5,10 +5,9 @@ section to CHANGELOG.md. Other modules read this via ``settings.VERSION``
 rather than importing this file directly.
 """
 
-VERSION = "1.9.0"
-VERSION_DATE = "2026-04-19"
+VERSION = "1.9.1"
+VERSION_DATE = "2026-04-20"
 VERSION_NOTES = (
-    "Adds broker-truth state reconciliation (boot-time and 5-minute drop-copy) and fill realism "
-    "measurement (shadow execution capturing NBBO snapshots at +30s/+2m/+15m/EOD) with a "
-    "per-strategy fill-realism score surfaced on the Strategy Health page."
+    "Fixes NameError crash in ORATS IV history cache lookup (503 on every iv-history request) "
+    "and adds the missing /api/backtest/history and /api/backtest/reality-check endpoints."
 )
