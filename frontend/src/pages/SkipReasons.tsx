@@ -325,6 +325,9 @@ const ACCOUNTS = [
   { value: 'wheel', label: 'Wheel' },
   { value: 'iron_condor', label: 'Iron Condor' },
   { value: 'spreads', label: 'Spreads' },
+  { value: 'iron_butterfly', label: 'Iron Butterfly' },
+  { value: 'calendar_spread', label: 'Calendar Spread' },
+  { value: 'turning_wheel', label: 'Turning Wheel' },
 ]
 
 const WINDOWS = [
