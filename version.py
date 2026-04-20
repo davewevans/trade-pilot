@@ -5,10 +5,10 @@ section to CHANGELOG.md. Other modules read this via ``settings.VERSION``
 rather than importing this file directly.
 """
 
-VERSION = "1.8.0"
+VERSION = "1.9.0"
 VERSION_DATE = "2026-04-19"
 VERSION_NOTES = (
-    "Wires the Turnover Wheel strategy end-to-end with its own broker account, context builder, "
-    "advisor method, and corrected prompt files fixing a live context-key bug and several "
-    "logic errors in the management prompts."
+    "Adds broker-truth state reconciliation (boot-time and 5-minute drop-copy) and fill realism "
+    "measurement (shadow execution capturing NBBO snapshots at +30s/+2m/+15m/EOD) with a "
+    "per-strategy fill-realism score surfaced on the Strategy Health page."
 )

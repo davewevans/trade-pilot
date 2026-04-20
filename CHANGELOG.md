@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.9.0] - 2026-04-19
+
 ### Added
 - **Broker-Truth State Reconciliation**: two-phase reconciliation subsystem that compares Alpaca broker positions, cash, and open orders against local state (`strategy_states` SQLite table, `wheel_state.json`, `turnover_wheel_state.json`, `open_spreads.json`). Phase 1 runs once at boot (`startup_broker_reconcile`); Phase 2 runs every 5 minutes during market hours (`drop_copy_reconcile`). Severity is "yellow" when any position delta exceeds `DROP_COPY_POS_MISMATCH_USD` / `DROP_COPY_POS_MISMATCH_PCT` or cash delta exceeds `DROP_COPY_CASH_MISMATCH_USD`; "red" when an untracked filled order is detected or delta exceeds `STARTUP_RECONCILE_HALT_THRESHOLD_USD`. Defaults to `DROP_COPY_ENFORCEMENT_MODE=log_only` — diffs are computed and written to reports but no state is mutated and no HALTED.lock is written. Flip to `enforce` only after a clean log-only week.
 - `jobs/_broker_snapshot.py`: shared broker fetch layer; groups strategies by credential pair, captures per-account failures without aborting.
