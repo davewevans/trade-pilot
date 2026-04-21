@@ -129,7 +129,7 @@ export function Sidebar() {
     >
       <SidebarSection label="Overview" storageKey="overview" defaultOpen={true} first={true}>
         <NavLink to="/overview" className={linkClass} style={({ isActive }) => linkStyle(isActive)}>
-          Overview
+          Overview (mobile)
         </NavLink>
         <NavLink to="/" end className={linkClass} style={({ isActive }) => linkStyle(isActive)}>
           Dashboard
