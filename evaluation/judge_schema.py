@@ -27,8 +27,6 @@ JUDGE_OUTPUT_SCHEMA: dict = {
     "properties": {
         "scores": {
             "type": "array",
-            "minItems": 5,
-            "maxItems": 5,
             "items": {
                 "type": "object",
                 "additionalProperties": False,
@@ -40,8 +38,6 @@ JUDGE_OUTPUT_SCHEMA: dict = {
                     },
                     "score": {
                         "type": "integer",
-                        "minimum": 1,
-                        "maximum": 10,
                     },
                     "justification": {"type": "string"},
                 },

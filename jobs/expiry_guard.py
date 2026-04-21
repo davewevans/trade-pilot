@@ -21,8 +21,8 @@ def run() -> None:
     """Check for 0-DTE positions and close ITM short options across all accounts."""
     logger.info("=== EXPIRY GUARD JOB STARTING ===")
 
-    from brokers.broker_factory import get_broker, make_broker
-    from jobs.startup_snapshot import ACCOUNT_BROKER_MAP
+    from brokers.broker_factory import get_broker, make_broker_cached
+    from data.account_manager import AccountManager
 
     broker = get_broker()
 
@@ -32,18 +32,19 @@ def run() -> None:
         return
 
     # Aggregate option positions across all accounts, tagging each with its account.
+    _manager = AccountManager()
     account_brokers: dict[str, object] = {}
     positions: list[dict] = []
-    for acct_name, strategy_key in ACCOUNT_BROKER_MAP.items():
+    for account_id in _manager.get_all_accounts():
         try:
-            acct_broker = make_broker(strategy_key)
-            account_brokers[acct_name] = acct_broker
+            acct_broker = make_broker_cached(*_manager.get_credentials(account_id))
+            account_brokers[account_id] = acct_broker
             acct_positions = acct_broker.get_positions()
             for p in acct_positions:
-                p["_account"] = acct_name
+                p["_account"] = account_id
             positions.extend(acct_positions)
         except Exception as e:
-            logger.warning("Failed to get positions for %s: %s", acct_name, e)
+            logger.warning("Failed to get positions for %s: %s", account_id, e)
 
     if not positions:
         logger.info("No open positions.")
