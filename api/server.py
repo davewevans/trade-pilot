@@ -661,6 +661,16 @@ def health():
     }
 
 
+@app.get("/api/sentry-debug")
+def sentry_debug():
+    """Trigger a deliberate error to verify Sentry is capturing events.
+
+    Protected by the normal session auth (AuthMiddleware). Hit this endpoint,
+    then check the Sentry dashboard to confirm the event arrived.
+    """
+    raise RuntimeError("Sentry debug: intentional error to verify event capture")
+
+
 @app.get("/api/fill-realism")
 def fill_realism(days: int = Query(90, ge=1, le=365)):
     """Per-strategy fill-realism aggregates over the last N days.
