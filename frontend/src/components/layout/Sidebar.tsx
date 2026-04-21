@@ -128,6 +128,9 @@ export function Sidebar() {
       style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border)' }}
     >
       <SidebarSection label="Overview" storageKey="overview" defaultOpen={true} first={true}>
+        <NavLink to="/overview" className={linkClass} style={({ isActive }) => linkStyle(isActive)}>
+          Overview
+        </NavLink>
         <NavLink to="/" end className={linkClass} style={({ isActive }) => linkStyle(isActive)}>
           Dashboard
         </NavLink>
