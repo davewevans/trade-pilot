@@ -5,9 +5,9 @@ section to CHANGELOG.md. Other modules read this via ``settings.VERSION``
 rather than importing this file directly.
 """
 
-VERSION = "1.11.0"
+VERSION = "1.11.1"
 VERSION_DATE = "2026-04-21"
 VERSION_NOTES = (
-    "Adds a mobile-first /overview page for quick bot status checks, backed by a new "
-    "/api/heartbeat endpoint and a composite 30s-polling hook."
+    "Fixes blank dashboard account cards and detail-page data duplication caused by an "
+    "incomplete multi-account migration from legacy three-account names to paper_1–paper_6."
 )

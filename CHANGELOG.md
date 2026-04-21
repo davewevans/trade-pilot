@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.11.1] - 2026-04-21
+
+### Fixed
+- **Multi-account dashboard**: `startup_snapshot`, `portfolio_refresh`, and `expiry_guard` now iterate all configured accounts via `AccountManager` instead of the legacy hardcoded `wheel`/`iron_condor`/`spreads` names; dashboard account cards now show real equity and buying power for `paper_1`–`paper_6`.
+- `GET /api/account-portfolios` returns keys matching the configured account IDs (`paper_1`–`paper_6`) instead of the stale legacy names.
+- `GET /api/portfolio?account=paper_N` now honours the `account` query parameter; previously it ignored the param and always returned the primary `portfolio.json`, causing all detail pages to show identical data.
+
 ## [1.11.0] - 2026-04-21
 
 ### Added
