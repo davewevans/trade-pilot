@@ -537,14 +537,50 @@ export function Overview() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center" style={{ minHeight: 320 }}>
+      <div
+        className="min-h-screen flex items-center justify-center"
+        style={{ backgroundColor: 'var(--bg-primary)' }}
+      >
         <LoadingSpinner />
       </div>
     )
   }
 
   return (
-    <div className="space-y-0 max-w-2xl mx-auto">
+    <div className="min-h-screen" style={{ backgroundColor: 'var(--bg-primary)' }}>
+      {/* Page header */}
+      <div
+        className="sticky top-0 z-10 flex items-center justify-between px-4 py-3 border-b"
+        style={{
+          backgroundColor: 'var(--bg-secondary)',
+          borderColor: 'var(--border)',
+        }}
+      >
+        <div className="flex items-center gap-2">
+          <span className="font-semibold text-sm" style={{ color: 'var(--text-primary)' }}>
+            trade-pilot
+          </span>
+          <span
+            className="text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded"
+            style={{
+              backgroundColor: 'color-mix(in srgb, var(--accent) 15%, var(--bg-card))',
+              color: 'var(--accent)',
+              border: '1px solid color-mix(in srgb, var(--accent) 30%, transparent)',
+            }}
+          >
+            Mobile
+          </span>
+        </div>
+        <a
+          href="/"
+          className="text-xs"
+          style={{ color: 'var(--text-muted)' }}
+        >
+          Full dashboard
+        </a>
+      </div>
+
+    <div className="max-w-2xl mx-auto px-4 py-4 space-y-0">
       {/* 1 — Status strip */}
       <StatusStrip halted={halted} dryRun={dryRun} cbStatus={cbStatus} />
 
@@ -677,6 +713,7 @@ export function Overview() {
           ? `Updated ${fmtUpdatedTime(lastUpdated)} · auto-refresh 30s`
           : 'Loading…'}
       </div>
+    </div>
     </div>
   )
 }
