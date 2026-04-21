@@ -55,8 +55,8 @@ def run() -> None:
     except Exception as e:
         logger.warning("Failed to enrich positions with Greeks: %s", e)
 
-    from brokers.broker_factory import make_broker
-    from jobs.startup_snapshot import ACCOUNT_BROKER_MAP
+    from brokers.broker_factory import make_broker, make_broker_cached
+    from data.account_manager import AccountManager
 
     # ── Circuit breaker update ──────────────────────────────
     cb = CircuitBreaker()
@@ -131,9 +131,10 @@ def run() -> None:
         logger.warning("Failed to write portfolio snapshot: %s", e)
 
     # ── Per-account snapshots (powers individual account cards) ──
-    for acct_name, strategy_key in ACCOUNT_BROKER_MAP.items():
+    _acct_manager = AccountManager()
+    for account_id in _acct_manager.get_all_accounts():
         try:
-            acct_broker = make_broker(strategy_key)
+            acct_broker = make_broker_cached(*_acct_manager.get_credentials(account_id))
             acct_data = acct_broker.get_account()
             acct_positions = acct_broker.get_all_positions()
             # Enrich per-account option positions with Greeks
@@ -156,12 +157,12 @@ def run() -> None:
                             p["gamma"] = _s.get("gamma")
                     _acct_gfa = _adt.now().isoformat(timespec="seconds")
             except Exception as _eg:
-                logger.warning("Greek enrichment failed for %s: %s", acct_name, _eg)
-            sw.write_account_snapshot(acct_name, acct_data, acct_positions,
+                logger.warning("Greek enrichment failed for %s: %s", account_id, _eg)
+            sw.write_account_snapshot(account_id, acct_data, acct_positions,
                                       greeks_fetched_at=_acct_gfa)
         except Exception as e:
             logger.warning(
-                "Failed to refresh account snapshot for %s: %s", acct_name, e
+                "Failed to refresh account snapshot for %s: %s", account_id, e
             )
 
     # ── Equity history (powers the equity curve chart) ──────────

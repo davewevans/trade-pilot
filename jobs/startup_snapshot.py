@@ -9,22 +9,24 @@ import json
 import logging
 from datetime import datetime, timezone
 
-from brokers.broker_factory import make_broker
+from brokers.broker_factory import make_broker_cached
 from config import settings
+from data.account_manager import AccountManager
 from data.state_writer import StateWriter
 
 logger = logging.getLogger(__name__)
 
-ACCOUNT_NAMES = ["wheel", "iron_condor", "spreads"]
+# Built dynamically from AccountManager so expiry_guard / portfolio_refresh
+# can still import this name while their own migrations are pending.
+def _build_account_broker_map() -> dict[str, str]:
+    manager = AccountManager()
+    return {
+        account_id: acct["strategy"]
+        for account_id, acct in manager.get_all_accounts().items()
+        if acct.get("strategy")
+    }
 
-# "spreads" account uses the default Alpaca credentials.
-# make_broker() uses STRATEGY_ACCOUNT_MAP — map "spreads" to the
-# strategies that share the default account (bull_put_spread works).
-ACCOUNT_BROKER_MAP = {
-    "wheel":       "wheel",
-    "iron_condor": "iron_condor",
-    "spreads":     "bull_put_spread",
-}
+ACCOUNT_BROKER_MAP: dict[str, str] = _build_account_broker_map()
 
 # Sonnet 4.6 context window size (tokens)
 _CONTEXT_WINDOW = 200_000
@@ -61,22 +63,23 @@ def run() -> None:
     """Write initial portfolio snapshots for all accounts."""
     logger.info("=== STARTUP SNAPSHOT ===")
     sw = StateWriter()
+    manager = AccountManager()
 
-    for account_name, strategy_key in ACCOUNT_BROKER_MAP.items():
+    for account_id in manager.get_all_accounts():
         try:
-            broker = make_broker(strategy_key)
+            broker = make_broker_cached(*manager.get_credentials(account_id))
             account = broker.get_account()
             positions = broker.get_positions()
-            sw.write_account_snapshot(account_name, account, positions)
+            sw.write_account_snapshot(account_id, account, positions)
             logger.info(
                 "Startup snapshot written for %s: buying_power=%s",
-                account_name,
+                account_id,
                 account.get("buying_power"),
             )
         except Exception as e:
             logger.warning(
                 "Failed to write startup snapshot for %s: %s",
-                account_name, e,
+                account_id, e,
             )
 
     _write_prompt_size_snapshot()

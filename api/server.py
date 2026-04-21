@@ -794,10 +794,18 @@ def api_schedule():
 
 
 @app.get("/api/portfolio")
-def portfolio():
-    data = _read_json(SNAPSHOTS / "portfolio.json")
+def portfolio(account: str | None = Query(default=None)):
+    if account is None:
+        data = _read_json(SNAPSHOTS / "portfolio.json")
+        if data is None:
+            return JSONResponse(status_code=503, content={"error": "No portfolio data yet"})
+        return data
+    manager = _get_account_manager()
+    if manager.get_account(account) is None:
+        return JSONResponse(status_code=404, content={"error": f"Unknown account: {account}"})
+    data = _read_json(SNAPSHOTS / f"portfolio_{account}.json")
     if data is None:
-        return JSONResponse(status_code=503, content={"error": "No portfolio data yet"})
+        return JSONResponse(status_code=503, content={"error": f"No data yet for account: {account}"})
     return data
 
 
@@ -959,15 +967,16 @@ def book_exposure():
 def all_account_portfolios():
     """Return a summary of all accounts for the dashboard cards.
 
-    Returns a dict keyed by account name. Missing accounts return
+    Returns a dict keyed by account_id. Missing snapshot files return
     null for that key — the frontend handles the empty state.
 
     (Renamed from /api/accounts to avoid conflict with account management API.)
     """
+    manager = _get_account_manager()
     result = {}
-    for name in ("wheel", "iron_condor", "spreads"):
-        data = _read_json(SNAPSHOTS / f"portfolio_{name}.json")
-        result[name] = data  # None if missing — frontend shows "—"
+    for account_id in manager.get_all_accounts():
+        data = _read_json(SNAPSHOTS / f"portfolio_{account_id}.json")
+        result[account_id] = data  # None if missing — frontend shows "—"
     return result
 
 
