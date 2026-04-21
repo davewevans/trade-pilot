@@ -811,6 +811,28 @@ def circuit_breakers():
     return data
 
 
+@app.get("/api/heartbeat")
+def heartbeat_status():
+    data = _read_json(_HEARTBEAT_PATH)
+    if data is None:
+        return JSONResponse(status_code=503, content={"error": "No heartbeat data yet"})
+    ts = data.get("ts")
+    stale_minutes: float | None = None
+    if ts:
+        try:
+            dt = datetime.fromisoformat(ts)
+            age_s = (datetime.now(timezone.utc) - dt).total_seconds()
+            stale_minutes = round(age_s / 60, 1)
+        except Exception:
+            pass
+    return {
+        "ts": ts,
+        "job": data.get("job"),
+        "elapsed_s": data.get("elapsed_s"),
+        "stale_minutes": stale_minutes,
+    }
+
+
 @app.get("/api/source-health")
 def source_health():
     path = SNAPSHOTS / "source_health.json"

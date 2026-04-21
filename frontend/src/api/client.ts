@@ -377,8 +377,17 @@ export interface FillRealismResponse {
   gate_pct: number
 }
 
+export interface HeartbeatResponse {
+  ts: string | null
+  job: string | null
+  elapsed_s: number | null
+  stale_minutes: number | null
+}
+
 export const api = {
   health: () => get<HealthStatus>('/api/health'),
+
+  heartbeat: () => get<HeartbeatResponse>('/api/heartbeat'),
 
   fillRealism: (days = 90) =>
     get<FillRealismResponse>(`/api/fill-realism?days=${days}`),
