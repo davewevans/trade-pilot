@@ -783,7 +783,7 @@ def main() -> None:
     # (handles scheduler restarts mid-day)
     if is_weekday():
         logger.info("Weekday detected — running startup check")
-        safe_run(pre_market.run, "startup_pre_market")
+        safe_run(pre_market.run, "pre_market")
 
     import time
 
