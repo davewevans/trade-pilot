@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.11.0] - 2026-04-21
+
+### Added
+- **Mobile overview page** (`/overview`): new single-screen bot status page designed for phone use. Sections: status strip (running/halted/dry-run dot), circuit-breaker card with red-border HALTED state, regime + IV environment pills, last/next scheduled job card, per-active-account equity and P&L cards (link to `/account/:account`), today's non-SKIP entry decisions (top 5), positions needing attention classified by DTE ≤ 7 / near profit target / at risk, open position counts by strategy, and today's top skip reasons. Auto-refreshes every 30 seconds.
+- `GET /api/heartbeat` endpoint: reads `data/heartbeat.json` and returns `{ ts, job, elapsed_s, stale_minutes }`. Returns 503 when no heartbeat data exists. Used by the Overview page to display last and next scheduled job.
+- `useOverviewData` composite hook: single `Promise.all` fetch across all Overview data sources, 30s polling, per-source `.catch(() => null)` isolation, and cancelled-flag cleanup on unmount.
+
 ## [1.10.0] - 2026-04-20
 
 ### Added
