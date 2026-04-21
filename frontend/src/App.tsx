@@ -36,42 +36,49 @@ import { Measurement } from './pages/Measurement'
 export function App() {
   return (
     <BrowserRouter>
-      <AppShell>
-        <Routes>
-          <Route path="/" element={<Dashboard />} />
-          <Route path="/overview" element={<Overview />} />
-          <Route path="/watchlist" element={<Watchlist />} />
-          <Route path="/research" element={<Research />} />
-          <Route path="/recommendations" element={<Recommendations />} />
-          <Route path="/research-guide" element={<ResearchGuide />} />
-          <Route path="/backtest" element={<Backtest />} />
-          <Route path="/backtest-intel" element={<BacktestIntel />} />
-          <Route path="/volatility" element={<Volatility />} />
-          <Route path="/account/:account" element={<AccountDetail />} />
-          <Route path="/evaluations" element={<Evaluations />} />
-          <Route path="/evaluations/:month" element={<EvaluationDetail />} />
-          <Route path="/strategy-health" element={<StrategyHealth />} />
-          <Route path="/decisions" element={<DecisionLog />} />
-          <Route path="/reasoning" element={<ReasoningExplorer />} />
-          <Route path="/guardrails" element={<Guardrails />} />
-          <Route path="/strategies" element={<Strategies />} />
-          <Route path="/how-it-works" element={<HowItWorks />} />
-          <Route path="/playbook" element={<ClaudesPlaybook />} />
-          <Route path="/reliability" element={<Reliability />} />
-          <Route path="/measurement" element={<Measurement />} />
-          <Route path="/how-backtesting-works" element={<HowBacktestingWorks />} />
-          <Route path="/how-evaluations-work" element={<HowEvaluationsWork />} />
-          <Route path="/options-basics" element={<OptionsBasics />} />
-          <Route path="/trade-lifecycle" element={<TradeLifecycle />} />
-          <Route path="/skip-reasons" element={<SkipReasons />} />
-          <Route path="/circuit-breakers" element={<CircuitBreakers />} />
-          <Route path="/market-regimes" element={<MarketRegimes />} />
-          <Route path="/glossary" element={<Glossary />} />
-          <Route path="/faq" element={<FAQ />} />
-          <Route path="/about" element={<About />} />
-          <Route path="/data-sources" element={<DataSources />} />
-        </Routes>
-      </AppShell>
+      <Routes>
+        {/* Standalone — no sidebar/topbar chrome */}
+        <Route path="/overview" element={<Overview />} />
+
+        {/* All other routes get the full AppShell */}
+        <Route path="*" element={
+          <AppShell>
+            <Routes>
+              <Route path="/" element={<Dashboard />} />
+              <Route path="/watchlist" element={<Watchlist />} />
+              <Route path="/research" element={<Research />} />
+              <Route path="/recommendations" element={<Recommendations />} />
+              <Route path="/research-guide" element={<ResearchGuide />} />
+              <Route path="/backtest" element={<Backtest />} />
+              <Route path="/backtest-intel" element={<BacktestIntel />} />
+              <Route path="/volatility" element={<Volatility />} />
+              <Route path="/account/:account" element={<AccountDetail />} />
+              <Route path="/evaluations" element={<Evaluations />} />
+              <Route path="/evaluations/:month" element={<EvaluationDetail />} />
+              <Route path="/strategy-health" element={<StrategyHealth />} />
+              <Route path="/decisions" element={<DecisionLog />} />
+              <Route path="/reasoning" element={<ReasoningExplorer />} />
+              <Route path="/guardrails" element={<Guardrails />} />
+              <Route path="/strategies" element={<Strategies />} />
+              <Route path="/how-it-works" element={<HowItWorks />} />
+              <Route path="/playbook" element={<ClaudesPlaybook />} />
+              <Route path="/reliability" element={<Reliability />} />
+              <Route path="/measurement" element={<Measurement />} />
+              <Route path="/how-backtesting-works" element={<HowBacktestingWorks />} />
+              <Route path="/how-evaluations-work" element={<HowEvaluationsWork />} />
+              <Route path="/options-basics" element={<OptionsBasics />} />
+              <Route path="/trade-lifecycle" element={<TradeLifecycle />} />
+              <Route path="/skip-reasons" element={<SkipReasons />} />
+              <Route path="/circuit-breakers" element={<CircuitBreakers />} />
+              <Route path="/market-regimes" element={<MarketRegimes />} />
+              <Route path="/glossary" element={<Glossary />} />
+              <Route path="/faq" element={<FAQ />} />
+              <Route path="/about" element={<About />} />
+              <Route path="/data-sources" element={<DataSources />} />
+            </Routes>
+          </AppShell>
+        } />
+      </Routes>
     </BrowserRouter>
   )
 }
