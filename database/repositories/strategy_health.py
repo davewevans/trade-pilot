@@ -13,6 +13,22 @@ import sqlite3
 # Every SkipGate enum value mapped to its funnel bucket name.
 # If SkipGate gains a new value, add it here — test_all_skipgate_enum_values_have_a_bucket
 # will catch the omission.
+# All strategy types the bot can produce. Used to pre-seed the strategy list
+# so the health page dropdown always shows every strategy, even ones with no
+# activity in the current window.
+KNOWN_STRATEGY_TYPES: tuple[str, ...] = (
+    "wheel_csp",
+    "wheel_cc",
+    "turnover_wheel_csp",
+    "turnover_wheel_cc",
+    "iron_condor",
+    "bull_put_spread",
+    "bear_call_spread",
+    "long_call_vertical",
+    "iron_butterfly",
+    "calendar_spread",
+)
+
 _GATE_TO_BUCKET: dict[str, str] = {
     "pre_check":       "skip_pre_check",
     "claude_skip":     "skip_claude",
@@ -171,9 +187,11 @@ class StrategyHealthRepository:
         ).fetchall()
 
         # ── Python aggregation ─────────────────────────────────────────────
-        # Collect all strategies seen anywhere in the window so silent weeks
-        # still produce zero rows.
-        all_strategies: set[str] = set()
+        # Pre-seed with all known strategies so the health page dropdown always
+        # shows every strategy, even ones with no activity in this window.
+        # When the caller passes a filter, only seed the filtered subset.
+        seed = set(strategy_types) if strategy_types else set(KNOWN_STRATEGY_TYPES)
+        all_strategies: set[str] = seed
 
         # (strategy, iso_week) → {bucket_name: count}
         dec_data: dict[tuple, dict] = {}
