@@ -68,8 +68,8 @@ class ProcessLock:
 
         with _ACQUIRE_LOCK:
             if self._lock_path.exists():
-                existing_pid = self._read_pid()
-                if existing_pid is not None and self._is_live_python(existing_pid):
+                existing_pid, existing_create_time = self._read_lock()
+                if existing_pid is not None and self._is_live_python(existing_pid, existing_create_time):
                     raise ProcessLockHeld(
                         f"Lock '{self._name}' is held by PID {existing_pid} "
                         f"(lock file: {self._lock_path})",
@@ -121,29 +121,58 @@ class ProcessLock:
     # ── internals ────────────────────────────────────────────────────────
 
     def _write_lock(self) -> None:
-        """Atomically write PID to the lock file.
+        """Atomically write PID and process creation time to the lock file.
 
         Writes to a sibling temp file then uses os.replace() so the
-        final path is either absent or contains a complete, valid PID —
+        final path is either absent or contains a complete, valid entry —
         never a partial write.
+
+        Format: "{pid}:{create_time}" where create_time is a float from
+        psutil (seconds since epoch). Falls back to "{pid}" if psutil is
+        unavailable.
         """
+        try:
+            import psutil
+
+            create_time = psutil.Process(self._pid).create_time()
+            content = f"{self._pid}:{create_time}"
+        except Exception:
+            content = str(self._pid)
+
         tmp_path = self._lock_path.parent / (self._lock_path.name + ".tmp")
-        tmp_path.write_text(str(self._pid), encoding="utf-8")
+        tmp_path.write_text(content, encoding="utf-8")
         os.replace(str(tmp_path), str(self._lock_path))
+
+    def _read_lock(self) -> tuple[Optional[int], Optional[float]]:
+        """Read PID and optional create_time from lock file.
+
+        Returns (None, None) on any read/parse failure.
+        Returns (pid, None) for old-format lock files that lack a create_time.
+        """
+        try:
+            content = self._lock_path.read_text(encoding="utf-8").strip()
+            if ":" in content:
+                pid_str, ct_str = content.split(":", 1)
+                return int(pid_str), float(ct_str)
+            return int(content), None
+        except (OSError, ValueError):
+            return None, None
 
     def _read_pid(self) -> Optional[int]:
         """Read PID from lock file; returns None on failure."""
-        try:
-            content = self._lock_path.read_text(encoding="utf-8").strip()
-            return int(content)
-        except (OSError, ValueError):
-            return None
+        pid, _ = self._read_lock()
+        return pid
 
-    def _is_live_python(self, pid: int) -> bool:
-        """Return True if *pid* is a live Python process.
+    def _is_live_python(self, pid: int, expected_create_time: Optional[float] = None) -> bool:
+        """Return True if *pid* is the same live Python process that wrote the lock.
+
+        Checks the process creation time when available — this prevents a
+        reused PID (e.g. a uvicorn worker assigned the same PID after a
+        container restart) from being mistaken for the original scheduler.
 
         Returns False (treat as stale) if psutil is unavailable, the PID
-        doesn't exist, or any check raises an unexpected exception.
+        doesn't exist, the creation time doesn't match, or any check raises
+        an unexpected exception.
         """
         try:
             import psutil  # optional dependency
@@ -151,7 +180,19 @@ class ProcessLock:
             if not psutil.pid_exists(pid):
                 return False
             proc = psutil.Process(pid)
-            return "python" in proc.name().lower()
+            if "python" not in proc.name().lower():
+                return False
+            if expected_create_time is not None:
+                # Allow 1 s of float imprecision; a reused PID will differ by
+                # at least several seconds.
+                return abs(proc.create_time() - expected_create_time) < 1.0
+            # Old-format lock (no create_time stored) — treat as stale so that
+            # a container restart always wins over a potentially dead process.
+            logger.info(
+                "Lock '%s' has no creation-time stamp — treating as stale",
+                self._name,
+            )
+            return False
         except Exception:
             return False
 

@@ -36,7 +36,8 @@
       "PowerShell(& \"C:\\\\Users\\\\davew\\\\repos\\\\trade-pilot\\\\venv\\\\Scripts\\\\pip.exe\" install sentry-sdk; Write-Host \"Exit: $LASTEXITCODE\")",
       "PowerShell(Start-Process -FilePath \"C:\\\\Users\\\\davew\\\\repos\\\\trade-pilot\\\\venv\\\\Scripts\\\\pip.exe\" -ArgumentList \"install\",\"sentry-sdk\" -Wait -PassThru -NoNewWindow -RedirectStandardOutput \"C:\\\\Users\\\\davew\\\\repos\\\\trade-pilot\\\\pip_out.txt\" -RedirectStandardError \"C:\\\\Users\\\\davew\\\\repos\\\\trade-pilot\\\\pip_err.txt\"; Get-Content \"C:\\\\Users\\\\davew\\\\repos\\\\trade-pilot\\\\pip_out.txt\"; Get-Content \"C:\\\\Users\\\\davew\\\\repos\\\\trade-pilot\\\\pip_err.txt\")",
       "PowerShell(& \"C:\\\\Users\\\\davew\\\\repos\\\\trade-pilot\\\\venv\\\\Scripts\\\\python.exe\" --version; & \"C:\\\\Users\\\\davew\\\\repos\\\\trade-pilot\\\\venv\\\\Scripts\\\\python.exe\" -m pip --version)",
-      "PowerShell(& \"C:\\\\Users\\\\davew\\\\repos\\\\trade-pilot\\\\venv\\\\Scripts\\\\python.exe\" -m pip install sentry-sdk 2>&1)"
+      "PowerShell(& \"C:\\\\Users\\\\davew\\\\repos\\\\trade-pilot\\\\venv\\\\Scripts\\\\python.exe\" -m pip install sentry-sdk 2>&1)",
+      "WebFetch(domain:render.com)"
     ]
   }
 }
