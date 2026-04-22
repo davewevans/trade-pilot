@@ -40,6 +40,8 @@ def test_acquire_succeeds_when_no_lock(tmp_path):
 
 
 def test_acquire_raises_when_live_python_holds_lock(tmp_path):
+    import psutil
+
     # Spawn a real, long-lived Python process so we have a live PID.
     proc = subprocess.Popen(
         [sys.executable, "-c", "import time; time.sleep(30)"],
@@ -47,9 +49,9 @@ def test_acquire_raises_when_live_python_holds_lock(tmp_path):
         stderr=subprocess.DEVNULL,
     )
     try:
-        # Write that PID into the lock file manually.
+        create_time = psutil.Process(proc.pid).create_time()
         lock_path = tmp_path / "test-job.lock"
-        lock_path.write_text(str(proc.pid), encoding="utf-8")
+        lock_path.write_text(f"{proc.pid}:{create_time}", encoding="utf-8")
 
         lock = _lock("test-job", tmp_path)
         with pytest.raises(ProcessLockHeld) as exc_info:
@@ -62,7 +64,39 @@ def test_acquire_raises_when_live_python_holds_lock(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# case 3: acquire succeeds when lock file contains a non-existent PID (stale)
+# case 3: acquire succeeds when PID is reused by a different process (the
+# container-restart bug: PID 39 assigned to a uvicorn worker after redeploy)
+# ---------------------------------------------------------------------------
+
+
+def test_acquire_succeeds_when_pid_reused_by_different_process(tmp_path):
+    import psutil
+
+    # Spawn a real Python process to get a live PID.
+    proc = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(30)"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        real_create_time = psutil.Process(proc.pid).create_time()
+        # Write the correct PID but a creation time from the past (simulates
+        # a dead process whose PID was recycled to this new process).
+        stale_create_time = real_create_time - 3600.0
+        lock_path = tmp_path / "test-job.lock"
+        lock_path.write_text(f"{proc.pid}:{stale_create_time}", encoding="utf-8")
+
+        lock = _lock("test-job", tmp_path)
+        lock.acquire()  # should not raise — create_time mismatch = stale
+        assert lock._acquired
+        lock.release()
+    finally:
+        proc.kill()
+        proc.wait()
+
+
+# ---------------------------------------------------------------------------
+# case 4a: acquire succeeds when lock file contains a non-existent PID (stale)
 # ---------------------------------------------------------------------------
 
 
@@ -78,7 +112,33 @@ def test_acquire_succeeds_on_stale_nonexistent_pid(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# case 4: acquire succeeds when lock contains a PID of a live non-Python process
+# case 4b: acquire succeeds on old-format lock (PID only, no create_time)
+# ---------------------------------------------------------------------------
+
+
+def test_acquire_succeeds_on_old_format_lock_with_live_pid(tmp_path):
+    # Spawn a real Python process.
+    proc = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(30)"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        # Old format: just the PID, no creation time.
+        lock_path = tmp_path / "test-job.lock"
+        lock_path.write_text(str(proc.pid), encoding="utf-8")
+
+        lock = _lock("test-job", tmp_path)
+        lock.acquire()  # should not raise — old format treated as stale
+        assert lock._acquired
+        lock.release()
+    finally:
+        proc.kill()
+        proc.wait()
+
+
+# ---------------------------------------------------------------------------
+# case 5: acquire succeeds when lock contains a PID of a live non-Python process
 # ---------------------------------------------------------------------------
 
 
@@ -100,7 +160,7 @@ def test_acquire_succeeds_on_live_non_python_pid(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# case 5: release deletes the lock file
+# case 6: release deletes the lock file
 # ---------------------------------------------------------------------------
 
 

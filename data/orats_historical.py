@@ -241,8 +241,16 @@ class ORATSHistorical:
         """Fetch full IV rank history for a symbol over a date range.
 
         Returns a list of dicts with tradeDate, iv, ivRank1y, etc.
+
+        end_date is capped to yesterday: ORATS hist/* endpoints only carry
+        settled trading days, so requesting today's date returns 404.
         """
-        params_key = f"{symbol.upper()}|{start_date or ''}|{end_date or ''}"
+        from datetime import date as _date, timedelta as _td
+        yesterday = (_date.today() - _td(days=1)).isoformat()
+        if end_date is None or end_date > yesterday:
+            end_date = yesterday
+
+        params_key = f"{symbol.upper()}|{start_date or ''}|{end_date}"
         cached = _cache_get("hist/ivrank", params_key, end_date)
         _job_name = os.environ.get("TRADE_PILOT_JOB_NAME")
         if cached is not None:
@@ -252,7 +260,7 @@ class ORATSHistorical:
 
         params: dict = {"token": self.api_key, "ticker": symbol.upper()}
         if start_date:
-            params["tradeDate"] = f"{start_date},{end_date or ''}"
+            params["tradeDate"] = f"{start_date},{end_date}"
 
         from data.api_ledger import get_ledger
         get_ledger().check_and_reserve("orats_historical", "hist/ivrank", symbol, _job_name)
@@ -265,9 +273,16 @@ class ORATSHistorical:
                 params=params,
                 timeout=_TIMEOUT,
             )
-            resp.raise_for_status()
-            _status_code = resp.status_code
-            rows = resp.json().get("data", []) or []
+            if resp.status_code == 404:
+                logger.warning(
+                    "ORATS hist/ivrank returned 404 for %s (range %s–%s) — no data for this period",
+                    symbol, start_date, end_date,
+                )
+                _status_code = 404
+            else:
+                resp.raise_for_status()
+                _status_code = resp.status_code
+                rows = resp.json().get("data", []) or []
         except Exception:
             logger.warning(
                 "ORATS hist/ivrank failed for %s", symbol, exc_info=True,

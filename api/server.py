@@ -1686,8 +1686,8 @@ def iv_history(
     if cached and (now - cached[0]) < _IV_HISTORY_CACHE_TTL:
         return cached[1]
 
-    end_dt = date.today()
-    start_dt = end_dt - timedelta(days=days)
+    end_dt = date.today() - timedelta(days=1)  # hist/* only has settled days
+    start_dt = date.today() - timedelta(days=days)
 
     try:
         from data.orats_historical import ORATSHistorical

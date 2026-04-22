@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.11.2] - 2026-04-22
+
+### Fixed
+- **Stale scheduler lock on container restart**: `ProcessLock` now writes the process creation time alongside the PID; on acquire, both are verified so a reused PID (e.g. a uvicorn worker assigned the same PID after a Render redeploy) is correctly treated as a stale lock rather than a live scheduler, preventing the market-open job from being silently skipped.
+- **ORATS `hist/ivrank` 404 on live trading days**: `get_iv_rank_history` now caps `end_date` to yesterday before issuing the request — ORATS historical endpoints only carry settled trading days, so requesting today's date returned 404 and logged a noisy traceback. 404 responses are now handled explicitly with a clean warning instead of raising through the generic exception path. `GET /api/iv-history` in the API server likewise uses yesterday as its end date.
+
 ## [1.11.1] - 2026-04-21
 
 ### Fixed
