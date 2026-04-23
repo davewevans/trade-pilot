@@ -20,6 +20,14 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 
+from config import settings as _settings  # noqa: E402
+if _settings.STRUCTURED_LOG_CAPTURE_ENABLED:
+    from utils.structured_log_handler import install_structured_log_handler
+    install_structured_log_handler(
+        log_dir=_settings.STRUCTURED_LOG_DIR,
+        backup_count=_settings.STRUCTURED_LOG_RETENTION_DAYS,
+    )
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="trade-pilot API server")

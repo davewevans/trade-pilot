@@ -339,3 +339,32 @@ def test_format_skip_history_excludes_rejected_entries(journal):
     # Only 1 skip entry (the Claude skip), not 2
     assert "1 total" in out
     assert "LOW_IVR" in out
+
+
+def test_get_recent_by_days_handles_none_and_missing_symbol(tmp_path):
+    """Regression: e.get('symbol', '').upper() crashes when symbol is explicitly None."""
+    import json
+
+    path = tmp_path / "journal.jsonl"
+    entries = [
+        # 1. Normal entry with matching symbol — should be returned
+        {"underlying": "AAPL", "symbol": "AAPL260117C150", "action": "sell_put",
+         "status": "filled", "timestamp": date.today().isoformat() + "T10:00:00"},
+        # 2. Entry with symbol: None (the shape that crashed on 4/23)
+        {"underlying": None, "symbol": None, "action": "sell_put",
+         "status": "filled", "timestamp": date.today().isoformat() + "T10:00:00"},
+        # 3. Entry with no symbol key at all
+        {"action": "sell_put", "status": "filled",
+         "timestamp": date.today().isoformat() + "T10:00:00"},
+        # 4. Entry with empty string symbol
+        {"underlying": "", "symbol": "", "action": "sell_put",
+         "status": "filled", "timestamp": date.today().isoformat() + "T10:00:00"},
+    ]
+    with open(path, "w") as f:
+        for e in entries:
+            f.write(json.dumps(e) + "\n")
+
+    journal = TradeJournal(path=path)
+    result = journal.get_recent_by_days("AAPL", 30)
+    assert len(result) == 1
+    assert result[0]["underlying"] == "AAPL"

@@ -240,25 +240,62 @@ class BullPutSpreadStrategy:
 
     def _check_entry_conditions(self, context: dict) -> str | None:
         """Return a skip reason string, or None if all conditions pass."""
+        symbol = context.get("symbol", "?")
+        tech = context.get("technicals") or {}
+        spot = tech.get("spot_price") or tech.get("current_price")
+        sma_50 = tech.get("sma_50")
+        above_sma_50 = tech.get("above_sma_50")
+
+        logger.info(
+            "bull_put_spread_precheck_symbol",
+            extra={
+                "symbol": symbol,
+                "spot_price": spot,
+                "sma_50": sma_50,
+                "above_sma_50": (spot > sma_50 if (spot is not None and sma_50 is not None) else above_sma_50),
+            },
+        )
+
         regime = context.get("confirmed_market_regime", "NEUTRAL")
         if regime not in ("NEUTRAL", "BULL"):
+            logger.info(
+                "bull_put_spread_precheck_reject",
+                extra={"symbol": symbol, "reason": "adverse_regime", "regime": regime},
+            )
             return f"Market regime is {regime}, need NEUTRAL or BULL"
 
         ivr = context.get("iv_rank")
         if ivr is not None and ivr < 35:
+            logger.info(
+                "bull_put_spread_precheck_reject",
+                extra={"symbol": symbol, "reason": "low_ivr", "iv_rank": ivr},
+            )
             return f"IV rank {ivr} < 35 minimum"
 
-        tech = context.get("technicals") or {}
-        if tech.get("above_sma_50") is False:
+        if above_sma_50 is False:
+            logger.info(
+                "bull_put_spread_precheck_reject",
+                extra={"symbol": symbol, "reason": "below_50_sma",
+                       "spot_price": spot, "sma_50": sma_50},
+            )
             return "Underlying below 50-day SMA"
 
         fund = context.get("fundamentals") or {}
         dte_earnings = fund.get("days_to_earnings")
         if dte_earnings is not None and dte_earnings <= 25:
+            logger.info(
+                "bull_put_spread_precheck_reject",
+                extra={"symbol": symbol, "reason": "earnings_too_close",
+                       "days_to_earnings": dte_earnings},
+            )
             return f"Earnings in {dte_earnings} days (need > 25)"
 
         iv_hv = (context.get("volatility") or {}).get("iv_hv_ratio")
         if iv_hv is not None and iv_hv < 0.90:
+            logger.info(
+                "bull_put_spread_precheck_reject",
+                extra={"symbol": symbol, "reason": "low_iv_hv_ratio", "iv_hv_ratio": iv_hv},
+            )
             return (
                 f"IV/HV ratio {iv_hv:.2f} < 0.90 — options underpriced for premium selling"
             )
@@ -266,13 +303,20 @@ class BullPutSpreadStrategy:
         # Already have an active spread on same underlying (includes
         # PENDING_OPEN / PENDING_CLOSE — must not double-submit).
         if self.spread_tracker:
-            symbol = context.get("symbol", "")
             open_bps = self.spread_tracker.get_active_spreads(
                 underlying=symbol, strategy_type="bull_put_spread",
             )
             if open_bps:
+                logger.info(
+                    "bull_put_spread_precheck_reject",
+                    extra={"symbol": symbol, "reason": "active_spread_exists"},
+                )
                 return f"Already have an active bull put spread on {symbol}"
 
+        logger.info(
+            "bull_put_spread_precheck_accept",
+            extra={"symbol": symbol, "spot_price": spot, "sma_50": sma_50},
+        )
         return None
 
     # ── management evaluation ───────────────────────────────

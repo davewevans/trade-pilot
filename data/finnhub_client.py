@@ -26,6 +26,14 @@ _earnings_history_cache: dict[str, tuple[float, list]] = {}
 _analyst_cache: dict[str, tuple[float, dict]] = {}
 _sentiment_cache: dict[str, tuple[float, dict]] = {}
 
+# Endpoints that returned 403 once — disabled for the rest of the process.
+# Only 403 sets the flag; other errors (rate limit, transient) still retry.
+_ENDPOINT_DISABLED: dict[str, bool] = {
+    "price_target": False,
+    "upgrade_downgrade": False,
+    "news_sentiment": False,
+}
+
 
 class FinnhubClient:
     """Client for the Finnhub API (wraps the official finnhub-python SDK)."""
@@ -33,6 +41,10 @@ class FinnhubClient:
     def __init__(self, api_key: str | None = None):
         key = api_key or settings.FINNHUB_API_KEY
         self._client = finnhub.Client(api_key=key)
+        if not settings.FINNHUB_PAID_TIER:
+            _ENDPOINT_DISABLED["price_target"] = True
+            _ENDPOINT_DISABLED["upgrade_downgrade"] = True
+            _ENDPOINT_DISABLED["news_sentiment"] = True
 
     # ── Earnings calendar (next upcoming) ───────────────────
 
@@ -164,42 +176,62 @@ class FinnhubClient:
         price_target: dict = {
             "mean": None, "high": None, "low": None, "median": None,
         }
-        try:
-            pt = self._client.price_target(symbol) or {}
-            price_target = {
-                "mean": pt.get("targetMean"),
-                "high": pt.get("targetHigh"),
-                "low": pt.get("targetLow"),
-                "median": pt.get("targetMedian"),
-            }
-        except Exception:
-            logger.warning(
-                "Finnhub price_target failed for %s", symbol, exc_info=True,
-            )
+        if not _ENDPOINT_DISABLED["price_target"]:
+            try:
+                pt = self._client.price_target(symbol) or {}
+                price_target = {
+                    "mean": pt.get("targetMean"),
+                    "high": pt.get("targetHigh"),
+                    "low": pt.get("targetLow"),
+                    "median": pt.get("targetMedian"),
+                }
+            except finnhub.FinnhubAPIException as e:
+                if getattr(e, "status_code", None) == 403:
+                    if not _ENDPOINT_DISABLED["price_target"]:
+                        logger.warning(
+                            "finnhub_endpoint_disabled_403",
+                            extra={"endpoint": "price_target",
+                                   "detail": "Tier does not include this endpoint; disabling for session."},
+                        )
+                        _ENDPOINT_DISABLED["price_target"] = True
+                else:
+                    logger.warning("Finnhub price_target failed for %s", symbol, exc_info=True)
+            except Exception:
+                logger.warning("Finnhub price_target failed for %s", symbol, exc_info=True)
 
         recent_changes: list[dict] = []
-        try:
-            changes = self._client.upgrade_downgrade(symbol=symbol) or []
-            for ch in changes[:3]:
-                # Finnhub returns gradeTime as unix seconds
-                gt = ch.get("gradeTime")
-                date_str = ""
-                if gt:
-                    try:
-                        date_str = date.fromtimestamp(int(gt)).isoformat()
-                    except (ValueError, TypeError, OSError):
-                        date_str = str(gt)
-                recent_changes.append({
-                    "date": date_str,
-                    "action": ch.get("action"),
-                    "from_grade": ch.get("fromGrade"),
-                    "to_grade": ch.get("toGrade"),
-                    "firm": ch.get("company"),
-                })
-        except Exception:
-            logger.warning(
-                "Finnhub upgrade_downgrade failed for %s", symbol, exc_info=True,
-            )
+        if not _ENDPOINT_DISABLED["upgrade_downgrade"]:
+            try:
+                changes = self._client.upgrade_downgrade(symbol=symbol) or []
+                for ch in changes[:3]:
+                    # Finnhub returns gradeTime as unix seconds
+                    gt = ch.get("gradeTime")
+                    date_str = ""
+                    if gt:
+                        try:
+                            date_str = date.fromtimestamp(int(gt)).isoformat()
+                        except (ValueError, TypeError, OSError):
+                            date_str = str(gt)
+                    recent_changes.append({
+                        "date": date_str,
+                        "action": ch.get("action"),
+                        "from_grade": ch.get("fromGrade"),
+                        "to_grade": ch.get("toGrade"),
+                        "firm": ch.get("company"),
+                    })
+            except finnhub.FinnhubAPIException as e:
+                if getattr(e, "status_code", None) == 403:
+                    if not _ENDPOINT_DISABLED["upgrade_downgrade"]:
+                        logger.warning(
+                            "finnhub_endpoint_disabled_403",
+                            extra={"endpoint": "upgrade_downgrade",
+                                   "detail": "Tier does not include this endpoint; disabling for session."},
+                        )
+                        _ENDPOINT_DISABLED["upgrade_downgrade"] = True
+                else:
+                    logger.warning("Finnhub upgrade_downgrade failed for %s", symbol, exc_info=True)
+            except Exception:
+                logger.warning("Finnhub upgrade_downgrade failed for %s", symbol, exc_info=True)
 
         result = {
             "recommendation": recommendation,
@@ -217,12 +249,25 @@ class FinnhubClient:
         if cached and time.monotonic() - cached[0] < _SENTIMENT_TTL:
             return cached[1]
 
+        if _ENDPOINT_DISABLED["news_sentiment"]:
+            return None
+
         try:
             payload = self._client.news_sentiment(symbol) or {}
+        except finnhub.FinnhubAPIException as e:
+            if getattr(e, "status_code", None) == 403:
+                if not _ENDPOINT_DISABLED["news_sentiment"]:
+                    logger.warning(
+                        "finnhub_endpoint_disabled_403",
+                        extra={"endpoint": "news_sentiment",
+                               "detail": "Tier does not include this endpoint; disabling for session."},
+                    )
+                    _ENDPOINT_DISABLED["news_sentiment"] = True
+            else:
+                logger.warning("Finnhub news_sentiment failed for %s", symbol, exc_info=True)
+            return None
         except Exception:
-            logger.warning(
-                "Finnhub news_sentiment failed for %s", symbol, exc_info=True,
-            )
+            logger.warning("Finnhub news_sentiment failed for %s", symbol, exc_info=True)
             return None
 
         sentiment = payload.get("sentiment") or {}

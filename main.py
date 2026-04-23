@@ -685,6 +685,14 @@ def main() -> None:
     logging.getLogger("data.orats_historical").setLevel(logging.WARNING)
     logging.getLogger("data.orats_client").setLevel(logging.WARNING)
 
+    # Structured JSONL log capture — tees WARNING+ to a rolling daily file.
+    if settings.STRUCTURED_LOG_CAPTURE_ENABLED:
+        from utils.structured_log_handler import install_structured_log_handler
+        install_structured_log_handler(
+            log_dir=settings.STRUCTURED_LOG_DIR,
+            backup_count=settings.STRUCTURED_LOG_RETENTION_DAYS,
+        )
+
     logger.info("Mode: %s", "PRODUCTION" if settings.RENDER else "LOCAL")
     logger.info("Dry Run: %s", settings.DRY_RUN)
     logger.info("Watchlist: %s", settings.WATCHLIST)

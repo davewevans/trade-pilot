@@ -12,6 +12,7 @@ from brokers.base import BaseBroker
 from config import settings
 from data import market_data
 from data.market_regime import RegimeStabilityFilter, derive_market_regime
+from data.option_chain_utils import clamp_strike_range
 from data.source_health import SourceHealth
 from data.trade_journal import TradeJournal
 
@@ -854,17 +855,30 @@ class ContextBuilder:
         long_lte = (today + timedelta(days=long_dte_max)).isoformat()
 
         # ATM options: delta 0.40–0.60
+        _clamp_side = option_type if option_type in ("put", "call") else "call"
+        if settings.OPTION_CHAIN_STRIKE_PRECLAMP_ENABLED:
+            _cal_min, _cal_max = clamp_strike_range(
+                underlying_price, _clamp_side, settings.OPTION_CHAIN_STRIKE_CLAMP_PCT
+            )
+            _cal_gte = f"{_cal_min:.2f}" if _cal_min > 0 else None
+            _cal_lte = f"{_cal_max:.2f}" if _cal_max != float("inf") else None
+        else:
+            _cal_gte = _cal_lte = None
         short_contracts = self.broker.get_option_chain_with_greeks(
             underlying_symbol=underlying_symbol,
             expiration_date_gte=short_gte,
             expiration_date_lte=short_lte,
             contract_type=option_type,
+            strike_price_gte=_cal_gte,
+            strike_price_lte=_cal_lte,
         ) or []
         long_contracts = self.broker.get_option_chain_with_greeks(
             underlying_symbol=underlying_symbol,
             expiration_date_gte=long_gte,
             expiration_date_lte=long_lte,
             contract_type=option_type,
+            strike_price_gte=_cal_gte,
+            strike_price_lte=_cal_lte,
         ) or []
 
         if not short_contracts or not long_contracts:
@@ -1048,17 +1062,34 @@ class ContextBuilder:
         }
 
         # Fetch put and call chains for the DTE window
+        if settings.OPTION_CHAIN_STRIKE_PRECLAMP_ENABLED:
+            _ib_put_min, _ib_put_max = clamp_strike_range(
+                underlying_price, "put", settings.OPTION_CHAIN_STRIKE_CLAMP_PCT
+            )
+            _ib_call_min, _ib_call_max = clamp_strike_range(
+                underlying_price, "call", settings.OPTION_CHAIN_STRIKE_CLAMP_PCT
+            )
+            _ib_put_gte = f"{_ib_put_min:.2f}" if _ib_put_min > 0 else None
+            _ib_put_lte = f"{_ib_put_max:.2f}" if _ib_put_max != float("inf") else None
+            _ib_call_gte = f"{_ib_call_min:.2f}" if _ib_call_min > 0 else None
+            _ib_call_lte = f"{_ib_call_max:.2f}" if _ib_call_max != float("inf") else None
+        else:
+            _ib_put_gte = _ib_put_lte = _ib_call_gte = _ib_call_lte = None
         put_contracts = self.broker.get_option_chain_with_greeks(
             underlying_symbol=underlying_symbol,
             expiration_date_gte=gte,
             expiration_date_lte=lte,
             contract_type="put",
+            strike_price_gte=_ib_put_gte,
+            strike_price_lte=_ib_put_lte,
         ) or []
         call_contracts = self.broker.get_option_chain_with_greeks(
             underlying_symbol=underlying_symbol,
             expiration_date_gte=gte,
             expiration_date_lte=lte,
             contract_type="call",
+            strike_price_gte=_ib_call_gte,
+            strike_price_lte=_ib_call_lte,
         ) or []
 
         if not put_contracts and not call_contracts:
@@ -1214,11 +1245,21 @@ class ContextBuilder:
         underlying_price: float,
     ) -> list[dict]:
         """Build credit spread candidates (bull put or bear call)."""
+        if settings.OPTION_CHAIN_STRIKE_PRECLAMP_ENABLED:
+            _cs_min, _cs_max = clamp_strike_range(
+                underlying_price, option_type, settings.OPTION_CHAIN_STRIKE_CLAMP_PCT
+            )
+            _cs_gte = f"{_cs_min:.2f}" if _cs_min > 0 else None
+            _cs_lte = f"{_cs_max:.2f}" if _cs_max != float("inf") else None
+        else:
+            _cs_gte = _cs_lte = None
         contracts = self.broker.get_option_chain_with_greeks(
             underlying_symbol=symbol,
             expiration_date_gte=gte,
             expiration_date_lte=lte,
             contract_type=option_type,
+            strike_price_gte=_cs_gte,
+            strike_price_lte=_cs_lte,
         )
         if not contracts:
             return []
@@ -1368,11 +1409,21 @@ class ContextBuilder:
         underlying_price: float,
     ) -> list[dict]:
         """Build debit spread candidates (long call vertical)."""
+        if settings.OPTION_CHAIN_STRIKE_PRECLAMP_ENABLED:
+            _lv_min, _lv_max = clamp_strike_range(
+                underlying_price, "call", settings.OPTION_CHAIN_STRIKE_CLAMP_PCT
+            )
+            _lv_gte = f"{_lv_min:.2f}" if _lv_min > 0 else None
+            _lv_lte = f"{_lv_max:.2f}" if _lv_max != float("inf") else None
+        else:
+            _lv_gte = _lv_lte = None
         contracts = self.broker.get_option_chain_with_greeks(
             underlying_symbol=symbol,
             expiration_date_gte=gte,
             expiration_date_lte=lte,
             contract_type="call",
+            strike_price_gte=_lv_gte,
+            strike_price_lte=_lv_lte,
         )
         if not contracts:
             return []

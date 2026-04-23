@@ -3760,6 +3760,44 @@ def strategy_health(
         conn.close()
 
 
+# ── Daily evaluation bundle ────────────────────────────────
+
+
+@app.get("/api/daily-evaluation-bundle")
+def daily_evaluation_bundle(date: str | None = None):
+    """Return a markdown bundle for the given date (ET). Defaults to today."""
+    import datetime as _dt
+    from zoneinfo import ZoneInfo as _ZI
+    _ET = _ZI("America/New_York")
+
+    if date:
+        try:
+            target = _dt.date.fromisoformat(date)
+        except ValueError:
+            return JSONResponse(status_code=400, content={"error": f"Invalid date: {date} (expected YYYY-MM-DD)"})
+    else:
+        target = _dt.datetime.now(_ET).date()
+
+    try:
+        from api.daily_bundle import build_daily_bundle
+        content = build_daily_bundle(
+            target_date=target,
+            db_path=str(settings.DATABASE_PATH),
+            snapshots_dir=str(settings.SNAPSHOTS_DIR),
+            log_dir=settings.STRUCTURED_LOG_DIR,
+        )
+    except Exception:
+        logger.exception("daily_bundle_build_failed")
+        return JSONResponse(status_code=500, content={"error": "Bundle build failed"})
+
+    filename = f"trade-pilot-{target.isoformat()}.md"
+    return Response(
+        content=content,
+        media_type="text/markdown",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 # ── Static frontend (SPA catch-all) ────────────────────────
 # Defined as a route (not a mount) so that unknown paths like
 # /reasoning fall back to index.html instead of 404-ing.

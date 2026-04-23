@@ -1183,6 +1183,8 @@ def run() -> None:
                             strategy_name, exc_info=True,
                         )
 
+                    _precheck_accepted: list[str] = []
+                    _precheck_rejected: dict[str, int] = {}
                     for sym in _screen_survivors:
                         try:
                             candidate_ctx = ctx_builder.build(sym, "IDLE")
@@ -1204,8 +1206,24 @@ def run() -> None:
                             best_score = score
                             best_symbol = sym
                             best_ctx = candidate_ctx
+                            _precheck_accepted.append(sym)
                         elif skip_reason is not None:
                             last_skip_reason = skip_reason
+                            _short_reason = skip_reason[:60] if skip_reason else "unknown"
+                            _precheck_rejected[_short_reason] = _precheck_rejected.get(_short_reason, 0) + 1
+
+                    if strategy_name == "bull_put_spread":
+                        logger.info(
+                            "bull_put_spread_precheck_summary",
+                            extra={
+                                "total_symbols": len(list(symbols)),
+                                "screen_survivors": len(_screen_survivors),
+                                "accepted": len(_precheck_accepted),
+                                "rejected": sum(_precheck_rejected.values()),
+                                "rejections_by_reason": _precheck_rejected,
+                                "accepted_symbols": _precheck_accepted,
+                            },
+                        )
 
                     if best_ctx is None:
                         wl_name = {

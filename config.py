@@ -75,6 +75,26 @@ class Settings:
 
         # Finnhub — earnings calendar (free tier: 60 req/min)
         self.FINNHUB_API_KEY: str = os.getenv("FINNHUB_API_KEY", "")
+        # When False (default), price_target / upgrade_downgrade / news_sentiment
+        # are preemptively disabled at startup — free tier returns 403 on all three.
+        # Set True after upgrading the Finnhub plan.
+        self.FINNHUB_PAID_TIER: bool = (
+            os.getenv("FINNHUB_PAID_TIER", "false").lower() == "true"
+        )
+
+        # When True, clamp option-chain strike range to ±OPTION_CHAIN_STRIKE_CLAMP_PCT
+        # of spot before fetching. Reduces fan-out from ~1000 contracts to ~100 on
+        # high-price names (SPY, AMZN), avoiding Alpaca's 500-contract cap and
+        # speeding context builds. Default True — old behaviour is provably wrong
+        # (data loss at cap). Set False only to roll back if the clamp cuts something.
+        self.OPTION_CHAIN_STRIKE_PRECLAMP_ENABLED: bool = (
+            os.getenv("OPTION_CHAIN_STRIKE_PRECLAMP_ENABLED", "true").lower() == "true"
+        )
+        # One-sided clamp width as fraction of spot. 0.25 = ±25%.
+        # Do not lower below 0.15 without verifying target delta range stays inside.
+        self.OPTION_CHAIN_STRIKE_CLAMP_PCT: float = float(
+            os.getenv("OPTION_CHAIN_STRIKE_CLAMP_PCT", "0.25")
+        )
 
         # --- Environment / deployment mode ---
         self.RENDER: bool = os.getenv("RENDER", "false").lower() == "true"
@@ -87,6 +107,20 @@ class Settings:
         self.REPORTS_DIR: Path = self.DATA_DIR / "reports"
         self.JOURNAL_PATH: Path = self.DATA_DIR / "journal.jsonl"
         self.LOG_DIR: Path = self.DATA_DIR / "logs"
+
+        # Structured JSONL log capture to persistent disk. Tees WARNING/ERROR
+        # records (with tracebacks + extra fields) to a daily file. Consumed
+        # by the daily_bundle endpoint.
+        self.STRUCTURED_LOG_CAPTURE_ENABLED: bool = (
+            os.getenv("STRUCTURED_LOG_CAPTURE_ENABLED", "true").lower() == "true"
+        )
+        self.STRUCTURED_LOG_DIR: str = os.getenv(
+            "STRUCTURED_LOG_DIR",
+            str(self.DATA_DIR / "snapshots" / "logs"),
+        )
+        self.STRUCTURED_LOG_RETENTION_DAYS: int = int(
+            os.getenv("STRUCTURED_LOG_RETENTION_DAYS", "30")
+        )
 
         self.SNAPSHOTS_DIR: Path = self.DATA_DIR / "snapshots"
         self.DATABASE_PATH: Path = Path(
@@ -189,6 +223,15 @@ class Settings:
         # SQLite init fails.  In production (RENDER=true) the default is to raise
         # rather than degrade invisibly.  Dev always falls back with a CRITICAL log.
         self.ORATS_CACHE_ALLOW_FALLBACK: str = os.getenv("ORATS_CACHE_ALLOW_FALLBACK", "0")
+
+        # When true, set data.orats_client logger to DEBUG for one cycle.
+        # Captures raw ORATS /cores responses before processing. Default false —
+        # raw payloads are too verbose for routine operation.
+        # Operator: set ORATS_DEBUG_LOGGING=true on Render, run one market_open
+        # cycle, inspect logs, then disable.
+        self.ORATS_DEBUG_LOGGING: bool = (
+            os.getenv("ORATS_DEBUG_LOGGING", "false").lower() == "true"
+        )
 
         # ── Notifications ──────────────────────────────────────
         # ntfy.sh topic name. When unset, ntfy notifications are silently dropped.

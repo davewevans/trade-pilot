@@ -111,14 +111,38 @@ class ORATSCache:
             self._fallback_set(endpoint, cache_key, data, ttl_seconds)
             return
 
+        endpoint_str = str(endpoint) if endpoint is not None else ""
+        cache_key_str = str(cache_key) if cache_key is not None else ""
+        ttl_int = int(ttl_seconds) if ttl_seconds is not None else 0
+
+        if not endpoint_str or not cache_key_str:
+            logger.warning(
+                "orats_cache_set_empty_key",
+                extra={"endpoint": endpoint_str, "cache_key": cache_key_str},
+            )
+
         try:
             self._conn.execute(
                 """INSERT OR REPLACE INTO orats_cache
                    (endpoint, cache_key, data_json, fetched_at, ttl_seconds)
                    VALUES (?, ?, ?, ?, ?)""",
-                (endpoint, cache_key, json.dumps(data), time.time(), ttl_seconds),
+                (endpoint_str, cache_key_str, json.dumps(data, default=str), time.time(), ttl_int),
             )
             self._conn.commit()
+        except sqlite3.InterfaceError as e:
+            params = {
+                "endpoint": (type(endpoint_str).__name__, repr(endpoint_str)[:100]),
+                "cache_key": (type(cache_key_str).__name__, repr(cache_key_str)[:100]),
+                "data_serialized_type": type(json.dumps(data, default=str)).__name__,
+                "data_serialized_preview": repr(json.dumps(data, default=str))[:200],
+                "timestamp_type": type(time.time()).__name__,
+                "ttl_seconds": (type(ttl_int).__name__, repr(ttl_int)[:50]),
+            }
+            logger.error(
+                "orats_cache_set_type_probe",
+                extra={"error": str(e), "params": params},
+            )
+            raise
         except Exception:
             logger.warning("ORATSCache.set failed", exc_info=True)
 

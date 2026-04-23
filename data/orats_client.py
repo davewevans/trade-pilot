@@ -26,6 +26,10 @@ _MONIES_TTL = 30 * 60
 
 _cache = ORATSCache()
 
+# Apply debug-level logging when operator sets ORATS_DEBUG_LOGGING=true.
+if settings.ORATS_DEBUG_LOGGING:
+    logger.setLevel(logging.DEBUG)
+
 # ── Canonical /strikes fetch parameters ───────────────────────────────────────
 # The cache key for strikes is (symbol, side) only — the same canonical range
 # is always fetched from ORATS, and callers filter the result in Python via
@@ -405,48 +409,71 @@ class ORATSClient:
             )
             resp.raise_for_status()
             _status_code = resp.status_code
-            rows = resp.json().get("data", []) or []
-            if not rows:
-                logger.warning("ORATS /cores returned empty data for %s", key)
+            raw_response = resp.json()
+            logger.debug(
+                "orats_cores_raw_response",
+                extra={
+                    "symbol": symbol,
+                    "response_type": type(raw_response).__name__,
+                    "response_len": len(raw_response) if hasattr(raw_response, "__len__") else None,
+                    "response_preview": repr(raw_response)[:500],
+                },
+            )
+            if not isinstance(raw_response, dict):
+                logger.warning(
+                    "orats_cores_unexpected_response_type",
+                    extra={"symbol": symbol, "response_type": type(raw_response).__name__,
+                           "response_preview": repr(raw_response)[:200]},
+                )
             else:
-                row = rows[0]
-                next_ern = row.get("nextErn")
-                if next_ern in ("0000-00-00", ""):
-                    next_ern = None
+                rows = raw_response.get("data", []) or []
+                if not rows:
+                    logger.warning("ORATS /cores returned empty data for %s", key)
+                elif not isinstance(rows, list):
+                    logger.warning(
+                        "orats_cores_data_not_list",
+                        extra={"symbol": symbol, "data_type": type(rows).__name__,
+                               "data_preview": repr(rows)[:200]},
+                    )
+                else:
+                    row = rows[0]
+                    next_ern = row.get("nextErn")
+                    if next_ern in ("0000-00-00", ""):
+                        next_ern = None
 
-                _result = {
-                    "next_earnings_date": next_ern,
-                    "days_to_next_earnings": row.get("daysToNextErn"),
-                    "abs_avg_earnings_move": self._safe_float(row.get("absAvgErnMv")),
-                    "implied_earnings_move": self._safe_float(row.get("impliedEarningsMove")),
-                    "iv_hv_ratio": self._safe_float(row.get("ivHvXernRatio")),
-                    "iv_hv_ratio_1y_avg": self._safe_float(row.get("ivHvXernRatio1y")),
-                    "vol_of_vol": self._safe_float(row.get("volOfVol")),
-                    "skew_percentile": self._safe_float(row.get("slopepctile")),
-                    "skew_1y_avg": self._safe_float(row.get("slopeavg1y")),
-                    "hv_20d": self._safe_float(row.get("orHv20d")),
-                    "hv_30d": self._safe_float(row.get("orHv30d")),
-                    "hv_ex_earnings_20d": self._safe_float(row.get("orHvXern20d")),
-                    "rip": self._safe_float(row.get("rip")),
-                    "best_etf": row.get("bestEtf"),
-                    "sector_name": row.get("sectorName"),
-                    "or_fcst_20d": self._safe_float(row.get("orFcst20d")),
-                    "or_iv_fcst_20d": self._safe_float(row.get("orIvFcst20d")),
-                    "or_fcst_inf": self._safe_float(row.get("orFcstInf")),
-                    "ex_ern_iv_20d": self._safe_float(row.get("exErnIv20d")),
-                    "ex_ern_iv_30d": self._safe_float(row.get("exErnIv30d")),
-                    "slope": self._safe_float(row.get("slope")),
-                    "slope_fcst": self._safe_float(row.get("slopeFcst")),
-                    "slope_inf": self._safe_float(row.get("slopeInf")),
-                    "contango": self._safe_float(row.get("contango")),
-                    "contango_fcst": self._safe_float(row.get("contangoFcst")),
-                    "deriv": self._safe_float(row.get("deriv")),
-                    "fwd_ratio_20_30": self._safe_float(row.get("fwdRatio2030")),
-                    "fwd_ratio_30_60": self._safe_float(row.get("fwdRatio3060")),
-                    "fwd_ratio_60_90": self._safe_float(row.get("fwdRatio6090")),
-                    "confidence": self._safe_float(row.get("confidence")),
-                    "r_squared": self._safe_float(row.get("rSquared")),
-                }
+                    _result = {
+                        "next_earnings_date": next_ern,
+                        "days_to_next_earnings": row.get("daysToNextErn"),
+                        "abs_avg_earnings_move": self._safe_float(row.get("absAvgErnMv")),
+                        "implied_earnings_move": self._safe_float(row.get("impliedEarningsMove")),
+                        "iv_hv_ratio": self._safe_float(row.get("ivHvXernRatio")),
+                        "iv_hv_ratio_1y_avg": self._safe_float(row.get("ivHvXernRatio1y")),
+                        "vol_of_vol": self._safe_float(row.get("volOfVol")),
+                        "skew_percentile": self._safe_float(row.get("slopepctile")),
+                        "skew_1y_avg": self._safe_float(row.get("slopeavg1y")),
+                        "hv_20d": self._safe_float(row.get("orHv20d")),
+                        "hv_30d": self._safe_float(row.get("orHv30d")),
+                        "hv_ex_earnings_20d": self._safe_float(row.get("orHvXern20d")),
+                        "rip": self._safe_float(row.get("rip")),
+                        "best_etf": row.get("bestEtf"),
+                        "sector_name": row.get("sectorName"),
+                        "or_fcst_20d": self._safe_float(row.get("orFcst20d")),
+                        "or_iv_fcst_20d": self._safe_float(row.get("orIvFcst20d")),
+                        "or_fcst_inf": self._safe_float(row.get("orFcstInf")),
+                        "ex_ern_iv_20d": self._safe_float(row.get("exErnIv20d")),
+                        "ex_ern_iv_30d": self._safe_float(row.get("exErnIv30d")),
+                        "slope": self._safe_float(row.get("slope")),
+                        "slope_fcst": self._safe_float(row.get("slopeFcst")),
+                        "slope_inf": self._safe_float(row.get("slopeInf")),
+                        "contango": self._safe_float(row.get("contango")),
+                        "contango_fcst": self._safe_float(row.get("contangoFcst")),
+                        "deriv": self._safe_float(row.get("deriv")),
+                        "fwd_ratio_20_30": self._safe_float(row.get("fwdRatio2030")),
+                        "fwd_ratio_30_60": self._safe_float(row.get("fwdRatio3060")),
+                        "fwd_ratio_60_90": self._safe_float(row.get("fwdRatio6090")),
+                        "confidence": self._safe_float(row.get("confidence")),
+                        "r_squared": self._safe_float(row.get("rSquared")),
+                    }
 
         except Exception:
             logger.warning("ORATS /cores failed for %s", key, exc_info=True)

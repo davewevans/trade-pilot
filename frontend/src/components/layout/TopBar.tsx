@@ -252,6 +252,10 @@ export function TopBar() {
   const [haltInfo, setHaltInfo] = useState<HaltInfo | null>(null)
   const [showHaltModal, setShowHaltModal] = useState(false)
   const [showResumeModal, setShowResumeModal] = useState(false)
+  const [bundleDate, setBundleDate] = useState(() => {
+    const et = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }))
+    return et.toISOString().slice(0, 10)
+  })
 
   useEffect(() => {
     let cancelled = false
@@ -340,6 +344,50 @@ export function TopBar() {
               )}
             </div>
           )}
+          <div className="flex items-center gap-1">
+            <input
+              type="date"
+              value={bundleDate}
+              onChange={(e) => setBundleDate(e.target.value)}
+              className="px-2 py-1 rounded text-xs border"
+              style={{
+                backgroundColor: 'transparent',
+                borderColor: 'var(--border)',
+                color: 'var(--text-secondary)',
+                minHeight: '28px',
+              }}
+            />
+            <button
+              type="button"
+              onClick={async () => {
+                try {
+                  const resp = await fetch(`/api/daily-evaluation-bundle?date=${bundleDate}`, { credentials: 'include' })
+                  if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+                  const blob = await resp.blob()
+                  const url = URL.createObjectURL(blob)
+                  const a = document.createElement('a')
+                  a.href = url
+                  a.download = `trade-pilot-${bundleDate}.md`
+                  document.body.appendChild(a)
+                  a.click()
+                  a.remove()
+                  URL.revokeObjectURL(url)
+                } catch (e) {
+                  alert(`Bundle download failed: ${e}`)
+                }
+              }}
+              className="px-3 py-1 rounded text-xs font-medium border hover:opacity-80 transition-opacity"
+              style={{
+                color: 'var(--text-secondary)',
+                borderColor: 'var(--border)',
+                backgroundColor: 'transparent',
+                minHeight: '28px',
+              }}
+              title="Download daily evaluation bundle"
+            >
+              Daily Bundle
+            </button>
+          </div>
           {!dryRun && !effectiveHalted && (
             <button
               type="button"
