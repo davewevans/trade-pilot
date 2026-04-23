@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.12.0] - 2026-04-23
+
+### Added
+- **Daily evaluation bundle** (`GET /api/daily-evaluation-bundle?date=YYYY-MM-DD`): single-endpoint markdown download covering header, market context, cycle summary, Claude agreement, full decision reasoning, portfolio Greeks, data source health, AI usage, grouped error/warning summary, and cycle timing. Date picker + "Daily Bundle" button added to dashboard TopBar.
+- **Structured JSONL log handler** (`STRUCTURED_LOG_CAPTURE_ENABLED`, default true): tees WARNING+ log records with tracebacks and `extra={}` payloads to a rolling daily `.jsonl` file on persistent disk. Installed at startup for both scheduler and API processes. Backing store for the daily bundle endpoint. Retention configurable via `STRUCTURED_LOG_RETENTION_DAYS` (default 30).
+- **Option chain strike-range pre-clamp** (`OPTION_CHAIN_STRIKE_PRECLAMP_ENABLED`, default true): narrows option chain fetches to ±25% of spot before hitting Alpaca, eliminating the 500-contract cap breach that silently dropped SPY data. Width tunable via `OPTION_CHAIN_STRIKE_CLAMP_PCT`.
+- **Finnhub tier-aware short-circuit** (`FINNHUB_PAID_TIER`, default false): detects 403 on `price_target`, `upgrade_downgrade`, and `news_sentiment` once per process and disables those endpoints for the session, eliminating ~42 stack traces per cycle and ~1s/symbol in wasted round trips on the free tier.
+- **Render log filtering guide**: `docs/render-log-filtering.md` added as operator reference for viewing and filtering structured logs in the Render Dashboard.
+
+### Fixed
+- **`trade_journal` None-symbol crash**: `get_recent_by_days` (and 8 other filter methods) crashed with `AttributeError: 'NoneType'.upper()` when a journal entry had an explicit `"symbol": null` value. Fixed with `(e.get("symbol") or "").upper()` throughout.
+- **`ORATSCache.set` sqlite3.InterfaceError**: every ORATS cache write failed silently due to non-serialisable types (`datetime`, `numpy` scalars) in the payload. Fixed with `json.dumps(default=str)` and coercion of `endpoint`/`cache_key`/`ttl` to primitive types. Type-probe logging on `InterfaceError` surfaces remaining issues if any.
+
+### Changed
+- **ORATS cores defensive unpack** (`ORATS_DEBUG_LOGGING` env var): replaces fragile tuple unpack with shape-check that returns null IVR sentinel instead of raising `ValueError`. Raw ORATS response logged at DEBUG level when `ORATS_DEBUG_LOGGING=true` to diagnose root cause.
+- **`bull_put_spread` pre-check instrumentation**: per-symbol `INFO` logs at each reject/accept branch plus end-of-loop summary with `rejections_by_reason` dict. Pure diagnostic — no behaviour change.
+
 ## [1.11.2] - 2026-04-22
 
 ### Fixed
