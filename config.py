@@ -75,6 +75,12 @@ class Settings:
 
         # Finnhub — earnings calendar (free tier: 60 req/min)
         self.FINNHUB_API_KEY: str = os.getenv("FINNHUB_API_KEY", "")
+        # When False (default), price_target / upgrade_downgrade / news_sentiment
+        # are preemptively disabled at startup — free tier returns 403 on all three.
+        # Set True after upgrading the Finnhub plan.
+        self.FINNHUB_PAID_TIER: bool = (
+            os.getenv("FINNHUB_PAID_TIER", "false").lower() == "true"
+        )
 
         # --- Environment / deployment mode ---
         self.RENDER: bool = os.getenv("RENDER", "false").lower() == "true"

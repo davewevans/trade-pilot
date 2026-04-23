@@ -3,12 +3,15 @@
 from datetime import date, timedelta
 from unittest.mock import patch, MagicMock
 
+import finnhub
+
 from data.finnhub_client import (
     FinnhubClient,
     _earnings_cache,
     _earnings_history_cache,
     _analyst_cache,
     _sentiment_cache,
+    _ENDPOINT_DISABLED,
 )
 
 
@@ -122,6 +125,8 @@ def test_get_earnings_history_returns_empty_on_failure():
 def test_get_analyst_data_full_success():
     _analyst_cache.clear()
     client, sdk = _make_client_with_mock_sdk()
+    _ENDPOINT_DISABLED["price_target"] = False
+    _ENDPOINT_DISABLED["upgrade_downgrade"] = False
     sdk.recommendation_trends.return_value = [
         {"period": "2025-01-01", "strongBuy": 5, "buy": 10,
          "hold": 3, "sell": 1, "strongSell": 0},
@@ -153,6 +158,8 @@ def test_get_analyst_data_partial_failure():
     """One sub-call fails, the other two still populate."""
     _analyst_cache.clear()
     client, sdk = _make_client_with_mock_sdk()
+    _ENDPOINT_DISABLED["price_target"] = False
+    _ENDPOINT_DISABLED["upgrade_downgrade"] = False
     sdk.recommendation_trends.return_value = [
         {"period": "2025-01-01", "strongBuy": 1, "buy": 2,
          "hold": 3, "sell": 4, "strongSell": 5},
@@ -175,6 +182,7 @@ def test_get_analyst_data_partial_failure():
 def test_get_news_sentiment_computes_buzz_ratio():
     _sentiment_cache.clear()
     client, sdk = _make_client_with_mock_sdk()
+    _ENDPOINT_DISABLED["news_sentiment"] = False
     sdk.news_sentiment.return_value = {
         "sentiment": {"bullishPercent": 0.62, "bearishPercent": 0.38},
         "buzz": {"articlesInLastWeek": 30, "weeklyAverage": 12.0},
@@ -192,6 +200,7 @@ def test_get_news_sentiment_computes_buzz_ratio():
 def test_get_news_sentiment_handles_zero_weekly_average():
     _sentiment_cache.clear()
     client, sdk = _make_client_with_mock_sdk()
+    _ENDPOINT_DISABLED["news_sentiment"] = False
     sdk.news_sentiment.return_value = {
         "sentiment": {"bullishPercent": 0.5, "bearishPercent": 0.5},
         "buzz": {"articlesInLastWeek": 5, "weeklyAverage": 0},
@@ -204,5 +213,72 @@ def test_get_news_sentiment_handles_zero_weekly_average():
 def test_get_news_sentiment_returns_none_on_failure():
     _sentiment_cache.clear()
     client, sdk = _make_client_with_mock_sdk()
+    _ENDPOINT_DISABLED["news_sentiment"] = False
     sdk.news_sentiment.side_effect = Exception("rate limited")
     assert client.get_news_sentiment("AAPL") is None
+
+
+def _make_403_exception():
+    """Build a FinnhubAPIException with status_code=403."""
+    mock_resp = MagicMock()
+    mock_resp.status_code = 403
+    mock_resp.json.return_value = {"error": "Forbidden"}
+    return finnhub.FinnhubAPIException(mock_resp)
+
+
+def test_price_target_short_circuits_after_403(monkeypatch):
+    """After one 403, subsequent calls skip the API entirely."""
+    _analyst_cache.clear()
+    client, sdk = _make_client_with_mock_sdk()
+    _ENDPOINT_DISABLED["price_target"] = False
+    _ENDPOINT_DISABLED["upgrade_downgrade"] = False
+
+    sdk.price_target.side_effect = _make_403_exception()
+    sdk.recommendation_trends.return_value = []
+    sdk.upgrade_downgrade.return_value = []
+
+    # First call — hits API, gets 403, sets flag, returns empty
+    result = client.get_analyst_data("AAPL")
+    assert result["price_target"] == {"mean": None, "high": None, "low": None, "median": None}
+    assert _ENDPOINT_DISABLED["price_target"] is True
+
+    # Second call — flag is set so API is NOT called
+    _analyst_cache.clear()
+    sdk.price_target.reset_mock()
+    client.get_analyst_data("MSFT")
+    sdk.price_target.assert_not_called()
+
+
+def test_news_sentiment_short_circuits_after_403():
+    """After one 403, subsequent calls to news_sentiment return None without hitting API."""
+    _sentiment_cache.clear()
+    client, sdk = _make_client_with_mock_sdk()
+    _ENDPOINT_DISABLED["news_sentiment"] = False
+
+    sdk.news_sentiment.side_effect = _make_403_exception()
+
+    # First call — hits API, gets 403, sets flag, returns None
+    result = client.get_news_sentiment("AAPL")
+    assert result is None
+    assert _ENDPOINT_DISABLED["news_sentiment"] is True
+
+    # Second call — flag set, API not called
+    _sentiment_cache.clear()
+    sdk.news_sentiment.reset_mock()
+    result2 = client.get_news_sentiment("MSFT")
+    assert result2 is None
+    sdk.news_sentiment.assert_not_called()
+
+
+def test_finnhub_paid_tier_false_preemptively_disables():
+    """FINNHUB_PAID_TIER=false (default) disables all three premium endpoints at startup."""
+    _ENDPOINT_DISABLED["price_target"] = False
+    _ENDPOINT_DISABLED["upgrade_downgrade"] = False
+    _ENDPOINT_DISABLED["news_sentiment"] = False
+
+    # Instantiate a new client (FINNHUB_PAID_TIER defaults to false in settings)
+    FinnhubClient(api_key="k")
+    # All three should now be disabled
+    assert _ENDPOINT_DISABLED["price_target"] is True
+    assert _ENDPOINT_DISABLED["upgrade_downgrade"] is True
+    assert _ENDPOINT_DISABLED["news_sentiment"] is True
