@@ -82,6 +82,20 @@ class Settings:
             os.getenv("FINNHUB_PAID_TIER", "false").lower() == "true"
         )
 
+        # When True, clamp option-chain strike range to ±OPTION_CHAIN_STRIKE_CLAMP_PCT
+        # of spot before fetching. Reduces fan-out from ~1000 contracts to ~100 on
+        # high-price names (SPY, AMZN), avoiding Alpaca's 500-contract cap and
+        # speeding context builds. Default True — old behaviour is provably wrong
+        # (data loss at cap). Set False only to roll back if the clamp cuts something.
+        self.OPTION_CHAIN_STRIKE_PRECLAMP_ENABLED: bool = (
+            os.getenv("OPTION_CHAIN_STRIKE_PRECLAMP_ENABLED", "true").lower() == "true"
+        )
+        # One-sided clamp width as fraction of spot. 0.25 = ±25%.
+        # Do not lower below 0.15 without verifying target delta range stays inside.
+        self.OPTION_CHAIN_STRIKE_CLAMP_PCT: float = float(
+            os.getenv("OPTION_CHAIN_STRIKE_CLAMP_PCT", "0.25")
+        )
+
         # --- Environment / deployment mode ---
         self.RENDER: bool = os.getenv("RENDER", "false").lower() == "true"
 
