@@ -108,6 +108,20 @@ class Settings:
         self.JOURNAL_PATH: Path = self.DATA_DIR / "journal.jsonl"
         self.LOG_DIR: Path = self.DATA_DIR / "logs"
 
+        # Structured JSONL log capture to persistent disk. Tees WARNING/ERROR
+        # records (with tracebacks + extra fields) to a daily file. Consumed
+        # by the daily_bundle endpoint.
+        self.STRUCTURED_LOG_CAPTURE_ENABLED: bool = (
+            os.getenv("STRUCTURED_LOG_CAPTURE_ENABLED", "true").lower() == "true"
+        )
+        self.STRUCTURED_LOG_DIR: str = os.getenv(
+            "STRUCTURED_LOG_DIR",
+            str(self.DATA_DIR / "snapshots" / "logs"),
+        )
+        self.STRUCTURED_LOG_RETENTION_DAYS: int = int(
+            os.getenv("STRUCTURED_LOG_RETENTION_DAYS", "30")
+        )
+
         self.SNAPSHOTS_DIR: Path = self.DATA_DIR / "snapshots"
         self.DATABASE_PATH: Path = Path(
             os.getenv("DATABASE_PATH", str(self.DATA_DIR / "trade_pilot.db"))
