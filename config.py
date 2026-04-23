@@ -190,6 +190,15 @@ class Settings:
         # rather than degrade invisibly.  Dev always falls back with a CRITICAL log.
         self.ORATS_CACHE_ALLOW_FALLBACK: str = os.getenv("ORATS_CACHE_ALLOW_FALLBACK", "0")
 
+        # When true, set data.orats_client logger to DEBUG for one cycle.
+        # Captures raw ORATS /cores responses before processing. Default false —
+        # raw payloads are too verbose for routine operation.
+        # Operator: set ORATS_DEBUG_LOGGING=true on Render, run one market_open
+        # cycle, inspect logs, then disable.
+        self.ORATS_DEBUG_LOGGING: bool = (
+            os.getenv("ORATS_DEBUG_LOGGING", "false").lower() == "true"
+        )
+
         # ── Notifications ──────────────────────────────────────
         # ntfy.sh topic name. When unset, ntfy notifications are silently dropped.
         # Set to any unique string (e.g. "trade-pilot-abc123") to enable push alerts.
