@@ -71,8 +71,8 @@ class TradeJournal:
         entries = self._read_all()
         matching = [
             e for e in entries
-            if e.get("underlying", "").upper() == symbol.upper()
-            or e.get("symbol", "").upper() == symbol.upper()
+            if (e.get("underlying") or "").upper() == symbol.upper()
+            or (e.get("symbol") or "").upper() == symbol.upper()
         ]
         return list(reversed(matching[-n:]))
 
@@ -85,8 +85,8 @@ class TradeJournal:
                 e.get("status") in ("submitted", "filled")
                 and e.get("closed_at") is None
                 and (
-                    e.get("underlying", "").upper() == symbol.upper()
-                    or e.get("symbol", "").upper() == symbol.upper()
+                    (e.get("underlying") or "").upper() == symbol.upper()
+                    or (e.get("symbol") or "").upper() == symbol.upper()
                 )
             )
         ]
@@ -181,7 +181,7 @@ class TradeJournal:
         relevant = [
             e for e in entries
             if (
-                e.get("underlying", "").upper() == symbol.upper()
+                (e.get("underlying") or "").upper() == symbol.upper()
                 and e.get("timestamp", "") >= cutoff
             )
         ]
@@ -264,7 +264,7 @@ class TradeJournal:
         return [
             e for e in entries
             if (
-                e.get("underlying", "").upper() == symbol.upper()
+                (e.get("underlying") or "").upper() == symbol.upper()
                 and e.get("timestamp", "") >= cutoff
                 # Exclude guardrail rejections (status="rejected") — those
                 # are surfaced separately via format_rejections_for_prompt.
@@ -404,7 +404,7 @@ class TradeJournal:
         matching = [
             e for e in entries
             if (
-                e.get("underlying", "").upper() == symbol.upper()
+                (e.get("underlying") or "").upper() == symbol.upper()
                 and e.get("timestamp", "") >= cutoff
                 and e.get("status") == "rejected"
             )
@@ -460,8 +460,8 @@ class TradeJournal:
             e for e in entries
             if (
                 (
-                    e.get("underlying", "").upper() == symbol.upper()
-                    or e.get("symbol", "").upper() == symbol.upper()
+                    (e.get("underlying") or "").upper() == symbol.upper()
+                    or (e.get("symbol") or "").upper() == symbol.upper()
                 )
                 and e.get("timestamp", "") >= cutoff
                 and e.get("action") not in ("skip", "hold")
