@@ -131,3 +131,34 @@ def test_fallback_to_in_memory_when_db_unavailable():
     c.set("summaries", "AAPL", {"ticker": "AAPL"}, 3600)
     result = c.get("summaries", "AAPL", 3600)
     assert result == {"ticker": "AAPL"}
+
+
+def test_set_handles_datetime_in_data(tmp_path):
+    """Regression: json.dumps blew up on datetime objects in ORATS payloads."""
+    from datetime import datetime
+    import sqlite3 as _sqlite3
+
+    db_path = tmp_path / "cache.db"
+    conn = _sqlite3.connect(str(db_path))
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS orats_cache (
+            endpoint    TEXT NOT NULL,
+            cache_key   TEXT NOT NULL,
+            data_json   TEXT NOT NULL,
+            fetched_at  REAL NOT NULL,
+            ttl_seconds REAL NOT NULL,
+            PRIMARY KEY (endpoint, cache_key)
+        )"""
+    )
+    conn.commit()
+    conn.close()
+
+    cache = ORATSCache(db_path=db_path)
+    # Payload that would fail without default=str
+    data = {"as_of": datetime(2026, 4, 23, 10, 0), "iv_rank": 42.5}
+    cache.set("cores", "AAPL", data, ttl_seconds=3600)
+
+    got = cache.get("cores", "AAPL", 3600)
+    assert got is not None
+    # datetime was stringified, which is acceptable for cache purposes
+    assert "2026-04-23" in str(got)
