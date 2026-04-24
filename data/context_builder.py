@@ -28,6 +28,7 @@ _SOURCE_MAP: dict[str, str] = {
     "risk_free_rate": "FRED",
     "news": "Alpaca News",
     "orats_summary": "ORATS",
+    "orats_ivrank": "ORATS",
     "orats_cores": "ORATS",
     "orats_monies": "ORATS",
     "earnings_history": "Finnhub",
@@ -178,7 +179,8 @@ class ContextBuilder:
             futures["risk_free_rate"] = pool.submit(market_data.get_risk_free_rate)
             futures["news"] = pool.submit(_fetch_news, symbol)
             futures["orats_summary"] = pool.submit(market_data.get_orats_summary, symbol)
-            futures["orats_cores"] = pool.submit(market_data.get_orats_cores, symbol)
+            futures["orats_ivrank"]  = pool.submit(market_data.get_orats_iv_rank, symbol)
+            futures["orats_cores"]   = pool.submit(market_data.get_orats_cores, symbol)
             futures["orats_monies"] = pool.submit(market_data.get_orats_monies, symbol)
             futures["earnings_history"] = pool.submit(
                 market_data.get_finnhub_earnings_history, symbol,
@@ -212,11 +214,17 @@ class ContextBuilder:
 
         # ── ORATS volatility analytics ──────────────────────
         orats = results.get("orats_summary")
-        if orats:
-            from data.orats_client import ORATSClient
-            iv_env = ORATSClient.classify_iv_environment(orats.get("iv_rank_1y"))
-        else:
-            iv_env = "UNKNOWN"
+        ivrank = results.get("orats_ivrank") or {}
+
+        # IV rank lives on /ivrank, NOT on /summaries. ORATS' /summaries endpoint
+        # does not return ivRank1y — see data/orats_client.py::get_iv_rank_batch.
+        iv_rank_1y_value = ivrank.get("ivRank1y") if ivrank else None
+        iv_rank_1m_value = ivrank.get("ivRank1m") if ivrank else None
+        iv_pct_1y_value  = ivrank.get("ivPct1y")  if ivrank else None
+        iv_pct_1m_value  = ivrank.get("ivPct1m")  if ivrank else None
+
+        from data.orats_client import ORATSClient
+        iv_env = ORATSClient.classify_iv_environment(iv_rank_1y_value)
 
         cores = results.get("orats_cores") or {}
         monies_rows = results.get("orats_monies") or []
@@ -246,11 +254,16 @@ class ContextBuilder:
         # ── Contango health signal ────────────────────────────
         contango_label = _compute_contango_label(cores.get("contango"))
 
+        # NOTE: Several fields below are sourced from `orats` (/summaries) using ORATS
+        # field names that don't exist on that endpoint (atmIvM1, iSkewM1, fcstMove,
+        # etc.). They will always be None until follow-up cleanup. Per ORATS docs,
+        # atm IV by month should come from /summaries' iv20d/iv30d/iv60d/iv90d, and
+        # skew from /cores' slopepctile. Tracked separately — do not fix here.
         context["volatility"] = {
-            "iv_rank_1y": orats.get("iv_rank_1y") if orats else None,
-            "iv_rank_1m": orats.get("iv_rank_1m") if orats else None,
-            "iv_pct_1y": orats.get("iv_pct_1y") if orats else None,
-            "iv_pct_1m": orats.get("iv_pct_1m") if orats else None,
+            "iv_rank_1y": iv_rank_1y_value,
+            "iv_rank_1m": iv_rank_1m_value,
+            "iv_pct_1y":  iv_pct_1y_value,
+            "iv_pct_1m":  iv_pct_1m_value,
             "iv_environment": iv_env,
             "atm_iv_m1": orats.get("atm_iv_m1") if orats else None,
             "atm_iv_m2": orats.get("atm_iv_m2") if orats else None,

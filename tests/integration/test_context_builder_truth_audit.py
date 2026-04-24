@@ -149,6 +149,9 @@ def mock_context(tmp_path):
         "data.market_data.get_fear_greed_index": MagicMock(return_value=_FAKE_FEAR_GREED),
         "data.market_data.get_risk_free_rate": MagicMock(return_value=0.052),
         "data.market_data.get_orats_summary": MagicMock(return_value=_FAKE_ORATS_SUMMARY),
+        "data.market_data.get_orats_iv_rank": MagicMock(return_value={
+            "iv": 0.18, "ivRank1y": 45.0, "ivPct1y": 50.0, "ivRank1m": 40.0, "ivPct1m": 45.0,
+        }),
         "data.market_data.get_orats_cores": MagicMock(return_value=_FAKE_ORATS_CORES),
         "data.market_data.get_orats_monies": MagicMock(return_value=[]),
         "data.market_data.get_finnhub_earnings_history": MagicMock(return_value=[]),
