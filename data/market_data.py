@@ -331,7 +331,16 @@ def get_ex_dividend_date(symbol: str) -> dict:
 
 
 def get_orats_summary(symbol: str) -> dict | None:
-    """Return the full ORATS analytics summary for a symbol."""
+    """Return ORATS /summaries data for a symbol.
+
+    NOTE: /summaries does NOT return iv_rank_1y, iv_rank_1m, iv_pct_1y,
+    or iv_pct_1m. Those fields live on /ivrank — use get_orats_iv_rank()
+    or get_orats_iv_rank_batch() for IV rank data.
+
+    See https://docs.orats.io/datav2-api-guide/data.html#summaries for the
+    actual /summaries response shape (stockPrice, tradeDate, impliedMove,
+    iv20d/iv30d/iv60d/iv90d term-structure IVs, dividend & borrow fields).
+    """
     if not settings.ORATS_API_KEY:
         logger.warning("ORATS_API_KEY not set — IV analytics unavailable")
         return None
@@ -388,6 +397,27 @@ def get_orats_iv_rank_batch(symbols: list[str]) -> dict[str, dict]:
     except Exception:
         logger.warning("ORATS iv_rank batch failed", exc_info=True)
         return {}
+
+
+def get_orats_iv_rank(symbol: str) -> dict | None:
+    """Return ORATS IV rank/percentile for a single ticker.
+
+    Single-symbol convenience wrapper around get_orats_iv_rank_batch.
+    Returns the entry dict (with keys iv, ivRank1y, ivPct1y, ivRank1m, ivPct1m)
+    or None if the symbol isn't returned or the call fails.
+
+    Used by ContextBuilder for wheel/turnover-wheel decisions, which need
+    ivRank1y as a hard entry gate. ORATS returns IV rank ONLY on /ivrank,
+    not on /summaries — see https://docs.orats.io/datav2-api-guide/data.html
+    """
+    if not settings.ORATS_API_KEY or not symbol:
+        return None
+    try:
+        result = get_orats_iv_rank_batch([symbol])
+        return result.get(symbol.upper())
+    except Exception:
+        logger.warning("ORATS iv_rank single-symbol failed for %s", symbol, exc_info=True)
+        return None
 
 
 def get_finnhub_earnings_history(symbol: str) -> list[dict]:

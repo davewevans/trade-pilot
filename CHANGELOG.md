@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.12.1] - 2026-04-25
+
+### Fixed
+- **`iv_rank_1y` null causing wheel hard-skips since launch**: ORATS `/summaries` does not return `ivRank1y`; the context builder was reading from the wrong endpoint and getting `None` for every wheel symbol every cycle. `iv_rank_1y`, `iv_rank_1m`, `iv_pct_1y`, `iv_pct_1m` now sourced from `/ivrank` via new `get_orats_iv_rank()` single-symbol wrapper.
+- **`atm_iv_m*` always null, `iv_overvalued_label` never firing**: ORATS `/summaries` also does not return `atmIvM1–M4`. `atm_iv_m1`–`atm_iv_m4` and `term_structure_slope` now sourced from `/cores` (where they actually live). `iv_overvalued_label` (OVERVALUED / UNDERVALUED / FAIR) will populate in production for the first time as a downstream result.
+- **Silent spread context-build failure** (`jobs/market_open.py`): JPM bull_put_spread context build failed on 4/24 with a WARNING and no traceback. Added `exc_info=True` to the spread pre-check loop so the next failure includes a full stack trace.
+
+### Changed
+- **`skew_m1` now sourced from `/cores` `slope`** (term-agnostic ATM skew); `skew_m2` removed from context dict — no per-month skew available from ORATS on the delayed-data tier.
+
+### Added
+- **`KNOWN_ISSUES.md`** at repo root: canonical tracker for triaged open bugs (#1–#14) and deferred cleanups (B-2, B-3). Includes recently fixed entries with commit hashes.
+
 ## [1.12.0] - 2026-04-23
 
 ### Added

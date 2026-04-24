@@ -1192,6 +1192,7 @@ def run() -> None:
                             logger.warning(
                                 "Failed to build context for %s/%s — skipping",
                                 strategy_name, sym,
+                                exc_info=True,
                             )
                             continue
                         try:
