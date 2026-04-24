@@ -52,7 +52,12 @@ SAMPLE_CORES_RESPONSE = {
         "rip": 0.72,
         "bestEtf": "QQQ",
         "sectorName": "Technology",
-        # New forecast fields
+        # ATM IV by month (B-1: these are now extracted by get_cores)
+        "atmIvM1": 0.25,
+        "atmIvM2": 0.27,
+        "atmIvM3": 0.29,
+        "atmIvM4": 0.31,
+        # Forecast fields
         "orFcst20d": 0.21,
         "orIvFcst20d": 0.26,
         "orFcstInf": 0.23,
@@ -214,6 +219,11 @@ def test_get_cores_returns_new_forecast_fields(mock_get):
     assert result["fwd_ratio_60_90"] == 1.02
     assert result["confidence"] == 0.85
     assert result["r_squared"] == 0.92
+    # B-1: atm_iv_m* now extracted from /cores
+    assert result["atm_iv_m1"] == 0.25
+    assert result["atm_iv_m2"] == 0.27
+    assert result["atm_iv_m3"] == 0.29
+    assert result["atm_iv_m4"] == 0.31
 
 
 @patch("data.orats_client.requests.get")
@@ -232,6 +242,8 @@ def test_get_cores_missing_forecast_fields_return_none(mock_get):
     assert result["or_iv_fcst_20d"] is None
     assert result["contango"] is None
     assert result["confidence"] is None
+    assert result["atm_iv_m1"] is None
+    assert result["atm_iv_m2"] is None
     assert result["r_squared"] is None
 
 

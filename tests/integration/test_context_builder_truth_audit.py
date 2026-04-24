@@ -101,6 +101,11 @@ _FAKE_ORATS_CORES = {
     "confidence": 0.85,
     "next_earnings_date": "2026-07-01",
     "days_to_next_earnings": 75,
+    # B-1: atm_iv_m* now sourced from /cores
+    "atm_iv_m1": 0.18,
+    "atm_iv_m2": 0.20,
+    "atm_iv_m3": 0.22,
+    "atm_iv_m4": 0.24,
 }
 
 _FAKE_EARNINGS = {

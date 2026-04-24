@@ -245,33 +245,40 @@ class ContextBuilder:
             else:
                 premium_richness_label = "FAIR"
 
+        # ── ATM IV from /cores (atmIvM1-M4); /summaries does not have these ──
+        cores_atm_m1 = cores.get("atm_iv_m1")
+        cores_atm_m2 = cores.get("atm_iv_m2")
+        cores_term_slope = (
+            round(cores_atm_m2 - cores_atm_m1, 4)
+            if cores_atm_m1 is not None and cores_atm_m2 is not None
+            else None
+        )
+
         # ── IV forecast vs current: is IV over or under ORATS' 20d forecast? ──
         iv_overvalued, iv_overvalued_label = _compute_iv_overvalued_label(
-            current_iv=orats.get("atm_iv_m1") if orats else None,
+            current_iv=cores_atm_m1,
             iv_fcst=cores.get("or_iv_fcst_20d"),
         )
 
         # ── Contango health signal ────────────────────────────
         contango_label = _compute_contango_label(cores.get("contango"))
 
-        # NOTE: Several fields below are sourced from `orats` (/summaries) using ORATS
-        # field names that don't exist on that endpoint (atmIvM1, iSkewM1, fcstMove,
-        # etc.). They will always be None until follow-up cleanup. Per ORATS docs,
-        # atm IV by month should come from /summaries' iv20d/iv30d/iv60d/iv90d, and
-        # skew from /cores' slopepctile. Tracked separately — do not fix here.
         context["volatility"] = {
             "iv_rank_1y": iv_rank_1y_value,
             "iv_rank_1m": iv_rank_1m_value,
             "iv_pct_1y":  iv_pct_1y_value,
             "iv_pct_1m":  iv_pct_1m_value,
             "iv_environment": iv_env,
-            "atm_iv_m1": orats.get("atm_iv_m1") if orats else None,
-            "atm_iv_m2": orats.get("atm_iv_m2") if orats else None,
-            "atm_iv_m3": orats.get("atm_iv_m3") if orats else None,
-            "atm_iv_m4": orats.get("atm_iv_m4") if orats else None,
-            "term_structure_slope": orats.get("term_structure_slope") if orats else None,
-            "skew_m1": orats.get("skew_m1") if orats else None,
-            "skew_m2": orats.get("skew_m2") if orats else None,
+            # atm_iv_m* sourced from /cores (atmIvM1-M4); /summaries lacks these fields.
+            "atm_iv_m1": cores_atm_m1,
+            "atm_iv_m2": cores_atm_m2,
+            "atm_iv_m3": cores.get("atm_iv_m3"),
+            "atm_iv_m4": cores.get("atm_iv_m4"),
+            # term_structure_slope derived from /cores atm IVs (m2-m1).
+            "term_structure_slope": cores_term_slope,
+            # skew_m1 sourced from /cores slope field (term-agnostic ATM skew).
+            # skew_m2 dropped — no per-month skew on delayed-data tier; use skew_percentile.
+            "skew_m1": cores.get("slope"),
             "implied_move_pct": implied_move,
             "forecast_move_pct": forecast_move,
             # Premium richness: >0 means options are expensive (sellers have edge)
