@@ -720,7 +720,17 @@ class Guardrails:
         if dte_earnings is not None and dte_earnings <= 21:
             return False, f"Earnings in {dte_earnings} days (hard block: need > 21)"
 
-        # Ex-dividend within DTE window
+        # Ex-dividend within DTE window.
+        # Defensive default: if ex-div data fetch failed (e.g., yfinance
+        # quoteSummary 404), reject the spread rather than silently pass.
+        # `ex_dividend_data_available` is set by get_fundamentals() and flows
+        # through context["fundamentals"] automatically. When True,
+        # days_to_ex_dividend=None legitimately means "no upcoming ex-div" and
+        # the spread is safe. When False, we don't know — reject defensively.
+        # None means the field is absent (old context shape pre-plumbing) —
+        # treat as unknown and fall through to preserve current behavior.
+        if fund.get("ex_dividend_data_available") is False:
+            return False, "Ex-dividend data fetch failed — rejecting defensively"
         days_ex = fund.get("days_to_ex_dividend")
         if days_ex is not None and dte is not None and days_ex <= dte:
             return False, f"Ex-dividend in {days_ex} days within DTE {dte} — early assignment risk"

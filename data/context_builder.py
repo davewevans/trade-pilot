@@ -377,6 +377,7 @@ class ContextBuilder:
             "next_ex_dividend_date": ex_div.get("next_ex_dividend_date"),
             "days_to_ex_dividend": ex_div.get("days_to_ex_dividend"),
             "annual_dividend_yield": ex_div.get("annual_dividend_yield"),
+            "ex_dividend_data_available": ex_div.get("ex_dividend_data_available"),
         }
 
         # ── Macro ───────────────────────────────────────────

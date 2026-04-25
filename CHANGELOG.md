@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.12.2] - 2026-04-25
+
+### Fixed
+- **Bear call spread ex-div guardrail silent pass on yfinance failure**: when `get_fundamentals()` raised due to yfinance `quoteSummary` 404 (reproducible on SPY/QQQ/IWM/GLD), `days_to_ex_dividend` returned `None` and the ex-div check silently passed. Guardrail now rejects defensively when `ex_dividend_data_available=False`; `None` (absent field, old context shape) preserves prior behaviour for backward compatibility during rollout.
+
 ## [1.12.1] - 2026-04-25
 
 ### Fixed
