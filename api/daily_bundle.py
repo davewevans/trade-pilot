@@ -261,21 +261,53 @@ def _section_portfolio_greeks(snapshots_dir: str) -> str:
 
 
 def _section_data_health(snapshots_dir: str) -> str:
+    """Render data source health from source_health.json.
+
+    SourceHealth.record() does not persist a boolean health field — it
+    persists raw success/failure counts and timestamps. We derive
+    `healthy = (consecutive_failures == 0)` here because that's the
+    cheapest interpretation of "did the most recent attempt succeed?"
+    Today's success/failure counts are surfaced inline so a single failure
+    on an otherwise healthy source is distinguishable from a sustained
+    outage.
+
+    Note: this section only shows health for sources that explicitly call
+    SourceHealth.record(). Finnhub, the Alpaca broker itself, and any
+    future data sources are absent from this table until their fetch sites
+    add a record() call. See `grep -rn "SourceHealth().record" jobs/ data/`
+    for the current covered set.
+    """
     parts = ["## Data source health"]
     snap = Path(snapshots_dir)
     sh = _read_json(snap / "source_health.json")
-    if sh and isinstance(sh, dict):
-        parts.append("| Source | Status | Last success |")
-        parts.append("|--------|--------|-------------|")
-        for source, info in sh.items():
-            if isinstance(info, dict):
-                status = "✓" if info.get("healthy") else "✗"
-                last_ok = info.get("last_success") or info.get("last_check") or "n/a"
-                parts.append(f"| {source} | {status} | {str(last_ok)[:19]} |")
-            else:
-                parts.append(f"| {source} | {info} | — |")
-    else:
+    if not (sh and isinstance(sh, dict)):
         parts.append("_No source_health.json snapshot found._")
+        return "\n".join(parts)
+
+    parts.append("| Source | Status | Today (✓/✗) | Last success | Last failure reason |")
+    parts.append("|--------|--------|-------------|--------------|---------------------|")
+    # Sort sources alphabetically so output is stable across runs.
+    for source in sorted(sh.keys()):
+        info = sh[source]
+        if not isinstance(info, dict):
+            # Legacy or malformed entry — render the raw value and move on.
+            parts.append(f"| {source} | {info} | — | — | — |")
+            continue
+
+        consecutive_failures = info.get("consecutive_failures", 0) or 0
+        today_successes = info.get("today_successes", 0) or 0
+        today_failures = info.get("today_failures", 0) or 0
+        status = "✓" if consecutive_failures == 0 else "✗"
+        last_ok = info.get("last_success") or "never"
+        last_fail_reason = info.get("last_failure_reason") or "—"
+        # Truncate timestamps to seconds precision; truncate failure reason to
+        # keep the table readable.
+        last_ok_short = str(last_ok)[:19]
+        last_fail_short = str(last_fail_reason)[:80]
+        parts.append(
+            f"| {source} | {status} | {today_successes}/{today_failures} "
+            f"| {last_ok_short} | {last_fail_short} |"
+        )
     return "\n".join(parts)
 
 

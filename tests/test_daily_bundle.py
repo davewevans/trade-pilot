@@ -89,8 +89,24 @@ def _make_snapshots(snap_dir: Path) -> None:
         "stability": "stable", "timestamp": "2026-04-23T10:00:00",
     }]))
     (snap_dir / "source_health.json").write_text(json.dumps({
-        "alpaca": {"healthy": True, "last_success": "2026-04-23T10:00:00"},
-        "orats": {"healthy": False, "last_success": "2026-04-22T14:00:00"},
+        "alpaca": {
+            "last_success": "2026-04-23T10:00:00",
+            "last_failure": None,
+            "last_failure_reason": None,
+            "consecutive_failures": 0,
+            "today_successes": 12,
+            "today_failures": 0,
+            "last_checked": "2026-04-23T10:00:00",
+        },
+        "orats": {
+            "last_success": "2026-04-22T14:00:00",
+            "last_failure": "2026-04-23T09:55:00",
+            "last_failure_reason": "HTTP 429",
+            "consecutive_failures": 1,
+            "today_successes": 0,
+            "today_failures": 1,
+            "last_checked": "2026-04-23T09:55:00",
+        },
     }))
     (snap_dir / "circuit_breaker_state.json").write_text(json.dumps({"state": "GREEN"}))
 
@@ -182,6 +198,89 @@ def test_section_data_health_with_snapshot(tmp_path):
     result = _section_data_health(str(tmp_path))
     assert "alpaca" in result
     assert "orats" in result
+
+
+# ── _section_data_health unit tests (health derivation contract) ──────────
+
+
+def _write_health(snap: Path, payload: dict) -> None:
+    (snap / "source_health.json").write_text(
+        json.dumps(payload), encoding="utf-8",
+    )
+
+
+def test_data_health_renders_healthy_source_as_check(tmp_path):
+    _write_health(tmp_path, {
+        "ORATS": {
+            "last_success": "2026-04-25T14:00:00",
+            "last_failure": None,
+            "last_failure_reason": None,
+            "consecutive_failures": 0,
+            "today_successes": 47,
+            "today_failures": 0,
+            "last_checked": "2026-04-25T14:00:00",
+        },
+    })
+    out = _section_data_health(str(tmp_path))
+    assert "| ORATS | ✓ | 47/0" in out
+
+
+def test_data_health_renders_unhealthy_source_as_x(tmp_path):
+    _write_health(tmp_path, {
+        "yfinance": {
+            "last_success": "2026-04-24T20:30:00",
+            "last_failure": "2026-04-25T14:00:00",
+            "last_failure_reason": "HTTP 404 quoteSummary missing",
+            "consecutive_failures": 3,
+            "today_successes": 5,
+            "today_failures": 3,
+            "last_checked": "2026-04-25T14:00:00",
+        },
+    })
+    out = _section_data_health(str(tmp_path))
+    assert "| yfinance | ✗ | 5/3" in out
+    assert "HTTP 404" in out
+
+
+def test_data_health_missing_file_renders_message(tmp_path):
+    out = _section_data_health(str(tmp_path))
+    assert "_No source_health.json snapshot found._" in out
+
+
+def test_data_health_empty_dict_renders_same_as_missing(tmp_path):
+    _write_health(tmp_path, {})
+    out = _section_data_health(str(tmp_path))
+    assert "_No source_health.json snapshot found._" in out
+
+
+def test_data_health_never_succeeded_renders_never(tmp_path):
+    _write_health(tmp_path, {
+        "FRED": {
+            "last_success": None,
+            "last_failure": "2026-04-25T14:00:00",
+            "last_failure_reason": "Connection timeout",
+            "consecutive_failures": 5,
+            "today_successes": 0,
+            "today_failures": 5,
+            "last_checked": "2026-04-25T14:00:00",
+        },
+    })
+    out = _section_data_health(str(tmp_path))
+    assert "| FRED | ✗ | 0/5" in out
+    assert "never" in out
+
+
+def test_data_health_sources_sorted_alphabetically(tmp_path):
+    _write_health(tmp_path, {
+        "yfinance": {"consecutive_failures": 0, "today_successes": 1, "today_failures": 0, "last_success": "2026-04-25T14:00:00"},
+        "ORATS":    {"consecutive_failures": 0, "today_successes": 1, "today_failures": 0, "last_success": "2026-04-25T14:00:00"},
+        "FRED":     {"consecutive_failures": 0, "today_successes": 1, "today_failures": 0, "last_success": "2026-04-25T14:00:00"},
+    })
+    out = _section_data_health(str(tmp_path))
+    fred_idx = out.index("| FRED ")
+    orats_idx = out.index("| ORATS ")
+    yf_idx = out.index("| yfinance ")
+    assert fred_idx < orats_idx < yf_idx, "sources must render alphabetically"
 
 
 # ── integration test ──────────────────────────────────────────
