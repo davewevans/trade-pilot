@@ -318,13 +318,14 @@ def get_ex_dividend_date(symbol: str) -> dict:
             "next_ex_dividend_date": next_ex_div,
             "days_to_ex_dividend": days_to_ex_div,
             "annual_dividend_yield": div_yield,
+            "ex_dividend_data_available": True,
         }
         _exdiv_cache[symbol] = (time.monotonic(), result)
         return result
 
     except Exception:
         logger.warning("Failed to fetch ex-dividend info for %s", symbol, exc_info=True)
-        return {"next_ex_dividend_date": None, "days_to_ex_dividend": None, "annual_dividend_yield": None}
+        return {"next_ex_dividend_date": None, "days_to_ex_dividend": None, "annual_dividend_yield": None, "ex_dividend_data_available": False}
 
 
 # ── ORATS + Finnhub integration ────────────────────────────
@@ -581,6 +582,7 @@ def get_fundamentals(symbol: str) -> dict:
             "analyst_rating": analyst_rating,
             "next_ex_dividend_date": next_ex_dividend_date,
             "days_to_ex_dividend": days_to_ex_dividend,
+            "ex_dividend_data_available": True,
         }
 
         _fundamentals_cache[symbol] = (time.monotonic(), result)
@@ -589,7 +591,9 @@ def get_fundamentals(symbol: str) -> dict:
 
     except Exception:
         logger.warning("Failed to fetch fundamentals for %s", symbol, exc_info=True)
-        return {k: None for k in _FUNDAMENTALS_KEYS}
+        result = {k: None for k in _FUNDAMENTALS_KEYS}
+        result["ex_dividend_data_available"] = False
+        return result
 
 
 def get_earnings_date(symbol: str) -> str | None:

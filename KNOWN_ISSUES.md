@@ -93,7 +93,10 @@ Last updated: 2026-04-25
   PENDING_OPEN → OPEN → PENDING_CLOSE → CLOSED.
 - Same expectation as #13.
 
+
+
 ---
+#16 — yfinance structurally unreliable for ETF fundamentals. quoteSummary endpoint returns 404 on SPY/QQQ/IWM/GLD persistently across cycles. Affects: ex_dividend (safety implication for bear call spread guardrail — patched defensively in commit X), fundamentals (Claude context, degradation), VIX (no observed failures yet but same data source). Migration plan: VIX → FRED, ex_div → Finnhub, fundamentals → Finnhub, technicals → Alpaca. See yfinance migration plan doc when written.
 
 ## Recently Fixed
 
