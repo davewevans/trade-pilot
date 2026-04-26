@@ -290,10 +290,9 @@ export function Strategies() {
           The bot has concrete exit triggers:
         </Prose>
         <ul className="space-y-1.5 text-sm" style={{ color: 'var(--text-secondary)' }}>
-          <li className="flex gap-2"><span style={{ color: 'var(--red, #ef4444)' }}>•</span> Stock drops &gt; 25% below cost basis AND falls below the 200-day SMA → sell shares</li>
-          <li className="flex gap-2"><span style={{ color: 'var(--red, #ef4444)' }}>•</span> Two or more analyst downgrades in the past 14 days → sell shares</li>
-          <li className="flex gap-2"><span style={{ color: 'var(--yellow, #eab308)' }}>•</span> Stock drops &gt; 15% below cost basis with a single downgrade → flagged for review</li>
-          <li className="flex gap-2"><span style={{ color: 'var(--yellow, #eab308)' }}>•</span> VIX in CRASH regime (&gt; 35) → hold (don't write CCs or sell into panic — wait for clarity)</li>
+          <li className="flex gap-2"><span style={{ color: 'var(--red, #ef4444)' }}>•</span> Stock drops &gt; 25% below cost basis AND is more than 2% below the 200-day SMA → sell shares</li>
+          <li className="flex gap-2"><span style={{ color: 'var(--red, #ef4444)' }}>•</span> Stock drops &gt; 15% below cost basis with two or more downgrades from major Wall Street firms in the past 30 days → sell shares</li>
+          <li className="flex gap-2"><span style={{ color: 'var(--yellow, #eab308)' }}>•</span> VIX in CRASH regime (≥ 35) → hold (don't write CCs or sell into panic — wait for volatility to settle)</li>
         </ul>
       </AccountSection>
 
@@ -390,6 +389,7 @@ export function Strategies() {
           <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> 50% profit close on both CSPs and CCs</li>
           <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> All universal guardrails apply — OCC regex validation, limit orders only, qty = 1, credit-sign enforcement</li>
           <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Watchlist: starts as a copy of the original Wheel's watchlist; current contents are shown on the Watchlist page</li>
+          <li className="flex gap-2"><span style={{ color: 'var(--accent)' }}>•</span> Equity-side exit triggers in the LONG_STOCK phase (sell-the-shares conditions and VIX hold) — identical to the Standard Wheel; see above</li>
         </ul>
 
         <div
