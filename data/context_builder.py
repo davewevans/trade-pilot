@@ -23,7 +23,7 @@ _health = SourceHealth()
 _SOURCE_MAP: dict[str, str] = {
     "technicals": "yfinance",
     "fundamentals": "yfinance",
-    "vix": "yfinance",
+    "vix": "FRED",
     "fear_greed": "CNN Fear & Greed",
     "risk_free_rate": "FRED",
     "news": "Alpaca News",
@@ -35,7 +35,6 @@ _SOURCE_MAP: dict[str, str] = {
     "analyst_data": "Finnhub",
     "news_sentiment": "Finnhub",
     "earnings": "Finnhub",
-    "vix_term": "yfinance",
     "ex_dividend": "yfinance",
 }
 
@@ -192,7 +191,6 @@ class ContextBuilder:
                 market_data.get_finnhub_news_sentiment, symbol,
             )
             futures["earnings"] = pool.submit(market_data.get_earnings_calendar, symbol)
-            futures["vix_term"] = pool.submit(market_data.get_vix_term_structure)
             futures["ex_dividend"] = pool.submit(market_data.get_ex_dividend_date, symbol)
 
         results: dict = {}
@@ -383,19 +381,12 @@ class ContextBuilder:
         # ── Macro ───────────────────────────────────────────
         vix = results["vix"]
         fg = results["fear_greed"] or {}
-        vix_term = results.get("vix_term") or {}
         context["macro"] = {
             "vix": vix,
             "vix_regime": market_data.interpret_vix(vix) if vix is not None else None,
             "fear_greed_score": fg.get("score"),
             "fear_greed_rating": fg.get("rating"),
             "risk_free_rate": results["risk_free_rate"],
-            "vix9d": vix_term.get("vix9d"),
-            "vix3m": vix_term.get("vix3m"),
-            "vix6m": vix_term.get("vix6m"),
-            "vix_contango": vix_term.get("contango"),
-            "vix9d_vs_spot": vix_term.get("vix9d_vs_spot"),
-            "vix_term_slope": vix_term.get("term_slope_m1_m3"),
         }
 
         # ── Broker data (sequential — same client) ─────────

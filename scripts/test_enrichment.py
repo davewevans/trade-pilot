@@ -17,7 +17,7 @@ logger = logging.getLogger("test-enrichment")
 
 SYMBOL = "AAPL"
 PASS_COUNT = 0
-TOTAL = 10
+TOTAL = 9
 
 
 def section(num: int, title: str) -> None:
@@ -194,27 +194,8 @@ def main() -> None:
         failed("get_earnings_calendar", str(e))
         logger.exception("  Details:")
 
-    # ── 9. VIX Term Structure ────────────────────────────────
-    section(9, "get_vix_term_structure()")
-    try:
-        from data.market_data import get_vix_term_structure
-        ts = get_vix_term_structure()
-        logger.info("  VIX9D:    %s", ts.get("vix9d"))
-        logger.info("  VIX:      %s", ts.get("vix_spot"))
-        logger.info("  VIX3M:    %s", ts.get("vix3m"))
-        logger.info("  VIX6M:    %s", ts.get("vix6m"))
-        logger.info("  Contango: %s", ts.get("contango"))
-        logger.info("  Term slope (spot->3m): %s", ts.get("term_slope_m1_m3"))
-        if ts.get("vix_spot") is not None:
-            passed("get_vix_term_structure")
-        else:
-            failed("get_vix_term_structure", "vix_spot is None")
-    except Exception as e:
-        failed("get_vix_term_structure", str(e))
-        logger.exception("  Details:")
-
-    # ── 10. Ex-Dividend Date ─────────────────────────────────
-    section(10, f"get_ex_dividend_date('{SYMBOL}')")
+    # ── 9. Ex-Dividend Date ─────────────────────────────────
+    section(9, f"get_ex_dividend_date('{SYMBOL}')")
     try:
         from data.market_data import get_ex_dividend_date
         exdiv = get_ex_dividend_date(SYMBOL)

@@ -204,18 +204,43 @@ def start_option_stream(symbols: list[str], on_quote, on_trade) -> None:
 
 
 def get_vix() -> float | None:
-    """Return the current VIX index value via yfinance.
+    """Return the current VIX index value.
 
-    Uses the actual ^VIX index, not VIXY (which drifts due to
-    futures roll decay). Returns None on failure.
+    Primary source: FRED VIXCLS series (CBOE Volatility Index daily close).
+    Fallback: yfinance ^VIX last_price.
+
+    Note: FRED VIXCLS is a daily series. During market hours this returns
+    yesterday's official close. yfinance ^VIX gave intraday spot; FRED does
+    not. Acceptable for trade-pilot's main entry cycles (pre_market and
+    market_open run before/at market open) but a freshness regression for
+    intraday position_check cycles. Mitigation: regime stability filter
+    requires 3 consecutive readings before flipping, so single-day VIX
+    spikes do not silently change strategy routing.
+
+    Returns None on total failure.
     """
+    if settings.USE_FRED_FOR_VIX:
+        try:
+            from fredapi import Fred
+
+            fred = Fred(api_key=settings.FRED_API_KEY)
+            series = fred.get_series("VIXCLS")
+            vix = float(series.dropna().iloc[-1])
+            logger.info("Fetched VIX from FRED VIXCLS: %.2f", vix)
+            return vix
+        except Exception:
+            logger.warning(
+                "Failed to fetch VIX from FRED VIXCLS; falling back to yfinance",
+                exc_info=True,
+            )
+
     try:
         vix_data = yf.Ticker("^VIX").fast_info
         vix = float(vix_data["last_price"])
-        logger.info("Fetched ^VIX: %.2f", vix)
+        logger.info("Fetched ^VIX via yfinance fallback: %.2f", vix)
         return vix
     except Exception:
-        logger.warning("Failed to fetch ^VIX via yfinance", exc_info=True)
+        logger.warning("Failed to fetch ^VIX via yfinance fallback", exc_info=True)
         return None
 
 
@@ -228,49 +253,6 @@ def interpret_vix(vix: float) -> str:
     if vix < 35:
         return "elevated"
     return "extreme"
-
-
-# ── VIX term structure ──────────────────────────────────────
-
-_vix_term_cache: dict | None = None
-_vix_term_timestamp: float = 0.0
-_VIX_TERM_TTL = 15 * 60
-
-
-def get_vix_term_structure() -> dict:
-    """Return the VIX term structure across multiple timeframes."""
-    global _vix_term_cache, _vix_term_timestamp
-
-    if _vix_term_cache is not None and time.monotonic() - _vix_term_timestamp < _VIX_TERM_TTL:
-        return _vix_term_cache
-
-    symbols = {"vix9d": "^VIX9D", "vix_spot": "^VIX", "vix3m": "^VIX3M", "vix6m": "^VIX6M"}
-    values: dict = {}
-    for key, ticker_sym in symbols.items():
-        try:
-            values[key] = float(yf.Ticker(ticker_sym).fast_info["last_price"])
-        except Exception:
-            logger.debug("Could not fetch %s", ticker_sym)
-            values[key] = None
-
-    vix_spot = values.get("vix_spot")
-    vix3m = values.get("vix3m")
-    vix9d = values.get("vix9d")
-
-    contango = (vix_spot < vix3m) if vix_spot is not None and vix3m is not None else None
-    vix9d_vs_spot = round(vix9d - vix_spot, 2) if vix9d is not None and vix_spot is not None else None
-    term_slope_m1_m3 = round(vix3m - vix_spot, 2) if vix_spot is not None and vix3m is not None else None
-
-    result = {
-        **values,
-        "contango": contango,
-        "vix9d_vs_spot": vix9d_vs_spot,
-        "term_slope_m1_m3": term_slope_m1_m3,
-    }
-    _vix_term_cache = result
-    _vix_term_timestamp = time.monotonic()
-    logger.info("VIX term structure: %s", result)
-    return result
 
 
 # ── Ex-dividend ────────────────────────────────────────────

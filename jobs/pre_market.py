@@ -235,7 +235,7 @@ def run() -> None:
         vix_regime = market_data.interpret_vix(vix) if vix is not None else "?"
     except Exception:
         logger.exception("Failed to fetch VIX")
-    _sh_record("yfinance", vix is not None, "" if vix is not None else "VIX fetch failed")
+    _sh_record("FRED", vix is not None, "" if vix is not None else "VIX fetch failed")
 
     fg: dict = {}
     try:

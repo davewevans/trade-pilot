@@ -39,7 +39,6 @@ def _build_ctx(summary, ivrank, cores, broker=None, journal=None):
         patch("data.market_data.get_finnhub_analyst_data", return_value={}),
         patch("data.market_data.get_finnhub_news_sentiment", return_value=None),
         patch("data.market_data.get_earnings_calendar", return_value={}),
-        patch("data.market_data.get_vix_term_structure", return_value={}),
         patch("data.market_data.get_ex_dividend_date", return_value={}),
         patch("data.context_builder._fetch_news", return_value=[]),
     ]

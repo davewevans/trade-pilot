@@ -120,8 +120,6 @@ _FAKE_FEAR_GREED = {"score": 55, "rating": "Greed"}
 
 _FAKE_EX_DIVIDEND = {"next_ex_dividend_date": None, "days_to_ex_dividend": None, "annual_dividend_yield": 0.0}
 
-_FAKE_VIX_TERM = {"vix9d": 14.0, "vix3m": 17.0, "vix6m": 18.5, "contango": 3.0, "term_slope_m1_m3": 4.5}
-
 
 @pytest.fixture
 def mock_context(tmp_path):
@@ -163,7 +161,6 @@ def mock_context(tmp_path):
         "data.market_data.get_finnhub_analyst_data": MagicMock(return_value={}),
         "data.market_data.get_finnhub_news_sentiment": MagicMock(return_value={}),
         "data.market_data.get_earnings_calendar": MagicMock(return_value=_FAKE_EARNINGS),
-        "data.market_data.get_vix_term_structure": MagicMock(return_value=_FAKE_VIX_TERM),
         "data.market_data.get_ex_dividend_date": MagicMock(return_value=_FAKE_EX_DIVIDEND),
         "data.market_data.interpret_vix": MagicMock(return_value="MODERATE"),
         "data.context_builder._fetch_news": MagicMock(
@@ -214,7 +211,7 @@ def mock_context(tmp_path):
     ),
     (
         "macro.vix",
-        "ResearchGuide.tsx + DataSources.tsx: VIX is in Claude's macro context via yfinance",
+        "ResearchGuide.tsx + DataSources.tsx: VIX is in Claude's macro context via FRED",
     ),
     (
         "macro.fear_greed_score",

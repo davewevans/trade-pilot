@@ -217,18 +217,18 @@ const SOURCES: Source[] = [
   },
   {
     name: 'yfinance',
-    tagline: 'Stock technicals, fundamentals, and VIX',
+    tagline: 'Stock technicals and fundamentals',
     website: 'pypi.org/project/yfinance',
     healthKeys: ['yfinance'],
     cache:
-      'Fundamentals and ex-dividend data cached 6 hours. Technicals computed fresh each cycle. VIX fetched live each cycle.',
+      'Fundamentals and ex-dividend data cached 6 hours. Technicals computed fresh each cycle.',
     fallback:
       'If yfinance fails for technicals, the context includes None values and Claude is told the data is unavailable. Earnings date fallback from Finnhub handles the most critical field.',
     body: (
       <>
         <p className="text-sm leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
           yfinance is a Python library that pulls data from Yahoo Finance. The bot uses it for
-          three categories of data that don't require real-time precision.
+          two categories of data that don't require real-time precision.
         </p>
         <SubHead>1 — Stock Technicals (computed from historical price data)</SubHead>
         <Bullets
@@ -258,35 +258,37 @@ const SOURCES: Source[] = [
             'Annual dividend yield',
           ]}
         />
-        <SubHead>3 — VIX</SubHead>
-        <p className="text-sm leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
-          Fetches the current VIX index value (^VIX) directly. This is one of the three primary
-          signals used to classify market regime.
-        </p>
       </>
     ),
   },
   {
     name: 'FRED (Federal Reserve Economic Data)',
-    tagline: 'Risk-free interest rate',
+    tagline: 'Risk-free interest rate and VIX',
     website: 'fred.stlouisfed.org',
     healthKeys: ['FRED'],
-    cache: '4 hours. The rate changes slowly — daily updates from the Fed are sufficient.',
+    cache: 'Risk-free rate: 4 hours. VIX: fetched live each cycle (daily series — reflects prior close).',
     fallback:
-      'If FRED is unavailable, the bot defaults to 5.0% (0.05) and logs a warning. This is a reasonable approximation that avoids blocking a cycle over a slowly-changing macro input.',
+      'If FRED is unavailable for the risk-free rate, the bot defaults to 5.0% (0.05) and logs a warning. If FRED is unavailable for VIX, the bot falls back to yfinance ^VIX. If both fail, VIX returns None and regime classification proceeds without it.',
     body: (
       <>
         <p className="text-sm leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
           FRED is maintained by the Federal Reserve Bank of St. Louis and provides economic data
-          series. The bot uses it for one specific data point: the current risk-free interest rate.
+          series. The bot uses it for two data points.
         </p>
         <Section heading="What the bot fetches">
-          <Bullets items={['The 3-Month Treasury Bill secondary market rate (series: DGS3MO)']} />
+          <Bullets
+            items={[
+              'The 3-Month Treasury Bill secondary market rate (series: DGS3MO)',
+              'The CBOE Volatility Index daily close (series: VIXCLS) — used for market regime classification',
+            ]}
+          />
         </Section>
         <Section heading="What it is used for">
           The risk-free rate feeds into options pricing models (specifically Black-Scholes) and is
-          included in the context Claude receives. It also informs the macro picture — a rising
-          risk-free rate affects the relative attractiveness of options premium vs. holding cash.
+          included in the context Claude receives. VIX is one of the three primary signals used to
+          classify market regime (along with the Fear &amp; Greed Index and SPX trend). Note: FRED
+          VIXCLS is a daily close series — during market hours it reflects the prior business
+          day's official close rather than live spot.
         </Section>
       </>
     ),
@@ -529,7 +531,7 @@ const FALLBACK_CHAIN = [
   { label: 'Vol surface', chain: 'ORATS /monies/implied → unavailable (EV scoring proceeds without skew surface data)' },
   { label: 'Strike candidates', chain: 'ORATS /strikes → Alpaca chain → unavailable (spread skips)' },
   { label: 'Risk-free rate', chain: 'FRED → 5.0% default' },
-  { label: 'VIX', chain: 'yfinance → None (regime defaults to NEUTRAL)' },
+  { label: 'VIX', chain: 'FRED VIXCLS → yfinance ^VIX → None (regime defaults to NEUTRAL)' },
   { label: 'Fear & Greed', chain: 'CNN → None (EUPHORIA regime blocked, others unaffected)' },
   { label: 'Technicals', chain: 'yfinance → None values passed to Claude with warning' },
   { label: 'Historical backtesting', chain: 'ORATS /hist endpoints → backtest unavailable; live trading unaffected' },

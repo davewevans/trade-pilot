@@ -96,7 +96,13 @@ Last updated: 2026-04-25
 
 
 ---
-#16 — yfinance structurally unreliable for ETF fundamentals. quoteSummary endpoint returns 404 on SPY/QQQ/IWM/GLD persistently across cycles. Affects: ex_dividend (safety implication for bear call spread guardrail — patched defensively in commit X), fundamentals (Claude context, degradation), VIX (no observed failures yet but same data source). Migration plan: VIX → FRED, ex_div → Finnhub, fundamentals → Finnhub, technicals → Alpaca. See yfinance migration plan doc when written.
+**#16 — yfinance structurally unreliable for ETF fundamentals.** quoteSummary endpoint returns 404 on SPY/QQQ/IWM/GLD persistently across cycles. Migration in progress:
+- VIX → FRED VIXCLS ✓ (2026-04-26, with yfinance fallback)
+- VIX term structure → deleted ✓ (2026-04-26, confirmed zero callers; ORATS contango_label covers the concept)
+- ex_div → Alpaca Corporate Actions (pending)
+- fundamentals → Finnhub + ETF-aware (pending)
+
+Bear call spread guardrail still defensively patched until ex_div migration ships.
 
 ## Recently Fixed
 
