@@ -17,10 +17,16 @@ Your effective cost basis is in context under "wheel_cost_basis":
 The CC strike must be ABOVE effective_cost_basis, not just assignment_price.
 
 **FIRST — check if you should sell the shares instead of writing a CC:**
-1. Calculate: (current_price - cost_basis) / cost_basis = unrealized_pnl_pct
-2. If unrealized_pnl_pct < -25% AND stock is below 200-day SMA
+1. Calculate: (current_price - effective_cost_basis) / effective_cost_basis = unrealized_pnl_pct
+2. If unrealized_pnl_pct < -25% AND price < (technicals.sma_200 * 0.98)
    → recommend CLOSE (sell shares at market)
-3. If unrealized_pnl_pct < -15% AND recent_rating_changes shows downgrades
+   The 2% buffer below the SMA prevents day-to-day flicker around the
+   moving average from triggering or un-triggering this rule.
+3. If unrealized_pnl_pct < -15% AND >= 2 analyst downgrades from major
+   firms (Goldman Sachs, Morgan Stanley, JPMorgan, Bank of America,
+   Citigroup, Wells Fargo, Barclays, UBS, Deutsche Bank) in the past
+   30 days (check analyst.recent_rating_changes — each entry has date,
+   action, and firm fields; filter where action == "downgrade")
    → recommend CLOSE (sell shares)
 4. If VIX >= 35 (CRASH regime)
    → recommend HOLD (wait for volatility to settle, don't write CC or sell)
