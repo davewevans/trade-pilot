@@ -101,7 +101,7 @@ Last updated: 2026-04-25
 - VIX term structure → deleted ✓ (2026-04-26, confirmed zero callers; ORATS contango_label covers the concept)
 - ex_div → Alpaca Corporate Actions ✓ (2026-04-26, with yfinance fallback)
 - fundamentals → Finnhub /stock/profile2 + /stock/metric, ETF-aware ✓ (2026-04-26; `get_fundamentals()` decomposed; annual_dividend_yield restored via Finnhub metric)
-- earnings yfinance fallback → delete (pending, Stage 5)
+- earnings yfinance fallback → deleted ✓ (2026-04-26; `get_earnings_date()` removed, `get_earnings_calendar()` Finnhub-only)
 - backtester → Alpaca + FRED (pending, Stage 6)
 
 Bear call spread defensive patch contract preserved: `context["fundamentals"]["ex_dividend_data_available"]` now reflects Alpaca ex-div fetch health (delegated from Stage 3 path). No behavioral change to the guardrail.

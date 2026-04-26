@@ -539,7 +539,7 @@ def get_finnhub_news_sentiment(symbol: str) -> dict | None:
 
 
 def get_earnings_calendar(symbol: str) -> dict:
-    """Return upcoming earnings from Finnhub (yfinance fallback)."""
+    """Return upcoming earnings from Finnhub."""
     if settings.FINNHUB_API_KEY:
         try:
             from data.finnhub_client import FinnhubClient
@@ -548,24 +548,7 @@ def get_earnings_calendar(symbol: str) -> dict:
             if result and result.get("next_earnings_date"):
                 return {**result, "source": "finnhub"}
         except Exception:
-            logger.warning("Finnhub earnings failed for %s, trying yfinance", symbol, exc_info=True)
-
-    try:
-        from datetime import date
-
-        earnings_date = get_earnings_date(symbol)
-        if earnings_date:
-            ed = date.fromisoformat(earnings_date)
-            days = (ed - date.today()).days
-            return {
-                "next_earnings_date": earnings_date,
-                "days_to_earnings": days,
-                "eps_estimate": None,
-                "revenue_estimate": None,
-                "source": "yfinance",
-            }
-    except Exception:
-        logger.warning("yfinance earnings fallback failed for %s", symbol, exc_info=True)
+            logger.warning("Finnhub earnings failed for %s", symbol, exc_info=True)
 
     return {
         "next_earnings_date": None, "days_to_earnings": None,
@@ -632,30 +615,6 @@ def get_company_profile(symbol: str) -> dict:
 
 
 # ── Earnings & technicals ────────────────────────────────────
-
-
-def get_earnings_date(symbol: str) -> str | None:
-    """Return the next earnings date for a symbol as an ISO date string.
-
-    Uses yfinance. Returns None if no upcoming earnings date is found.
-    """
-    try:
-        ticker = yf.Ticker(symbol)
-        cal = ticker.calendar
-        if cal is None or cal.empty if isinstance(cal, pd.DataFrame) else not cal:
-            return None
-        if isinstance(cal, pd.DataFrame):
-            if "Earnings Date" in cal.index:
-                date_val = cal.loc["Earnings Date"].iloc[0]
-                return str(pd.Timestamp(date_val).date())
-        if isinstance(cal, dict):
-            dates = cal.get("Earnings Date", [])
-            if dates:
-                return str(pd.Timestamp(dates[0]).date())
-        return None
-    except Exception:
-        logger.exception("Failed to fetch earnings date for %s", symbol)
-        return None
 
 
 def _safe_float(value) -> float | None:
