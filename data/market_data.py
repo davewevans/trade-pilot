@@ -39,8 +39,6 @@ _fear_greed_cache: dict | None = None
 _fear_greed_timestamp: float = 0.0
 _FEAR_GREED_TTL = 3600  # 1 hour in seconds
 
-_fundamentals_cache: dict[str, tuple[float, dict]] = {}  # symbol -> (timestamp, data)
-_FUNDAMENTALS_TTL = 6 * 3600  # 6 hours in seconds
 
 _option_client = OptionHistoricalDataClient(
     api_key=settings.ALPACA_PAPER1_API_KEY,
@@ -575,99 +573,65 @@ def get_earnings_calendar(symbol: str) -> dict:
     }
 
 
-# ── Earnings & technicals ────────────────────────────────────
+# ── Company profile (Finnhub) ────────────────────────────────
 
-_FUNDAMENTALS_KEYS = [
-    "next_earnings_date", "days_to_earnings", "pe_ratio", "market_cap",
-    "sector", "industry", "avg_volume", "fifty_two_week_high",
-    "fifty_two_week_low", "analyst_rating",
-    "next_ex_dividend_date", "days_to_ex_dividend",
-]
+def get_company_profile(symbol: str) -> dict:
+    """Return Finnhub-sourced company profile and key metrics, ETF-aware.
 
+    For ETFs (per config.ETF_SYMBOLS), Finnhub returns empty data from
+    /stock/profile2. This wrapper applies config.SECTOR_ETF_MAP to populate
+    sector for sector-specific ETFs and leaves it None for broad-market ETFs.
+    52-week high/low IS populated by Finnhub for ETFs (sparse metric response).
 
-def get_fundamentals(symbol: str) -> dict:
-    """Fetch fundamental data for a symbol via yfinance.
+    If a symbol is not in ETF_SYMBOLS but Finnhub returns empty profile data,
+    a warning is logged — likely the symbol is an ETF that wasn't added to the
+    set.
 
-    Returns earnings info, valuation metrics, sector/industry, and the most
-    recent analyst rating.  Results are cached per symbol for 6 hours.
-    On any failure every key is returned as None.
+    Returns the same dict as FinnhubClient.get_company_profile() plus:
+        is_etf: bool    True if symbol is in config.ETF_SYMBOLS
+
+    On Finnhub failure: all fields None, both data_available flags False.
+    No yfinance fallback — fundamentals fields come from canonical sources
+    (earnings → get_earnings_calendar, ex-div → get_ex_dividend_date).
     """
-    cached = _fundamentals_cache.get(symbol)
-    if cached is not None:
-        ts, data = cached
-        if (time.monotonic() - ts) < _FUNDAMENTALS_TTL:
-            return data
+    sym = symbol.upper()
+    is_etf = sym in settings.ETF_SYMBOLS
 
-    try:
-        ticker = yf.Ticker(symbol)
-        info = ticker.info or {}
-
-        # ── Earnings date ───────────────────────────────────
-        next_earnings_date: str | None = None
-        days_to_earnings: int | None = None
-        try:
-            cal = ticker.calendar
-            if isinstance(cal, pd.DataFrame) and "Earnings Date" in cal.index:
-                date_val = pd.Timestamp(cal.loc["Earnings Date"].iloc[0]).date()
-                next_earnings_date = str(date_val)
-                days_to_earnings = (date_val - datetime.now().date()).days
-            elif isinstance(cal, dict):
-                dates = cal.get("Earnings Date", [])
-                if dates:
-                    date_val = pd.Timestamp(dates[0]).date()
-                    next_earnings_date = str(date_val)
-                    days_to_earnings = (date_val - datetime.now().date()).days
-        except Exception:
-            logger.debug("Could not parse earnings date for %s", symbol, exc_info=True)
-
-        # ── Ex-dividend date ────────────────────────────────
-        next_ex_dividend_date: str | None = None
-        days_to_ex_dividend: int | None = None
-        try:
-            ex_date_raw = info.get("exDividendDate")
-            if ex_date_raw:
-                ex_date = pd.Timestamp(ex_date_raw, unit="s").date()
-                if ex_date >= datetime.now().date():
-                    next_ex_dividend_date = str(ex_date)
-                    days_to_ex_dividend = (ex_date - datetime.now().date()).days
-        except Exception:
-            logger.debug("Could not parse ex-dividend date for %s", symbol, exc_info=True)
-
-        # ── Analyst rating ──────────────────────────────────
-        analyst_rating: str | None = None
-        try:
-            recs = ticker.recommendations
-            if recs is not None and not recs.empty:
-                last_row = recs.iloc[-1]
-                analyst_rating = last_row.get("To Grade") or last_row.get("toGrade")
-        except Exception:
-            logger.debug("Could not parse analyst rating for %s", symbol, exc_info=True)
-
-        result = {
-            "next_earnings_date": next_earnings_date,
-            "days_to_earnings": days_to_earnings,
-            "pe_ratio": info.get("trailingPE"),
-            "market_cap": info.get("marketCap"),
-            "sector": info.get("sector"),
-            "industry": info.get("industry"),
-            "avg_volume": info.get("averageVolume"),
-            "fifty_two_week_high": info.get("fiftyTwoWeekHigh"),
-            "fifty_two_week_low": info.get("fiftyTwoWeekLow"),
-            "analyst_rating": analyst_rating,
-            "next_ex_dividend_date": next_ex_dividend_date,
-            "days_to_ex_dividend": days_to_ex_dividend,
-            "ex_dividend_data_available": True,
+    if not settings.FINNHUB_API_KEY:
+        return {
+            "sector": settings.SECTOR_ETF_MAP.get(sym) if is_etf else None,
+            "market_cap": None, "pe_ratio": None, "annual_dividend_yield": None,
+            "fifty_two_week_high": None, "fifty_two_week_low": None,
+            "profile_data_available": False, "metric_data_available": False,
+            "is_etf": is_etf,
         }
 
-        _fundamentals_cache[symbol] = (time.monotonic(), result)
-        logger.info("Fetched fundamentals for %s", symbol)
-        return result
-
+    try:
+        from data.finnhub_client import FinnhubClient
+        result = FinnhubClient().get_company_profile(symbol)
     except Exception:
-        logger.warning("Failed to fetch fundamentals for %s", symbol, exc_info=True)
-        result = {k: None for k in _FUNDAMENTALS_KEYS}
-        result["ex_dividend_data_available"] = False
-        return result
+        logger.warning("Finnhub company profile failed for %s", symbol, exc_info=True)
+        result = {
+            "sector": None, "market_cap": None, "pe_ratio": None,
+            "annual_dividend_yield": None,
+            "fifty_two_week_high": None, "fifty_two_week_low": None,
+            "profile_data_available": False, "metric_data_available": False,
+        }
+
+    if is_etf and result.get("sector") is None:
+        result["sector"] = settings.SECTOR_ETF_MAP.get(sym)
+    elif not is_etf and not result.get("profile_data_available"):
+        logger.warning(
+            "get_company_profile: %s returned empty Finnhub profile but is not "
+            "in config.ETF_SYMBOLS. If %s is an ETF, add it to ETF_SYMBOLS.",
+            symbol, symbol,
+        )
+
+    result["is_etf"] = is_etf
+    return result
+
+
+# ── Earnings & technicals ────────────────────────────────────
 
 
 def get_earnings_date(symbol: str) -> str | None:

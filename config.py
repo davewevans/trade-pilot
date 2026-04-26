@@ -470,6 +470,42 @@ class Settings:
         ]
         self.CALENDAR_SPREAD_WATCHLIST = list(self.SPREAD_WATCHLIST)
 
+    # ETF symbol set. A symbol here is treated as an ETF by get_company_profile(),
+    # which applies the SECTOR_ETF_MAP override and skips expecting profile data
+    # from Finnhub (Finnhub returns empty {} for all ETFs structurally).
+    # Keep in sync with any watchlist.json additions — if a new ETF is added to
+    # a watchlist without being listed here, get_company_profile() logs a warning.
+    ETF_SYMBOLS: frozenset[str] = frozenset({
+        # Broad-market index ETFs
+        "SPY", "QQQ", "IWM", "DIA", "VTI", "VOO", "VEA", "VWO",
+        # Sector SPDR ETFs — sector label in SECTOR_ETF_MAP below
+        "XLE", "XLF", "XLK", "XLV", "XLP", "XLY", "XLI", "XLB",
+        "XLU", "XLRE", "XLC",
+        # Commodity ETFs
+        "GLD", "SLV", "USO", "UNG",
+        # Bond ETFs
+        "TLT", "AGG", "LQD", "HYG",
+        # Volatility ETFs
+        "VIXY", "UVXY",
+    })
+
+    # Sector labels for sector-specific ETFs. Broad-market and commodity ETFs
+    # are absent intentionally — sector for them is None (SPY is "the market",
+    # not a sector). Symbols here must also appear in ETF_SYMBOLS.
+    SECTOR_ETF_MAP: dict[str, str] = {
+        "XLE": "Energy",
+        "XLF": "Financial Services",
+        "XLK": "Technology",
+        "XLV": "Healthcare",
+        "XLP": "Consumer Defensive",
+        "XLY": "Consumer Cyclical",
+        "XLI": "Industrials",
+        "XLB": "Basic Materials",
+        "XLU": "Utilities",
+        "XLRE": "Real Estate",
+        "XLC": "Communication Services",
+    }
+
     # Sector mapping for correlation awareness.
     # Used by the guardrails (sector concentration) and reporting to flag
     # sector concentration across wheel positions.

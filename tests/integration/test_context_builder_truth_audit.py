@@ -47,19 +47,16 @@ _FAKE_TECHNICALS = {
     "volume_30d_avg": 4_800_000,
 }
 
-_FAKE_FUNDAMENTALS = {
-    "next_earnings_date": "2026-07-01",
-    "days_to_earnings": 75,
-    "pe_ratio": 25.0,
-    "market_cap": 2_000_000_000,
+_FAKE_COMPANY_PROFILE = {
     "sector": "Technology",
-    "industry": "Software",
-    "avg_daily_volume": 5_000_000,
-    "week_52_high": 200.0,
-    "week_52_low": 120.0,
-    "next_ex_div_date": None,
-    "days_to_ex_div": None,
-    "annual_div_yield": 0.0,
+    "market_cap": 2_000_000_000,
+    "pe_ratio": 25.0,
+    "annual_dividend_yield": 0.015,
+    "fifty_two_week_high": 200.0,
+    "fifty_two_week_low": 120.0,
+    "profile_data_available": True,
+    "metric_data_available": True,
+    "is_etf": False,
 }
 
 _FAKE_ORATS_SUMMARY = {
@@ -147,7 +144,7 @@ def mock_context(tmp_path):
 
     patches = {
         "data.market_data.get_stock_technicals": MagicMock(return_value=_FAKE_TECHNICALS),
-        "data.market_data.get_fundamentals": MagicMock(return_value=_FAKE_FUNDAMENTALS),
+        "data.market_data.get_company_profile": MagicMock(return_value=_FAKE_COMPANY_PROFILE),
         "data.market_data.get_vix": MagicMock(return_value=18.5),
         "data.market_data.get_fear_greed_index": MagicMock(return_value=_FAKE_FEAR_GREED),
         "data.market_data.get_risk_free_rate": MagicMock(return_value=0.052),

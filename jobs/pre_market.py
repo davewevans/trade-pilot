@@ -189,19 +189,19 @@ def run() -> None:
             briefing_lines.append(line)
         briefing_lines.append("")
 
-    # ── Per-symbol fundamentals & news ──────────────────────
-    _yfinance_ok = False
+    # ── Per-symbol earnings & news ──────────────────────────
+    _finnhub_ok = False
     _alpaca_news_ok = False
 
     for symbol in settings.WATCHLIST:
         try:
-            fundamentals = market_data.get_fundamentals(symbol)
-            _yfinance_ok = True
+            earnings = market_data.get_earnings_calendar(symbol)
+            _finnhub_ok = True
 
             news = _fetch_news(symbol)
             _alpaca_news_ok = True
 
-            dte = fundamentals.get("days_to_earnings")
+            dte = earnings.get("days_to_earnings")
             dte_str = f"{dte}d away" if dte is not None else "N/A"
 
             technicals = market_data.get_stock_technicals(symbol)
@@ -224,7 +224,7 @@ def run() -> None:
             logger.exception("Pre-market failed for %s — continuing", symbol)
             briefing_lines.append(f"{symbol} | ERROR — see logs")
 
-    _sh_record("yfinance", _yfinance_ok, "" if _yfinance_ok else "All per-symbol fundamentals failed")
+    _sh_record("Finnhub", _finnhub_ok, "" if _finnhub_ok else "All per-symbol earnings fetches failed")
     _sh_record("Alpaca News", _alpaca_news_ok, "" if _alpaca_news_ok else "All per-symbol news fetches failed")
 
     # ── Macro data (once) ───────────────────────────────────

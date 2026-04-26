@@ -22,7 +22,7 @@ _health = SourceHealth()
 
 _SOURCE_MAP: dict[str, str] = {
     "technicals": "yfinance",
-    "fundamentals": "yfinance",
+    "company_profile": "Finnhub",
     "vix": "FRED",
     "fear_greed": "CNN Fear & Greed",
     "risk_free_rate": "FRED",
@@ -37,6 +37,25 @@ _SOURCE_MAP: dict[str, str] = {
     "earnings": "Finnhub",
     "ex_dividend": "Alpaca Corporate Actions",
 }
+
+
+def _analyst_rating_label(recommendation: dict | None) -> str | None:
+    """Derive a human-readable Buy/Hold/Sell label from Finnhub vote counts."""
+    if not recommendation:
+        return None
+    total = sum(
+        recommendation.get(k, 0) or 0
+        for k in ("strong_buy", "buy", "hold", "sell", "strong_sell")
+    )
+    if total == 0:
+        return None
+    bullish = (recommendation.get("strong_buy") or 0) + (recommendation.get("buy") or 0)
+    bearish = (recommendation.get("sell") or 0) + (recommendation.get("strong_sell") or 0)
+    if bullish / total > 0.5:
+        return "Buy"
+    if bearish / total > 0.3:
+        return "Sell"
+    return "Hold"
 
 
 def _record_health(source_name: str, success: bool, detail: str = "") -> None:
@@ -172,7 +191,7 @@ class ContextBuilder:
         futures: dict = {}
         with ThreadPoolExecutor(max_workers=8) as pool:
             futures["technicals"] = pool.submit(market_data.get_stock_technicals, symbol)
-            futures["fundamentals"] = pool.submit(market_data.get_fundamentals, symbol)
+            futures["company_profile"] = pool.submit(market_data.get_company_profile, symbol)
             futures["vix"] = pool.submit(market_data.get_vix)
             futures["fear_greed"] = pool.submit(market_data.get_fear_greed_index)
             futures["risk_free_rate"] = pool.submit(market_data.get_risk_free_rate)
@@ -207,7 +226,6 @@ class ContextBuilder:
                 _record_health(source_name, False, str(e)[:200])
 
         context["technicals"] = results["technicals"]
-        context["fundamentals"] = results["fundamentals"]
         context["news"] = results["news"]
 
         # ── ORATS volatility analytics ──────────────────────
@@ -376,6 +394,45 @@ class ContextBuilder:
             "days_to_ex_dividend": ex_div.get("days_to_ex_dividend"),
             "annual_dividend_yield": ex_div.get("annual_dividend_yield"),
             "ex_dividend_data_available": ex_div.get("ex_dividend_data_available"),
+        }
+        # Restore annual_dividend_yield from Finnhub metric when the Alpaca path
+        # returns None (Stage 3 only provides date/days; yield requires a price
+        # fetch that Alpaca doesn't include). Stage 4 adds it via /stock/metric.
+        if context["ex_dividend"].get("annual_dividend_yield") is None:
+            _profile_yield = (results.get("company_profile") or {}).get("annual_dividend_yield")
+            if _profile_yield is not None:
+                context["ex_dividend"]["annual_dividend_yield"] = _profile_yield
+
+        # ── Fundamentals (decomposed — each field from its canonical source) ──
+        # Replaces the old yfinance-based get_fundamentals() fat aggregator.
+        # Safety-critical fields (days_to_earnings, ex_dividend_data_available)
+        # are delegated to the functions that already carry the correct data.
+        _profile = results.get("company_profile") or {}
+        _earnings_ctx = context.get("earnings") or {}
+        _ex_div_ctx = context.get("ex_dividend") or {}
+        _tech_ctx = context.get("technicals") or {}
+        _analyst_rec = (results.get("analyst_data") or {}).get("recommendation")
+        context["fundamentals"] = {
+            # Finnhub /stock/profile2 + /stock/metric:
+            "sector": _profile.get("sector"),
+            "market_cap": _profile.get("market_cap"),
+            "pe_ratio": _profile.get("pe_ratio"),
+            "annual_dividend_yield": _profile.get("annual_dividend_yield"),
+            "fifty_two_week_high": _profile.get("fifty_two_week_high"),
+            "fifty_two_week_low": _profile.get("fifty_two_week_low"),
+            "is_etf": _profile.get("is_etf", False),
+            # From get_earnings_calendar (Finnhub-primary, canonical):
+            "next_earnings_date": _earnings_ctx.get("next_earnings_date"),
+            "days_to_earnings": _earnings_ctx.get("days_to_earnings"),
+            # From get_ex_dividend_date (Alpaca Stage 3, canonical):
+            "next_ex_dividend_date": _ex_div_ctx.get("next_ex_dividend_date"),
+            "days_to_ex_dividend": _ex_div_ctx.get("days_to_ex_dividend"),
+            # Bear call spread guardrail reads this — reflects Alpaca ex-div fetch health:
+            "ex_dividend_data_available": _ex_div_ctx.get("ex_dividend_data_available"),
+            # avg_volume from technicals (already computed from Alpaca bars):
+            "avg_volume": _tech_ctx.get("avg_volume_30d"),
+            # Analyst rating derived from Finnhub recommendation vote counts:
+            "analyst_rating": _analyst_rating_label(_analyst_rec),
         }
 
         # ── Macro ───────────────────────────────────────────

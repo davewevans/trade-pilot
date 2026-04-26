@@ -170,35 +170,102 @@ def test_ex_div_alpaca_error_falls_back_to_yfinance(monkeypatch):
     assert result["ex_dividend_data_available"] is True
 
 
-# ── get_fundamentals: ex_dividend_data_available signal ─────────────────────
+# ── get_company_profile: ETF-aware Finnhub wrapper ───────────────────────────
 
 
-def test_fundamentals_success_path_sets_available_true(monkeypatch):
-    """Successful fundamentals fetch → ex_dividend_data_available=True."""
+def test_get_company_profile_equity_passthrough():
+    """Equity: FinnhubClient result passed through; is_etf=False."""
+    import data.market_data as md
+    from data.finnhub_client import _profile_cache
+
+    _profile_cache.clear()
+    fake_profile = {
+        "sector": "Technology", "market_cap": 3_979_469.6,
+        "pe_ratio": 33.5, "annual_dividend_yield": 0.0038,
+        "fifty_two_week_high": 237.0, "fifty_two_week_low": 164.0,
+        "profile_data_available": True, "metric_data_available": True,
+    }
+    with patch("data.market_data.FinnhubClient") as MockClient:
+        MockClient.return_value.get_company_profile.return_value = fake_profile
+        result = md.get_company_profile("AAPL")
+
+    assert result["sector"] == "Technology"
+    assert result["is_etf"] is False
+    assert result["profile_data_available"] is True
+
+
+def test_get_company_profile_sector_etf_overrides_sector():
+    """Sector ETF (XLE): sector=None from Finnhub overridden by SECTOR_ETF_MAP."""
+    import data.market_data as md
+    from data.finnhub_client import _profile_cache
+
+    _profile_cache.clear()
+    fake_profile = {
+        "sector": None, "market_cap": None,
+        "pe_ratio": None, "annual_dividend_yield": None,
+        "fifty_two_week_high": 95.0, "fifty_two_week_low": 70.0,
+        "profile_data_available": False, "metric_data_available": True,
+    }
+    with patch("data.market_data.FinnhubClient") as MockClient:
+        MockClient.return_value.get_company_profile.return_value = fake_profile
+        result = md.get_company_profile("XLE")
+
+    assert result["sector"] == "Energy"   # overridden from SECTOR_ETF_MAP
+    assert result["is_etf"] is True
+    assert result["fifty_two_week_high"] == 95.0
+
+
+def test_get_company_profile_broad_etf_sector_none():
+    """Broad-market ETF (SPY): sector stays None (not in SECTOR_ETF_MAP)."""
+    import data.market_data as md
+    from data.finnhub_client import _profile_cache
+
+    _profile_cache.clear()
+    fake_profile = {
+        "sector": None, "market_cap": None,
+        "pe_ratio": None, "annual_dividend_yield": None,
+        "fifty_two_week_high": 598.0, "fifty_two_week_low": 480.0,
+        "profile_data_available": False, "metric_data_available": True,
+    }
+    with patch("data.market_data.FinnhubClient") as MockClient:
+        MockClient.return_value.get_company_profile.return_value = fake_profile
+        result = md.get_company_profile("SPY")
+
+    assert result["sector"] is None   # SPY not in SECTOR_ETF_MAP
+    assert result["is_etf"] is True
+
+
+def test_get_company_profile_non_etf_empty_profile_logs_warning(caplog):
+    """Non-ETF symbol with empty profile data → warning logged."""
+    import logging
+    import data.market_data as md
+    from data.finnhub_client import _profile_cache
+
+    _profile_cache.clear()
+    fake_profile = {
+        "sector": None, "market_cap": None,
+        "pe_ratio": None, "annual_dividend_yield": None,
+        "fifty_two_week_high": None, "fifty_two_week_low": None,
+        "profile_data_available": False, "metric_data_available": False,
+    }
+    with patch("data.market_data.FinnhubClient") as MockClient:
+        MockClient.return_value.get_company_profile.return_value = fake_profile
+        with caplog.at_level(logging.WARNING, logger="data.market_data"):
+            result = md.get_company_profile("AAPL")
+
+    assert result["is_etf"] is False
+    assert any("ETF_SYMBOLS" in msg for msg in caplog.messages)
+
+
+def test_get_company_profile_no_api_key_fast_path(monkeypatch):
+    """No FINNHUB_API_KEY → fast-path return without FinnhubClient instantiation."""
     import data.market_data as md
 
-    mock_ticker = MagicMock()
-    mock_ticker.info = {"exDividendDate": None, "trailingPE": 20.0}
-    mock_ticker.calendar = {}
-    mock_ticker.recommendations = None
-    monkeypatch.setattr(md, "yf", MagicMock(Ticker=lambda sym: mock_ticker))
-    md._fundamentals_cache.clear()
+    monkeypatch.setattr(md.settings, "FINNHUB_API_KEY", "")
+    with patch("data.market_data.FinnhubClient") as MockClient:
+        result = md.get_company_profile("AAPL")
+        MockClient.assert_not_called()
 
-    result = md.get_fundamentals("AAPL")
-    assert result["ex_dividend_data_available"] is True
-
-
-def test_fundamentals_failure_path_sets_available_false(monkeypatch):
-    """yfinance raises on fundamentals fetch → ex_dividend_data_available=False."""
-    import data.market_data as md
-
-    def bad_ticker(sym):
-        raise Exception("404 quoteSummary")
-
-    monkeypatch.setattr(md, "yf", MagicMock(Ticker=bad_ticker))
-    md._fundamentals_cache.clear()
-
-    result = md.get_fundamentals("SPY")
-    assert result["ex_dividend_data_available"] is False
-    assert result["days_to_ex_dividend"] is None
-    assert result["days_to_earnings"] is None
+    assert result["profile_data_available"] is False
+    assert result["metric_data_available"] is False
+    assert result["is_etf"] is False

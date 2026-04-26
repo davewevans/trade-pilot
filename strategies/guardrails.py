@@ -721,10 +721,10 @@ class Guardrails:
             return False, f"Earnings in {dte_earnings} days (hard block: need > 21)"
 
         # Ex-dividend within DTE window.
-        # Defensive default: if ex-div data fetch failed (e.g., yfinance
-        # quoteSummary 404), reject the spread rather than silently pass.
-        # `ex_dividend_data_available` is set by get_fundamentals() and flows
-        # through context["fundamentals"] automatically. When True,
+        # Defensive default: if ex-div data fetch failed (Alpaca or yfinance),
+        # reject the spread rather than silently pass.
+        # `ex_dividend_data_available` reflects Alpaca Corporate Actions fetch
+        # health (Stage 3) and flows through context["fundamentals"]. When True,
         # days_to_ex_dividend=None legitimately means "no upcoming ex-div" and
         # the spread is safe. When False, we don't know — reject defensively.
         # None means the field is absent (old context shape pre-plumbing) —

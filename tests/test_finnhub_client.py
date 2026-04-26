@@ -11,6 +11,7 @@ from data.finnhub_client import (
     _earnings_history_cache,
     _analyst_cache,
     _sentiment_cache,
+    _profile_cache,
     _ENDPOINT_DISABLED,
 )
 
@@ -282,3 +283,115 @@ def test_finnhub_paid_tier_false_preemptively_disables():
     assert _ENDPOINT_DISABLED["price_target"] is True
     assert _ENDPOINT_DISABLED["upgrade_downgrade"] is True
     assert _ENDPOINT_DISABLED["news_sentiment"] is True
+
+
+# ── get_company_profile ─────────────────────────────────────
+
+
+def test_get_company_profile_equity_success():
+    """Both endpoints return data — all fields populated."""
+    _profile_cache.clear()
+    client, sdk = _make_client_with_mock_sdk()
+    sdk.company_profile2.return_value = {
+        "name": "Apple Inc", "finnhubIndustry": "Technology",
+        "marketCapitalization": 3_979_469.6, "country": "US",
+    }
+    sdk.company_basic_financials.return_value = {
+        "metric": {
+            "peBasicExclExtraTTM": 33.5,
+            "dividendYieldIndicatedAnnual": 0.38,
+            "52WeekHigh": 237.23,
+            "52WeekLow": 164.08,
+        }
+    }
+    result = client.get_company_profile("AAPL")
+    assert result["sector"] == "Technology"
+    assert result["market_cap"] == 3_979_469.6
+    assert result["pe_ratio"] == 33.5
+    # Dividend yield must be normalized from percent to decimal
+    assert abs(result["annual_dividend_yield"] - 0.0038) < 1e-9
+    assert result["fifty_two_week_high"] == 237.23
+    assert result["fifty_two_week_low"] == 164.08
+    assert result["profile_data_available"] is True
+    assert result["metric_data_available"] is True
+
+
+def test_get_company_profile_etf_returns_sparse():
+    """ETF: profile2 returns empty {}, metric returns sparse data with 52w values."""
+    _profile_cache.clear()
+    client, sdk = _make_client_with_mock_sdk()
+    sdk.company_profile2.return_value = {}  # structural empty for ETFs
+    sdk.company_basic_financials.return_value = {
+        "metric": {
+            "52WeekHigh": 598.01,
+            "52WeekLow": 480.23,
+            # PE and div yield absent in the sparse ETF response
+        }
+    }
+    result = client.get_company_profile("SPY")
+    assert result["sector"] is None        # no finnhubIndustry in empty profile
+    assert result["market_cap"] is None
+    assert result["pe_ratio"] is None
+    assert result["annual_dividend_yield"] is None
+    assert result["fifty_two_week_high"] == 598.01
+    assert result["fifty_two_week_low"] == 480.23
+    assert result["profile_data_available"] is False  # empty dict → unavailable
+    assert result["metric_data_available"] is True    # sparse but non-empty
+
+
+def test_get_company_profile_dividend_yield_normalized():
+    """Finnhub returns percent (1.5); wrapper must normalize to decimal (0.015)."""
+    _profile_cache.clear()
+    client, sdk = _make_client_with_mock_sdk()
+    sdk.company_profile2.return_value = {"finnhubIndustry": "Technology"}
+    sdk.company_basic_financials.return_value = {
+        "metric": {"dividendYieldIndicatedAnnual": 1.5}
+    }
+    result = client.get_company_profile("XYZ")
+    assert abs(result["annual_dividend_yield"] - 0.015) < 1e-9
+
+
+def test_get_company_profile_both_fail_returns_empty_dict():
+    """Both endpoints raise — all None, both data_available flags False."""
+    _profile_cache.clear()
+    client, sdk = _make_client_with_mock_sdk()
+    sdk.company_profile2.side_effect = Exception("network error")
+    sdk.company_basic_financials.side_effect = Exception("network error")
+    result = client.get_company_profile("AAPL")
+    assert result["sector"] is None
+    assert result["market_cap"] is None
+    assert result["pe_ratio"] is None
+    assert result["annual_dividend_yield"] is None
+    assert result["fifty_two_week_high"] is None
+    assert result["fifty_two_week_low"] is None
+    assert result["profile_data_available"] is False
+    assert result["metric_data_available"] is False
+
+
+def test_get_company_profile_profile_fails_metric_succeeds():
+    """profile2 raises but metric succeeds — partial population, profile_ok=False."""
+    _profile_cache.clear()
+    client, sdk = _make_client_with_mock_sdk()
+    sdk.company_profile2.side_effect = Exception("404")
+    sdk.company_basic_financials.return_value = {
+        "metric": {"52WeekHigh": 200.0, "52WeekLow": 100.0}
+    }
+    result = client.get_company_profile("AAPL")
+    assert result["sector"] is None
+    assert result["market_cap"] is None
+    assert result["fifty_two_week_high"] == 200.0
+    assert result["fifty_two_week_low"] == 100.0
+    assert result["profile_data_available"] is False
+    assert result["metric_data_available"] is True
+
+
+def test_get_company_profile_caches_result():
+    """Second call returns cached result without hitting the SDK again."""
+    _profile_cache.clear()
+    client, sdk = _make_client_with_mock_sdk()
+    sdk.company_profile2.return_value = {"finnhubIndustry": "Technology"}
+    sdk.company_basic_financials.return_value = {"metric": {"52WeekHigh": 200.0}}
+    client.get_company_profile("AAPL")
+    client.get_company_profile("AAPL")
+    assert sdk.company_profile2.call_count == 1
+    _profile_cache.clear()

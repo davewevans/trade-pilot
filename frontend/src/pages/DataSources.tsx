@@ -113,11 +113,6 @@ const SOURCES: Source[] = [
             'Days until ex-dividend (relative to today)',
           ]}
         />
-        <p className="text-sm leading-relaxed mt-2" style={{ color: 'var(--text-secondary)' }}>
-          Note: annual dividend yield is not returned on this path — yield calculation requires a
-          current price fetch. It will be restored in a future migration stage via Finnhub
-          /stock/metric. Until then, yield appears as null in Claude's context.
-        </p>
       </>
     ),
   },
@@ -207,47 +202,67 @@ const SOURCES: Source[] = [
   },
   {
     name: 'Finnhub',
-    tagline: 'Earnings calendar (primary source)',
+    tagline: 'Earnings calendar, company profile, and analyst data',
     website: 'finnhub.io',
     healthKeys: ['Finnhub'],
-    cache: '6 hours per symbol.',
+    cache: '6 hours per symbol for all endpoints.',
     fallback:
-      'If Finnhub is unavailable or returns no data, the bot falls back to yfinance for earnings dates (without EPS/revenue estimates). If both fail, earnings data is marked as unavailable and the cycle proceeds without it — but Claude is told the data is missing.',
+      'If Finnhub is unavailable or returns no data, the bot falls back to yfinance for earnings dates (without EPS/revenue estimates). If both fail, earnings data is marked as unavailable and the cycle proceeds without it — but Claude is told the data is missing. Company profile fields (sector, PE, market cap) return None on Finnhub failure — no fallback.',
     body: (
       <>
         <p className="text-sm leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
-          Finnhub is the bot's primary source for upcoming earnings dates. Knowing when a company
-          reports earnings is critical — the bot hard-blocks new positions when earnings are too
-          close, because earnings announcements cause unpredictable price gaps that can blow
-          through a short option's strike overnight.
+          Finnhub is the bot's primary source for earnings dates, company profile, and analyst
+          consensus. All endpoints used here are confirmed free-tier.
         </p>
-        <Section heading="What the bot fetches">
-          <Bullets
-            items={[
-              'Next scheduled earnings date',
-              'EPS estimate for the upcoming report',
-              'Revenue estimate for the upcoming report',
-              'Source tag (so the dashboard can show whether data came from Finnhub or the yfinance fallback)',
-            ]}
-          />
-        </Section>
+        <SubHead>1 — Earnings Calendar</SubHead>
+        <Bullets
+          items={[
+            'Next scheduled earnings date',
+            'EPS estimate for the upcoming report',
+            'Revenue estimate for the upcoming report',
+            'Source tag (Finnhub or yfinance fallback)',
+          ]}
+        />
+        <SubHead>2 — Company Profile (/stock/profile2 + /stock/metric)</SubHead>
+        <Bullets
+          items={[
+            'Sector (from finnhubIndustry; hardcoded map applied for sector ETFs like XLE, XLF, XLK)',
+            'Market capitalisation (in millions USD)',
+            'PE ratio (trailing twelve months, excluding extraordinary items)',
+            'Annual dividend yield (decimal; e.g. 0.015 for 1.5%)',
+            '52-week high and low (available for equities and ETFs)',
+          ]}
+        />
+        <p className="text-sm leading-relaxed mt-2" style={{ color: 'var(--text-secondary)' }}>
+          Note: ETFs return empty data from /stock/profile2 (structural — not a tier limit). Sector
+          ETFs (XLE, XLF, etc.) receive their sector label from a hardcoded map in config. Broad-market
+          ETFs (SPY, QQQ) have sector=None. 52-week high/low is populated for all symbols including ETFs.
+          Market cap in millions: 3,979,469 = ~$3.98T (Finnhub convention, distinct from raw USD in yfinance).
+        </p>
+        <SubHead>3 — Analyst Consensus</SubHead>
+        <Bullets
+          items={[
+            'Analyst recommendation counts (strong buy / buy / hold / sell / strong sell)',
+            'Consensus price target (mean, high, low, median)',
+            'Recent analyst rating changes (firm, action, from/to grade)',
+          ]}
+        />
       </>
     ),
   },
   {
     name: 'yfinance',
-    tagline: 'Stock technicals and fundamentals',
+    tagline: 'Stock technicals (price history and indicators)',
     website: 'pypi.org/project/yfinance',
     healthKeys: ['yfinance'],
-    cache:
-      'Fundamentals and ex-dividend data cached 6 hours. Technicals computed fresh each cycle.',
+    cache: 'Technicals computed fresh each cycle from recent price history.',
     fallback:
-      'If yfinance fails for technicals, the context includes None values and Claude is told the data is unavailable. Earnings date fallback from Finnhub handles the most critical field.',
+      'If yfinance fails for technicals, the context includes None values and Claude is told the data is unavailable.',
     body: (
       <>
         <p className="text-sm leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
           yfinance is a Python library that pulls data from Yahoo Finance. The bot uses it for
-          two categories of data that don't require real-time precision.
+          stock technicals computed from historical OHLCV price data.
         </p>
         <SubHead>1 — Stock Technicals (computed from historical price data)</SubHead>
         <Bullets
@@ -261,18 +276,6 @@ const SOURCES: Source[] = [
             'MACD value, signal line, and bullish/bearish flag',
             'ATR-14 (Average True Range — daily volatility measure)',
             'Average volume (10-day and 30-day) and volume trend',
-          ]}
-        />
-        <SubHead>2 — Fundamentals</SubHead>
-        <Bullets
-          items={[
-            'Next earnings date (fallback when Finnhub is unavailable)',
-            'Days until earnings',
-            'PE ratio',
-            'Market cap',
-            'Sector and industry',
-            'Average daily volume',
-            '52-week high and low',
           ]}
         />
       </>
@@ -545,6 +548,8 @@ function SourceCard({
 const FALLBACK_CHAIN = [
   { label: 'Earnings date', chain: 'Finnhub → ORATS /earnings → yfinance → marked unavailable' },
   { label: 'Ex-dividend date', chain: 'Alpaca Corporate Actions → yfinance .info → None (bear call spread blocks defensively on fetch failure)' },
+  { label: 'Company profile (sector, PE, market cap, 52w)', chain: 'Finnhub /stock/profile2 + /stock/metric → None (no fallback; ETF sector from hardcoded config map)' },
+  { label: 'Annual dividend yield', chain: 'Alpaca Corporate Actions → Finnhub /stock/metric → None' },
   { label: 'IV Rank', chain: 'ORATS /summaries → ORATS /ivrank → marked unavailable (strategies skip without it)' },
   { label: 'Vol surface', chain: 'ORATS /monies/implied → unavailable (EV scoring proceeds without skew surface data)' },
   { label: 'Strike candidates', chain: 'ORATS /strikes → Alpaca chain → unavailable (spread skips)' },
