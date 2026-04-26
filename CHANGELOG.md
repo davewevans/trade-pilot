@@ -7,6 +7,83 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.13.1] - 2026-04-26
+
+### Changed
+- **LONG_STOCK sell-the-shares triggers tightened (both wheel prompts)**: SMA trigger
+  now requires price to be more than 2% below the 200-day SMA (not just below it) to
+  prevent day-to-day flicker; downgrade trigger raised to ≥ 2 downgrades from a named
+  list of major Wall Street firms in the past 30 days (previously any downgrade, 14-day
+  window); fixed `cost_basis` typo in `wheel_long_stock.md` — field is
+  `effective_cost_basis`.
+- **Strategies page updated to match revised exit triggers**: removed phantom "flagged
+  for review" bullet, corrected 14-day → 30-day downgrade window, added 2% SMA buffer
+  language, fixed `> 35` → `≥ 35` on VIX rule; Turnover Wheel section now displays the
+  full exit-trigger list (previously omitted) with a note that the rules are
+  intentionally identical to the Standard Wheel.
+
+## [1.13.0] - 2026-04-26
+
+### Changed
+- **yfinance migration complete (issue #16)**: removed yfinance from all production
+  data paths over six staged PRs. New data sources: VIX live → FRED VIXCLS (with
+  yfinance spot-price fallback retained), ex-dividend → Alpaca Corporate Actions
+  (yfinance fallback retained as defensive secondary, tracked in #17 for removal),
+  fundamentals → Finnhub `/stock/profile2` + `/stock/metric` with ETF-aware
+  decomposition, earnings yfinance fallback deleted (Finnhub sole source), backtester
+  SPY bars → Alpaca, backtester VIX → FRED VIXCLS, CAHOLD (`detect_support_bounce`)
+  → Alpaca daily bars. Zero new vendors introduced.
+- **`market_cap` field renamed to `market_cap_millions_usd`** in
+  `context["fundamentals"]`: Finnhub reports market cap in millions of USD (not raw
+  USD like yfinance). Rename makes units explicit to Claude and prompt authors.
+  FinnhubClient and `get_company_profile()` wrapper retain the `market_cap` key.
+- **`_analyst_rating_label()` thresholds aligned with `system.md`**: helper now
+  mirrors the system prompt's framing exactly — `bearish > bullish` → "Sell";
+  `bullish ≥ 3 × bearish` → "Buy"; otherwise → "Hold".
+
+### Added
+- **`get_company_profile()` in `data/market_data.py` and `data/finnhub_client.py`**:
+  new function combining Finnhub `/stock/profile2` (sector, market cap) and
+  `/stock/metric` (PE ratio, dividend yield, 52-week high/low). Free tier confirmed
+  for both endpoints. ETF-aware via `config.ETF_SYMBOLS` + `config.SECTOR_ETF_MAP`
+  for sector ETFs; broad-market ETFs return `sector=None`.
+- **`config.ETF_SYMBOLS` and `config.SECTOR_ETF_MAP`** class-level constants for
+  ETF classification across data layers.
+- **Regression test `tests/test_no_yfinance_in_migrated_paths.py`**: asserts
+  `backtesting/engine.py` and `data/context_builder.py` contain no `import yfinance`,
+  `yf.download`, or `yf.Ticker`. Prevents silent regression of the migration.
+
+### Removed
+- **`get_fundamentals()` from `data/market_data.py`**: replaced by `get_company_profile()`
+  and decomposition into canonical sources — earnings via `get_earnings_calendar()`,
+  ex-div via `get_ex_dividend_date()`, technicals via `get_stock_technicals()`,
+  analyst data via `get_finnhub_analyst_data()`.
+- **`get_earnings_date()` from `data/market_data.py`**: standalone yfinance earnings
+  wrapper deleted; `get_earnings_calendar()` (Finnhub) is now the sole earnings source.
+- **`get_vix_term_structure()` from `data/market_data.py`**: yfinance `^VIX9D/^VIX3M/^VIX6M`
+  fetches eliminated; ORATS `contango_label` + `term_structure_slope` cover the signal.
+- **`industry` field from the fundamentals context contract**: zero callers confirmed
+  per Stage 4 investigation; safe drop.
+- **yfinance lazy imports from `backtesting/engine.py`**: `_load_market_data()` and
+  `_load_symbol_prices()` no longer import yfinance; replaced by Alpaca + FRED.
+- **yfinance import from `data/context_builder.py::detect_support_bounce()`**: CAHOLD
+  now uses Alpaca `StockHistoricalDataClient`. Column names normalised to lowercase
+  (`"high"`, `"low"`, `"close"`) to match Alpaca's bar schema.
+
+### Known limitations
+- `market_cap_millions_usd` is in millions (Finnhub convention); no prompt or
+  guardrail conditions on absolute thresholds, so no behaviour change.
+- FRED VIXCLS is a daily close series — `get_vix()` during market hours returns the
+  prior business day's official close rather than live intraday spot.
+- Backtester now requires `ALPACA_PAPER1_*` keys and `FRED_API_KEY`; previously
+  runnable with yfinance alone (no API keys required).
+- CAHOLD 50-day SMA warm-up: the 90-calendar-day Alpaca window yields ≈63 trading
+  days — enough for a meaningful signal but not a fully-warmed 50-period average.
+  Same limitation existed under yfinance `period="3mo"`.
+- One yfinance call site survives this release: `_get_ex_dividend_yfinance()` in
+  `data/market_data.py` remains as a defensive fallback. Tracked in #17 for removal
+  after production soak; `yfinance` stays in `requirements.txt` until then.
+
 ## [1.12.2] - 2026-04-25
 
 ### Fixed

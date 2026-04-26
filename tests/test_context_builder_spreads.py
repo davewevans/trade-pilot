@@ -819,7 +819,6 @@ class TestCalendarSpreadInBuild:
             md.get_finnhub_analyst_data.return_value = {}
             md.get_finnhub_news_sentiment.return_value = {}
             md.get_earnings_calendar.return_value = {"days_to_earnings": 90}
-            md.get_vix_term_structure.return_value = {}
             md.get_ex_dividend_date.return_value = {}
             md.interpret_vix.return_value = "NEUTRAL"
 
@@ -893,7 +892,6 @@ class TestCalendarSpreadInBuild:
             md.get_finnhub_analyst_data.return_value = {}
             md.get_finnhub_news_sentiment.return_value = {}
             md.get_earnings_calendar.return_value = {"days_to_earnings": 90}
-            md.get_vix_term_structure.return_value = {}
             md.get_ex_dividend_date.return_value = {}
             md.interpret_vix.return_value = "NEUTRAL"
             drm.side_effect = lambda ctx: ctx.update({

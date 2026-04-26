@@ -1,7 +1,7 @@
 """Backtesting engine for options strategies using ORATS historical data.
 
 Core loop per trading day:
-  1. Fetch historical VIX + SPY SMA from yfinance (no API cost, cached locally).
+  1. Fetch historical VIX from FRED VIXCLS + SPY bars from Alpaca.
   2. Fetch ORATS hist/summaries → IV rank, ATM IV, skew per symbol.
   3. Derive market regime using the same derive_market_regime() logic.
   4. Run StrategyRouter to determine which strategies would be active.
@@ -288,8 +288,8 @@ class BacktestEngine:
         log(f"Backtest starting: {params.strategy} | {params.symbols} | "
             f"{params.start_date} → {params.end_date} | slippage={params.slippage_model}")
 
-        # ── 1. Load market data (VIX, SPY SMAs) from yfinance ──────────────
-        log("Fetching historical VIX + SPY price data from yfinance...")
+        # ── 1. Load market data (VIX from FRED, SPY SMAs from Alpaca) ────────
+        log("Fetching historical VIX + SPY price data from FRED + Alpaca...")
         market_data = _load_market_data(params.start_date, params.end_date)
         trading_days = sorted(market_data.keys())
 
@@ -958,7 +958,11 @@ class BacktestEngine:
 # ── Market data helpers ───────────────────────────────────────────────────────
 
 def _load_market_data(start_date: str, end_date: str) -> dict[str, dict]:
-    """Load VIX + SPY from yfinance and compute daily regime info.
+    """Load VIX + SPY history and compute daily regime info.
+
+    SPY bars sourced from Alpaca StockHistoricalDataClient (consistent
+    with live data in get_stock_technicals).
+    VIX history sourced from FRED VIXCLS (consistent with live VIX per Stage 1).
 
     Returns a dict keyed by ISO date string with:
       - vix: float
@@ -967,41 +971,82 @@ def _load_market_data(start_date: str, end_date: str) -> dict[str, dict]:
       - above_sma_200: bool
       - regime: str
       - iv_env: str  (MODERATE as default — caller overrides with ORATS data)
+
+    Returns {} on total failure.
     """
-    try:
-        import yfinance as yf
-        import pandas as pd
-    except ImportError:
-        logger.error("yfinance is required for backtesting. pip install yfinance")
-        return {}
-
-    # Fetch extra history for SMA-200 warm-up
-    extra = timedelta(days=300)
-    fetch_start = (date.fromisoformat(start_date) - extra).isoformat()
-
-    logger.info("Downloading ^VIX history...")
-    vix_df = yf.download("^VIX", start=fetch_start, end=end_date, progress=False, auto_adjust=False)
-
-    logger.info("Downloading SPY history...")
-    spy_df = yf.download("SPY", start=fetch_start, end=end_date, progress=False, auto_adjust=True)
-
-    if vix_df.empty or spy_df.empty:
-        logger.error("yfinance returned empty data")
-        return {}
-
-    # Flatten multi-index columns if present
-    if hasattr(vix_df.columns, "levels"):
-        vix_df.columns = [c[0] for c in vix_df.columns]
-    if hasattr(spy_df.columns, "levels"):
-        spy_df.columns = [c[0] for c in spy_df.columns]
-
-    spy_close = spy_df["Close"].squeeze()
-    sma50 = spy_close.rolling(50).mean()
-    sma200 = spy_close.rolling(200).mean()
-    vix_close = vix_df["Close"].squeeze()
-
+    import pandas as pd
+    from datetime import datetime, timezone
+    from alpaca.data.historical import StockHistoricalDataClient
+    from alpaca.data.requests import StockBarsRequest
+    from alpaca.data.timeframe import TimeFrame
+    from alpaca.data.enums import DataFeed, Adjustment
+    from config import settings
     from data.market_regime import _classify_regime
 
+    # Fetch extra history for SMA-200 warm-up (300 calendar days ≈ 210 trading days)
+    extra = timedelta(days=300)
+    fetch_start = date.fromisoformat(start_date) - extra
+    fetch_end = date.fromisoformat(end_date)
+
+    # ── SPY bars from Alpaca ──────────────────────────────────────────────
+    try:
+        client = StockHistoricalDataClient(
+            api_key=settings.ALPACA_PAPER1_API_KEY,
+            secret_key=settings.ALPACA_PAPER1_SECRET_KEY,
+        )
+        request = StockBarsRequest(
+            symbol_or_symbols="SPY",
+            timeframe=TimeFrame.Day,
+            start=datetime.combine(fetch_start, datetime.min.time(), tzinfo=timezone.utc),
+            end=datetime.combine(fetch_end, datetime.min.time(), tzinfo=timezone.utc),
+            feed=DataFeed.IEX,
+            adjustment=Adjustment.ALL,
+        )
+        bars = client.get_stock_bars(request)
+        spy_df = bars.df
+        if isinstance(spy_df.index, pd.MultiIndex):
+            spy_df = spy_df.droplevel("symbol")
+    except Exception:
+        logger.error("Failed to fetch SPY history from Alpaca", exc_info=True)
+        return {}
+
+    if spy_df.empty:
+        logger.error("Alpaca returned empty SPY bars")
+        return {}
+
+    # ── VIX history from FRED ─────────────────────────────────────────────
+    try:
+        from fredapi import Fred
+        fred = Fred(api_key=settings.FRED_API_KEY)
+        vix_series = fred.get_series(
+            "VIXCLS",
+            observation_start=fetch_start.isoformat(),
+            observation_end=fetch_end.isoformat(),
+        )
+        vix_series = vix_series.dropna()
+    except Exception:
+        logger.error("Failed to fetch VIX history from FRED", exc_info=True)
+        return {}
+
+    if vix_series.empty:
+        logger.error("FRED returned empty VIXCLS series")
+        return {}
+
+    # ── Compute SMAs from SPY close ───────────────────────────────────────
+    spy_close = spy_df["close"]
+    sma50 = spy_close.rolling(50).mean()
+    sma200 = spy_close.rolling(200).mean()
+
+    # Build a date→vix lookup for fast access in the loop
+    vix_by_date: dict[date, float] = {}
+    for ts, v in vix_series.items():
+        try:
+            d = ts.date() if hasattr(ts, "date") else date.fromisoformat(str(ts)[:10])
+            vix_by_date[d] = round(float(v), 4)
+        except Exception:
+            pass
+
+    # ── Build daily-keyed result dict ─────────────────────────────────────
     result: dict[str, dict] = {}
     start_dt = date.fromisoformat(start_date)
     end_dt = date.fromisoformat(end_date)
@@ -1015,10 +1060,10 @@ def _load_market_data(start_date: str, end_date: str) -> dict[str, dict]:
             continue
 
         date_str = d.isoformat()
-        vix = _safe_scalar(vix_close, idx)
         spy = _safe_scalar(spy_close, idx)
         s50 = _safe_scalar(sma50, idx)
         s200 = _safe_scalar(sma200, idx)
+        vix = vix_by_date.get(d)
 
         above_50 = (spy is not None and s50 is not None and spy > s50)
         above_200 = (spy is not None and s200 is not None and spy > s200)
@@ -1033,7 +1078,7 @@ def _load_market_data(start_date: str, end_date: str) -> dict[str, dict]:
             "above_sma_50": above_50,
             "above_sma_200": above_200,
             "regime": regime,
-            "iv_env": "MODERATE",  # will be refined per-symbol using ORATS data
+            "iv_env": "MODERATE",
         }
 
     return result
@@ -1042,35 +1087,57 @@ def _load_market_data(start_date: str, end_date: str) -> dict[str, dict]:
 def _load_symbol_prices(
     symbols: list[str], start_date: str, end_date: str,
 ) -> dict[str, dict[str, float]]:
-    """Download per-symbol daily close prices from yfinance.
+    """Download per-symbol daily close prices from Alpaca.
 
     Returns ``{symbol: {date_str: close_price}}``.  A small pre-buffer is
     fetched so we can look up the previous trading day's close when an
     earnings event falls on the first day of the window.
     """
-    try:
-        import yfinance as yf
-    except ImportError:
-        logger.warning("yfinance not available — per-symbol prices skipped")
-        return {}
+    import pandas as pd
+    from datetime import datetime, timezone
+    from alpaca.data.historical import StockHistoricalDataClient
+    from alpaca.data.requests import StockBarsRequest
+    from alpaca.data.timeframe import TimeFrame
+    from alpaca.data.enums import DataFeed, Adjustment
+    from config import settings
 
     extra = timedelta(days=10)
-    fetch_start = (date.fromisoformat(start_date) - extra).isoformat()
+    fetch_start = date.fromisoformat(start_date) - extra
+    fetch_end = date.fromisoformat(end_date)
     result: dict[str, dict[str, float]] = {}
+
+    try:
+        client = StockHistoricalDataClient(
+            api_key=settings.ALPACA_PAPER1_API_KEY,
+            secret_key=settings.ALPACA_PAPER1_SECRET_KEY,
+        )
+    except Exception:
+        logger.warning("Failed to construct Alpaca client for symbol prices", exc_info=True)
+        return {}
 
     for symbol in symbols:
         try:
-            df = yf.download(symbol, start=fetch_start, end=end_date, progress=False, auto_adjust=True)
+            request = StockBarsRequest(
+                symbol_or_symbols=symbol,
+                timeframe=TimeFrame.Day,
+                start=datetime.combine(fetch_start, datetime.min.time(), tzinfo=timezone.utc),
+                end=datetime.combine(fetch_end, datetime.min.time(), tzinfo=timezone.utc),
+                feed=DataFeed.IEX,
+                adjustment=Adjustment.ALL,
+            )
+            bars = client.get_stock_bars(request)
+            df = bars.df
+            if isinstance(df.index, pd.MultiIndex):
+                df = df.droplevel("symbol")
             if df.empty:
                 continue
-            if hasattr(df.columns, "levels"):
-                df.columns = [c[0] for c in df.columns]
-            close = df["Close"].squeeze()
+
+            close = df["close"]
             prices: dict[str, float] = {}
             for idx, val in close.items():
                 try:
                     d_str = idx.date().isoformat() if hasattr(idx, "date") else str(idx)[:10]
-                    f = float(val) if not hasattr(val, "__len__") else float(val.iloc[0])
+                    f = float(val)
                     if not math.isnan(f):
                         prices[d_str] = round(f, 4)
                 except Exception:

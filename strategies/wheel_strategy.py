@@ -392,7 +392,7 @@ class WheelStrategy:
         )
 
         # ── earnings ─────────────────────────────────────────
-        earnings_date = market_data.get_earnings_date(symbol)
+        earnings_cal = market_data.get_earnings_calendar(symbol)
 
         # ── IV rank ──────────────────────────────────────────
         try:
@@ -418,12 +418,8 @@ class WheelStrategy:
             "option_chain_puts": put_chain,
             "option_chain_calls": call_chain,
             "earnings": {
-                "next_earnings_date": earnings_date,
-                "days_until_earnings": (
-                    (date.fromisoformat(earnings_date) - today).days
-                    if earnings_date
-                    else None
-                ),
+                "next_earnings_date": earnings_cal.get("next_earnings_date"),
+                "days_until_earnings": earnings_cal.get("days_to_earnings"),
             },
             "iv_rank": iv_rank,
             "wheel_cost_basis": (

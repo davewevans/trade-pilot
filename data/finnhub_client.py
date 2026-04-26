@@ -20,11 +20,13 @@ _EARNINGS_TTL = 6 * 3600
 _EARNINGS_HISTORY_TTL = 24 * 3600
 _ANALYST_TTL = 6 * 3600
 _SENTIMENT_TTL = 1 * 3600
+_PROFILE_TTL = 6 * 3600
 
 _earnings_cache: dict[str, tuple[float, dict]] = {}
 _earnings_history_cache: dict[str, tuple[float, list]] = {}
 _analyst_cache: dict[str, tuple[float, dict]] = {}
 _sentiment_cache: dict[str, tuple[float, dict]] = {}
+_profile_cache: dict[str, tuple[float, dict]] = {}
 
 # Endpoints that returned 403 once — disabled for the rest of the process.
 # Only 403 sets the flag; other errors (rate limit, transient) still retry.
@@ -239,6 +241,79 @@ class FinnhubClient:
             "recent_rating_changes": recent_changes,
         }
         _analyst_cache[symbol] = (time.monotonic(), result)
+        return result
+
+    # ── Company profile + key metrics ──────────────────────
+
+    def get_company_profile(self, symbol: str) -> dict:
+        """Return company profile and key metrics from Finnhub.
+
+        Combines /stock/profile2 (sector, market_cap) and /stock/metric
+        (PE ratio, dividend yield, 52-week high/low). Both endpoints are
+        confirmed free-tier per Stage 4 investigation (2026-04-26).
+
+        ETFs return empty {} from /stock/profile2 (structural — not a tier
+        limit). ETFs get a sparse ~19-field /stock/metric response; 52-week
+        high/low IS populated, PE and dividend yield are not.
+
+        Returns dict with keys:
+            sector: str | None              finnhubIndustry from /stock/profile2
+            market_cap: float | None        marketCapitalization (millions USD)
+            pe_ratio: float | None          peBasicExclExtraTTM
+            annual_dividend_yield: float | None  dividendYieldIndicatedAnnual/100
+            fifty_two_week_high: float | None
+            fifty_two_week_low: float | None
+            profile_data_available: bool    True if /stock/profile2 non-empty
+            metric_data_available: bool     True if /stock/metric non-empty
+
+        Cached for 6 hours per symbol.
+        """
+        cached = _profile_cache.get(symbol)
+        if cached is not None and time.monotonic() - cached[0] < _PROFILE_TTL:
+            return cached[1]
+
+        profile_raw: dict = {}
+        profile_ok = False
+        try:
+            profile_raw = self._client.company_profile2(symbol=symbol) or {}
+            # Empty dict is structural for ETFs, not a failure.
+            profile_ok = bool(profile_raw)
+        except Exception:
+            logger.warning("Finnhub company_profile2 failed for %s", symbol, exc_info=True)
+
+        metric_raw: dict = {}
+        metric_ok = False
+        try:
+            metric_resp = self._client.company_basic_financials(symbol, "all") or {}
+            metric_raw = metric_resp.get("metric") or {}
+            metric_ok = bool(metric_raw)
+        except Exception:
+            logger.warning(
+                "Finnhub company_basic_financials failed for %s", symbol, exc_info=True,
+            )
+
+        # dividendYieldIndicatedAnnual is in percent (e.g. 1.5 means 1.5%).
+        # Normalize to decimal fraction to match yfinance convention (0.015).
+        div_yield_pct = metric_raw.get("dividendYieldIndicatedAnnual")
+        div_yield = div_yield_pct / 100.0 if div_yield_pct is not None else None
+
+        result = {
+            "sector": profile_raw.get("finnhubIndustry") or None,
+            "market_cap": profile_raw.get("marketCapitalization"),
+            "pe_ratio": metric_raw.get("peBasicExclExtraTTM") or metric_raw.get("peNormalizedAnnual"),
+            "annual_dividend_yield": div_yield,
+            "fifty_two_week_high": metric_raw.get("52WeekHigh"),
+            "fifty_two_week_low": metric_raw.get("52WeekLow"),
+            "profile_data_available": profile_ok,
+            "metric_data_available": metric_ok,
+        }
+
+        _profile_cache[symbol] = (time.monotonic(), result)
+        logger.info(
+            "Finnhub company profile for %s: sector=%r pe=%s div_yield=%s 52wk=%s/%s",
+            symbol, result["sector"], result["pe_ratio"], result["annual_dividend_yield"],
+            result["fifty_two_week_high"], result["fifty_two_week_low"],
+        )
         return result
 
     # ── News sentiment ──────────────────────────────────────

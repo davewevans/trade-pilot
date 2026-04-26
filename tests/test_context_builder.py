@@ -31,7 +31,7 @@ def _build_ctx(summary, ivrank, cores, broker=None, journal=None):
         patch("data.market_data.get_orats_cores", return_value=cores),
         patch("data.market_data.get_orats_monies", return_value=[]),
         patch("data.market_data.get_stock_technicals", return_value={"current_price": 175.0}),
-        patch("data.market_data.get_fundamentals", return_value={}),
+        patch("data.market_data.get_company_profile", return_value={}),
         patch("data.market_data.get_vix", return_value=18.5),
         patch("data.market_data.get_fear_greed_index", return_value={"score": 60, "rating": "greed"}),
         patch("data.market_data.get_risk_free_rate", return_value=0.04),
@@ -39,7 +39,6 @@ def _build_ctx(summary, ivrank, cores, broker=None, journal=None):
         patch("data.market_data.get_finnhub_analyst_data", return_value={}),
         patch("data.market_data.get_finnhub_news_sentiment", return_value=None),
         patch("data.market_data.get_earnings_calendar", return_value={}),
-        patch("data.market_data.get_vix_term_structure", return_value={}),
         patch("data.market_data.get_ex_dividend_date", return_value={}),
         patch("data.context_builder._fetch_news", return_value=[]),
     ]

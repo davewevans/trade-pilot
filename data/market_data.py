@@ -39,8 +39,6 @@ _fear_greed_cache: dict | None = None
 _fear_greed_timestamp: float = 0.0
 _FEAR_GREED_TTL = 3600  # 1 hour in seconds
 
-_fundamentals_cache: dict[str, tuple[float, dict]] = {}  # symbol -> (timestamp, data)
-_FUNDAMENTALS_TTL = 6 * 3600  # 6 hours in seconds
 
 _option_client = OptionHistoricalDataClient(
     api_key=settings.ALPACA_PAPER1_API_KEY,
@@ -204,18 +202,43 @@ def start_option_stream(symbols: list[str], on_quote, on_trade) -> None:
 
 
 def get_vix() -> float | None:
-    """Return the current VIX index value via yfinance.
+    """Return the current VIX index value.
 
-    Uses the actual ^VIX index, not VIXY (which drifts due to
-    futures roll decay). Returns None on failure.
+    Primary source: FRED VIXCLS series (CBOE Volatility Index daily close).
+    Fallback: yfinance ^VIX last_price.
+
+    Note: FRED VIXCLS is a daily series. During market hours this returns
+    yesterday's official close. yfinance ^VIX gave intraday spot; FRED does
+    not. Acceptable for trade-pilot's main entry cycles (pre_market and
+    market_open run before/at market open) but a freshness regression for
+    intraday position_check cycles. Mitigation: regime stability filter
+    requires 3 consecutive readings before flipping, so single-day VIX
+    spikes do not silently change strategy routing.
+
+    Returns None on total failure.
     """
+    if settings.USE_FRED_FOR_VIX:
+        try:
+            from fredapi import Fred
+
+            fred = Fred(api_key=settings.FRED_API_KEY)
+            series = fred.get_series("VIXCLS")
+            vix = float(series.dropna().iloc[-1])
+            logger.info("Fetched VIX from FRED VIXCLS: %.2f", vix)
+            return vix
+        except Exception:
+            logger.warning(
+                "Failed to fetch VIX from FRED VIXCLS; falling back to yfinance",
+                exc_info=True,
+            )
+
     try:
         vix_data = yf.Ticker("^VIX").fast_info
         vix = float(vix_data["last_price"])
-        logger.info("Fetched ^VIX: %.2f", vix)
+        logger.info("Fetched ^VIX via yfinance fallback: %.2f", vix)
         return vix
     except Exception:
-        logger.warning("Failed to fetch ^VIX via yfinance", exc_info=True)
+        logger.warning("Failed to fetch ^VIX via yfinance fallback", exc_info=True)
         return None
 
 
@@ -230,102 +253,151 @@ def interpret_vix(vix: float) -> str:
     return "extreme"
 
 
-# ── VIX term structure ──────────────────────────────────────
-
-_vix_term_cache: dict | None = None
-_vix_term_timestamp: float = 0.0
-_VIX_TERM_TTL = 15 * 60
-
-
-def get_vix_term_structure() -> dict:
-    """Return the VIX term structure across multiple timeframes."""
-    global _vix_term_cache, _vix_term_timestamp
-
-    if _vix_term_cache is not None and time.monotonic() - _vix_term_timestamp < _VIX_TERM_TTL:
-        return _vix_term_cache
-
-    symbols = {"vix9d": "^VIX9D", "vix_spot": "^VIX", "vix3m": "^VIX3M", "vix6m": "^VIX6M"}
-    values: dict = {}
-    for key, ticker_sym in symbols.items():
-        try:
-            values[key] = float(yf.Ticker(ticker_sym).fast_info["last_price"])
-        except Exception:
-            logger.debug("Could not fetch %s", ticker_sym)
-            values[key] = None
-
-    vix_spot = values.get("vix_spot")
-    vix3m = values.get("vix3m")
-    vix9d = values.get("vix9d")
-
-    contango = (vix_spot < vix3m) if vix_spot is not None and vix3m is not None else None
-    vix9d_vs_spot = round(vix9d - vix_spot, 2) if vix9d is not None and vix_spot is not None else None
-    term_slope_m1_m3 = round(vix3m - vix_spot, 2) if vix_spot is not None and vix3m is not None else None
-
-    result = {
-        **values,
-        "contango": contango,
-        "vix9d_vs_spot": vix9d_vs_spot,
-        "term_slope_m1_m3": term_slope_m1_m3,
-    }
-    _vix_term_cache = result
-    _vix_term_timestamp = time.monotonic()
-    logger.info("VIX term structure: %s", result)
-    return result
-
-
 # ── Ex-dividend ────────────────────────────────────────────
 
 _exdiv_cache: dict[str, tuple[float, dict]] = {}
 _EXDIV_TTL = 12 * 3600
 
 
-def get_ex_dividend_date(symbol: str) -> dict:
-    """Return the next ex-dividend date for a symbol via yfinance."""
-    cached = _exdiv_cache.get(symbol)
-    if cached:
-        ts, data = cached
-        if time.monotonic() - ts < _EXDIV_TTL:
-            return data
+def _get_ex_dividend_alpaca(symbol: str) -> dict | None:
+    """Fetch next ex-dividend via Alpaca Corporate Actions API.
+
+    Returns the contract dict on success (including the all-None case where
+    the symbol has no upcoming dividend — valid data, e.g. GLD). Returns None
+    on hard error so the caller can fall through to yfinance.
+    """
+    from datetime import date as _date
+
+    today = _date.today()
+    end = today + timedelta(days=180)
 
     try:
-        from datetime import date as date_type
+        resp = _requests.get(
+            f"{settings.ALPACA_DATA_URL}/v1/corporate-actions",
+            headers={
+                "APCA-API-KEY-ID": settings.ALPACA_PAPER1_API_KEY,
+                "APCA-API-SECRET-KEY": settings.ALPACA_PAPER1_SECRET_KEY,
+            },
+            params={
+                "symbols": symbol,
+                "types": "cash_dividend",
+                "start": today.isoformat(),
+                "end": end.isoformat(),
+            },
+            timeout=10,
+        )
+        resp.raise_for_status()
+        payload = resp.json()
+    except Exception:
+        logger.warning(
+            "Alpaca corporate actions fetch failed for %s; will fall back to yfinance",
+            symbol, exc_info=True,
+        )
+        return None
 
-        ticker = yf.Ticker(symbol)
-        info = ticker.info or {}
+    cash_divs = (
+        payload.get("corporate_actions", {}).get("cash_dividends", []) or []
+    )
 
-        ex_date_ts = info.get("exDividendDate")
-        next_ex_div = None
-        days_to_ex_div = None
-        if ex_date_ts:
-            try:
-                ex_date = pd.Timestamp(ex_date_ts, unit="s").date()
-                today = date_type.today()
-                if ex_date >= today:
-                    next_ex_div = str(ex_date)
-                    days_to_ex_div = (ex_date - today).days
-            except Exception:
-                logger.debug("Could not parse ex_dividend_date for %s", symbol)
+    today_iso = today.isoformat()
+    upcoming = sorted(
+        [d for d in cash_divs if (d.get("ex_date") or "") >= today_iso],
+        key=lambda d: d["ex_date"],
+    )
 
-        div_yield = None
-        raw_yield = info.get("dividendYield")
-        if raw_yield is not None:
-            try:
-                div_yield = round(float(raw_yield), 4)
-            except (TypeError, ValueError):
-                pass
-
-        result = {
-            "next_ex_dividend_date": next_ex_div,
-            "days_to_ex_dividend": days_to_ex_div,
-            "annual_dividend_yield": div_yield,
+    if not upcoming:
+        logger.info("Alpaca: no upcoming dividend for %s within 180 days", symbol)
+        return {
+            "next_ex_dividend_date": None,
+            "days_to_ex_dividend": None,
+            "annual_dividend_yield": None,
             "ex_dividend_data_available": True,
         }
-        _exdiv_cache[symbol] = (time.monotonic(), result)
-        return result
 
+    next_ev = upcoming[0]
+    ex_date_str = next_ev["ex_date"]
+    days = (_date.fromisoformat(ex_date_str) - today).days
+    logger.info("Alpaca: next ex-dividend for %s on %s (%d days)", symbol, ex_date_str, days)
+    return {
+        "next_ex_dividend_date": ex_date_str,
+        "days_to_ex_dividend": days,
+        # Annual yield requires a price fetch — deferred to Stage 4 (Finnhub fundamentals).
+        "annual_dividend_yield": None,
+        "ex_dividend_data_available": True,
+    }
+
+
+def _get_ex_dividend_yfinance(symbol: str) -> dict:
+    """Fetch next ex-dividend via yfinance .info — legacy fallback path.
+
+    Always returns the contract dict. Returns all-None fields when yfinance
+    has no data, when the symbol is an ETF with broken quoteSummary coverage,
+    or on any error.
+    """
+    try:
+        info = yf.Ticker(symbol).info or {}
+
+        ex_date_ts = info.get("exDividendDate")
+        if ex_date_ts is None:
+            return {
+                "next_ex_dividend_date": None,
+                "days_to_ex_dividend": None,
+                "annual_dividend_yield": None,
+                "ex_dividend_data_available": True,
+            }
+
+        ex_date = pd.Timestamp(ex_date_ts, unit="s").date()
+        today = datetime.now().date()
+        days = (ex_date - today).days
+        raw_yield = info.get("dividendYield")
+        return {
+            "next_ex_dividend_date": str(ex_date) if ex_date >= today else None,
+            "days_to_ex_dividend": days if days >= 0 else None,
+            "annual_dividend_yield": round(float(raw_yield), 4) if raw_yield is not None else None,
+            "ex_dividend_data_available": True,
+        }
     except Exception:
-        logger.warning("Failed to fetch ex-dividend info for %s", symbol, exc_info=True)
-        return {"next_ex_dividend_date": None, "days_to_ex_dividend": None, "annual_dividend_yield": None, "ex_dividend_data_available": False}
+        logger.warning("yfinance ex-dividend fetch failed for %s", symbol, exc_info=True)
+        return {
+            "next_ex_dividend_date": None,
+            "days_to_ex_dividend": None,
+            "annual_dividend_yield": None,
+            "ex_dividend_data_available": False,
+        }
+
+
+def get_ex_dividend_date(symbol: str) -> dict:
+    """Return the next ex-dividend date and yield for a symbol.
+
+    Primary source: Alpaca Corporate Actions API (types=cash_dividend).
+    Fallback: yfinance .info exDividendDate.
+
+    Returns a dict with keys:
+        next_ex_dividend_date: ISO date string "YYYY-MM-DD" or None.
+        days_to_ex_dividend:   int or None (relative to today).
+        annual_dividend_yield: float or None. None when sourced from Alpaca
+                               (yield calc deferred to Stage 4 / Finnhub).
+        ex_dividend_data_available: True on success (including no-dividend
+                               case); False only when yfinance raises.
+
+    Cache: 12 hours per symbol.
+    """
+    global _exdiv_cache
+
+    cached = _exdiv_cache.get(symbol)
+    if cached is not None and (time.monotonic() - cached[0]) < _EXDIV_TTL:
+        return cached[1]
+
+    if settings.USE_ALPACA_FOR_EX_DIVIDEND:
+        result = _get_ex_dividend_alpaca(symbol)
+        if result is not None:
+            _exdiv_cache[symbol] = (time.monotonic(), result)
+            return result
+        # Alpaca hard error — fall through to yfinance.
+
+    result = _get_ex_dividend_yfinance(symbol)
+    _exdiv_cache[symbol] = (time.monotonic(), result)
+    return result
 
 
 # ── ORATS + Finnhub integration ────────────────────────────
@@ -467,7 +539,7 @@ def get_finnhub_news_sentiment(symbol: str) -> dict | None:
 
 
 def get_earnings_calendar(symbol: str) -> dict:
-    """Return upcoming earnings from Finnhub (yfinance fallback)."""
+    """Return upcoming earnings from Finnhub."""
     if settings.FINNHUB_API_KEY:
         try:
             from data.finnhub_client import FinnhubClient
@@ -476,24 +548,7 @@ def get_earnings_calendar(symbol: str) -> dict:
             if result and result.get("next_earnings_date"):
                 return {**result, "source": "finnhub"}
         except Exception:
-            logger.warning("Finnhub earnings failed for %s, trying yfinance", symbol, exc_info=True)
-
-    try:
-        from datetime import date
-
-        earnings_date = get_earnings_date(symbol)
-        if earnings_date:
-            ed = date.fromisoformat(earnings_date)
-            days = (ed - date.today()).days
-            return {
-                "next_earnings_date": earnings_date,
-                "days_to_earnings": days,
-                "eps_estimate": None,
-                "revenue_estimate": None,
-                "source": "yfinance",
-            }
-    except Exception:
-        logger.warning("yfinance earnings fallback failed for %s", symbol, exc_info=True)
+            logger.warning("Finnhub earnings failed for %s", symbol, exc_info=True)
 
     return {
         "next_earnings_date": None, "days_to_earnings": None,
@@ -501,123 +556,65 @@ def get_earnings_calendar(symbol: str) -> dict:
     }
 
 
-# ── Earnings & technicals ────────────────────────────────────
+# ── Company profile (Finnhub) ────────────────────────────────
 
-_FUNDAMENTALS_KEYS = [
-    "next_earnings_date", "days_to_earnings", "pe_ratio", "market_cap",
-    "sector", "industry", "avg_volume", "fifty_two_week_high",
-    "fifty_two_week_low", "analyst_rating",
-    "next_ex_dividend_date", "days_to_ex_dividend",
-]
+def get_company_profile(symbol: str) -> dict:
+    """Return Finnhub-sourced company profile and key metrics, ETF-aware.
 
+    For ETFs (per config.ETF_SYMBOLS), Finnhub returns empty data from
+    /stock/profile2. This wrapper applies config.SECTOR_ETF_MAP to populate
+    sector for sector-specific ETFs and leaves it None for broad-market ETFs.
+    52-week high/low IS populated by Finnhub for ETFs (sparse metric response).
 
-def get_fundamentals(symbol: str) -> dict:
-    """Fetch fundamental data for a symbol via yfinance.
+    If a symbol is not in ETF_SYMBOLS but Finnhub returns empty profile data,
+    a warning is logged — likely the symbol is an ETF that wasn't added to the
+    set.
 
-    Returns earnings info, valuation metrics, sector/industry, and the most
-    recent analyst rating.  Results are cached per symbol for 6 hours.
-    On any failure every key is returned as None.
+    Returns the same dict as FinnhubClient.get_company_profile() plus:
+        is_etf: bool    True if symbol is in config.ETF_SYMBOLS
+
+    On Finnhub failure: all fields None, both data_available flags False.
+    No yfinance fallback — fundamentals fields come from canonical sources
+    (earnings → get_earnings_calendar, ex-div → get_ex_dividend_date).
     """
-    cached = _fundamentals_cache.get(symbol)
-    if cached is not None:
-        ts, data = cached
-        if (time.monotonic() - ts) < _FUNDAMENTALS_TTL:
-            return data
+    sym = symbol.upper()
+    is_etf = sym in settings.ETF_SYMBOLS
 
-    try:
-        ticker = yf.Ticker(symbol)
-        info = ticker.info or {}
-
-        # ── Earnings date ───────────────────────────────────
-        next_earnings_date: str | None = None
-        days_to_earnings: int | None = None
-        try:
-            cal = ticker.calendar
-            if isinstance(cal, pd.DataFrame) and "Earnings Date" in cal.index:
-                date_val = pd.Timestamp(cal.loc["Earnings Date"].iloc[0]).date()
-                next_earnings_date = str(date_val)
-                days_to_earnings = (date_val - datetime.now().date()).days
-            elif isinstance(cal, dict):
-                dates = cal.get("Earnings Date", [])
-                if dates:
-                    date_val = pd.Timestamp(dates[0]).date()
-                    next_earnings_date = str(date_val)
-                    days_to_earnings = (date_val - datetime.now().date()).days
-        except Exception:
-            logger.debug("Could not parse earnings date for %s", symbol, exc_info=True)
-
-        # ── Ex-dividend date ────────────────────────────────
-        next_ex_dividend_date: str | None = None
-        days_to_ex_dividend: int | None = None
-        try:
-            ex_date_raw = info.get("exDividendDate")
-            if ex_date_raw:
-                ex_date = pd.Timestamp(ex_date_raw, unit="s").date()
-                if ex_date >= datetime.now().date():
-                    next_ex_dividend_date = str(ex_date)
-                    days_to_ex_dividend = (ex_date - datetime.now().date()).days
-        except Exception:
-            logger.debug("Could not parse ex-dividend date for %s", symbol, exc_info=True)
-
-        # ── Analyst rating ──────────────────────────────────
-        analyst_rating: str | None = None
-        try:
-            recs = ticker.recommendations
-            if recs is not None and not recs.empty:
-                last_row = recs.iloc[-1]
-                analyst_rating = last_row.get("To Grade") or last_row.get("toGrade")
-        except Exception:
-            logger.debug("Could not parse analyst rating for %s", symbol, exc_info=True)
-
-        result = {
-            "next_earnings_date": next_earnings_date,
-            "days_to_earnings": days_to_earnings,
-            "pe_ratio": info.get("trailingPE"),
-            "market_cap": info.get("marketCap"),
-            "sector": info.get("sector"),
-            "industry": info.get("industry"),
-            "avg_volume": info.get("averageVolume"),
-            "fifty_two_week_high": info.get("fiftyTwoWeekHigh"),
-            "fifty_two_week_low": info.get("fiftyTwoWeekLow"),
-            "analyst_rating": analyst_rating,
-            "next_ex_dividend_date": next_ex_dividend_date,
-            "days_to_ex_dividend": days_to_ex_dividend,
-            "ex_dividend_data_available": True,
+    if not settings.FINNHUB_API_KEY:
+        return {
+            "sector": settings.SECTOR_ETF_MAP.get(sym) if is_etf else None,
+            "market_cap": None, "pe_ratio": None, "annual_dividend_yield": None,
+            "fifty_two_week_high": None, "fifty_two_week_low": None,
+            "profile_data_available": False, "metric_data_available": False,
+            "is_etf": is_etf,
         }
 
-        _fundamentals_cache[symbol] = (time.monotonic(), result)
-        logger.info("Fetched fundamentals for %s", symbol)
-        return result
-
-    except Exception:
-        logger.warning("Failed to fetch fundamentals for %s", symbol, exc_info=True)
-        result = {k: None for k in _FUNDAMENTALS_KEYS}
-        result["ex_dividend_data_available"] = False
-        return result
-
-
-def get_earnings_date(symbol: str) -> str | None:
-    """Return the next earnings date for a symbol as an ISO date string.
-
-    Uses yfinance. Returns None if no upcoming earnings date is found.
-    """
     try:
-        ticker = yf.Ticker(symbol)
-        cal = ticker.calendar
-        if cal is None or cal.empty if isinstance(cal, pd.DataFrame) else not cal:
-            return None
-        if isinstance(cal, pd.DataFrame):
-            if "Earnings Date" in cal.index:
-                date_val = cal.loc["Earnings Date"].iloc[0]
-                return str(pd.Timestamp(date_val).date())
-        if isinstance(cal, dict):
-            dates = cal.get("Earnings Date", [])
-            if dates:
-                return str(pd.Timestamp(dates[0]).date())
-        return None
+        from data.finnhub_client import FinnhubClient
+        result = FinnhubClient().get_company_profile(symbol)
     except Exception:
-        logger.exception("Failed to fetch earnings date for %s", symbol)
-        return None
+        logger.warning("Finnhub company profile failed for %s", symbol, exc_info=True)
+        result = {
+            "sector": None, "market_cap": None, "pe_ratio": None,
+            "annual_dividend_yield": None,
+            "fifty_two_week_high": None, "fifty_two_week_low": None,
+            "profile_data_available": False, "metric_data_available": False,
+        }
+
+    if is_etf and result.get("sector") is None:
+        result["sector"] = settings.SECTOR_ETF_MAP.get(sym)
+    elif not is_etf and not result.get("profile_data_available"):
+        logger.warning(
+            "get_company_profile: %s returned empty Finnhub profile but is not "
+            "in config.ETF_SYMBOLS. If %s is an ETF, add it to ETF_SYMBOLS.",
+            symbol, symbol,
+        )
+
+    result["is_etf"] = is_etf
+    return result
+
+
+# ── Earnings & technicals ────────────────────────────────────
 
 
 def _safe_float(value) -> float | None:

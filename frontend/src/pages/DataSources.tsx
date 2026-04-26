@@ -99,6 +99,20 @@ const SOURCES: Source[] = [
           these headlines as part of its context — recent news can signal earnings surprises,
           product announcements, or macro events that affect the trading decision.
         </p>
+        <SubHead>5 — Corporate Actions API</SubHead>
+        <p className="text-sm leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
+          Fetches upcoming cash dividends for each watchlist symbol via the Alpaca Corporate
+          Actions endpoint (<code className="font-mono">/v1/corporate-actions</code>, types=cash_dividend).
+          Used to detect ex-dividend dates within the option's DTE window — a hard-block signal
+          for bear call spreads (early assignment risk on ITM short calls) and a soft warning for
+          covered calls.
+        </p>
+        <Bullets
+          items={[
+            'Next ex-dividend date (ISO date string)',
+            'Days until ex-dividend (relative to today)',
+          ]}
+        />
       </>
     ),
   },
@@ -188,47 +202,67 @@ const SOURCES: Source[] = [
   },
   {
     name: 'Finnhub',
-    tagline: 'Earnings calendar (primary source)',
+    tagline: 'Earnings calendar, company profile, and analyst data',
     website: 'finnhub.io',
     healthKeys: ['Finnhub'],
-    cache: '6 hours per symbol.',
+    cache: '6 hours per symbol for all endpoints.',
     fallback:
-      'If Finnhub is unavailable or returns no data, the bot falls back to yfinance for earnings dates (without EPS/revenue estimates). If both fail, earnings data is marked as unavailable and the cycle proceeds without it — but Claude is told the data is missing.',
+      'If Finnhub is unavailable or returns no data, the bot falls back to yfinance for earnings dates (without EPS/revenue estimates). If both fail, earnings data is marked as unavailable and the cycle proceeds without it — but Claude is told the data is missing. Company profile fields (sector, PE, market cap) return None on Finnhub failure — no fallback.',
     body: (
       <>
         <p className="text-sm leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
-          Finnhub is the bot's primary source for upcoming earnings dates. Knowing when a company
-          reports earnings is critical — the bot hard-blocks new positions when earnings are too
-          close, because earnings announcements cause unpredictable price gaps that can blow
-          through a short option's strike overnight.
+          Finnhub is the bot's primary source for earnings dates, company profile, and analyst
+          consensus. All endpoints used here are confirmed free-tier.
         </p>
-        <Section heading="What the bot fetches">
-          <Bullets
-            items={[
-              'Next scheduled earnings date',
-              'EPS estimate for the upcoming report',
-              'Revenue estimate for the upcoming report',
-              'Source tag (so the dashboard can show whether data came from Finnhub or the yfinance fallback)',
-            ]}
-          />
-        </Section>
+        <SubHead>1 — Earnings Calendar</SubHead>
+        <Bullets
+          items={[
+            'Next scheduled earnings date',
+            'EPS estimate for the upcoming report',
+            'Revenue estimate for the upcoming report',
+            'Source tag (Finnhub or yfinance fallback)',
+          ]}
+        />
+        <SubHead>2 — Company Profile (/stock/profile2 + /stock/metric)</SubHead>
+        <Bullets
+          items={[
+            'Sector (from finnhubIndustry; hardcoded map applied for sector ETFs like XLE, XLF, XLK)',
+            'Market capitalisation (in millions USD)',
+            'PE ratio (trailing twelve months, excluding extraordinary items)',
+            'Annual dividend yield (decimal; e.g. 0.015 for 1.5%)',
+            '52-week high and low (available for equities and ETFs)',
+          ]}
+        />
+        <p className="text-sm leading-relaxed mt-2" style={{ color: 'var(--text-secondary)' }}>
+          Note: ETFs return empty data from /stock/profile2 (structural — not a tier limit). Sector
+          ETFs (XLE, XLF, etc.) receive their sector label from a hardcoded map in config. Broad-market
+          ETFs (SPY, QQQ) have sector=None. 52-week high/low is populated for all symbols including ETFs.
+          Market cap in millions: 3,979,469 = ~$3.98T (Finnhub convention, distinct from raw USD in yfinance).
+        </p>
+        <SubHead>3 — Analyst Consensus</SubHead>
+        <Bullets
+          items={[
+            'Analyst recommendation counts (strong buy / buy / hold / sell / strong sell)',
+            'Consensus price target (mean, high, low, median)',
+            'Recent analyst rating changes (firm, action, from/to grade)',
+          ]}
+        />
       </>
     ),
   },
   {
     name: 'yfinance',
-    tagline: 'Stock technicals, fundamentals, and VIX',
+    tagline: 'Stock technicals (price history and indicators)',
     website: 'pypi.org/project/yfinance',
     healthKeys: ['yfinance'],
-    cache:
-      'Fundamentals and ex-dividend data cached 6 hours. Technicals computed fresh each cycle. VIX fetched live each cycle.',
+    cache: 'Technicals computed fresh each cycle from recent price history.',
     fallback:
-      'If yfinance fails for technicals, the context includes None values and Claude is told the data is unavailable. Earnings date fallback from Finnhub handles the most critical field.',
+      'If yfinance fails for technicals, the context includes None values and Claude is told the data is unavailable.',
     body: (
       <>
         <p className="text-sm leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
           yfinance is a Python library that pulls data from Yahoo Finance. The bot uses it for
-          three categories of data that don't require real-time precision.
+          stock technicals computed from historical OHLCV price data.
         </p>
         <SubHead>1 — Stock Technicals (computed from historical price data)</SubHead>
         <Bullets
@@ -244,49 +278,37 @@ const SOURCES: Source[] = [
             'Average volume (10-day and 30-day) and volume trend',
           ]}
         />
-        <SubHead>2 — Fundamentals</SubHead>
-        <Bullets
-          items={[
-            'Next earnings date (fallback when Finnhub is unavailable)',
-            'Days until earnings',
-            'PE ratio',
-            'Market cap',
-            'Sector and industry',
-            'Average daily volume',
-            '52-week high and low',
-            'Next ex-dividend date and days until ex-dividend',
-            'Annual dividend yield',
-          ]}
-        />
-        <SubHead>3 — VIX</SubHead>
-        <p className="text-sm leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
-          Fetches the current VIX index value (^VIX) directly. This is one of the three primary
-          signals used to classify market regime.
-        </p>
       </>
     ),
   },
   {
     name: 'FRED (Federal Reserve Economic Data)',
-    tagline: 'Risk-free interest rate',
+    tagline: 'Risk-free interest rate and VIX',
     website: 'fred.stlouisfed.org',
     healthKeys: ['FRED'],
-    cache: '4 hours. The rate changes slowly — daily updates from the Fed are sufficient.',
+    cache: 'Risk-free rate: 4 hours. VIX: fetched live each cycle (daily series — reflects prior close).',
     fallback:
-      'If FRED is unavailable, the bot defaults to 5.0% (0.05) and logs a warning. This is a reasonable approximation that avoids blocking a cycle over a slowly-changing macro input.',
+      'If FRED is unavailable for the risk-free rate, the bot defaults to 5.0% (0.05) and logs a warning. If FRED is unavailable for VIX, the bot falls back to yfinance ^VIX. If both fail, VIX returns None and regime classification proceeds without it.',
     body: (
       <>
         <p className="text-sm leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
           FRED is maintained by the Federal Reserve Bank of St. Louis and provides economic data
-          series. The bot uses it for one specific data point: the current risk-free interest rate.
+          series. The bot uses it for two data points.
         </p>
         <Section heading="What the bot fetches">
-          <Bullets items={['The 3-Month Treasury Bill secondary market rate (series: DGS3MO)']} />
+          <Bullets
+            items={[
+              'The 3-Month Treasury Bill secondary market rate (series: DGS3MO)',
+              'The CBOE Volatility Index daily close (series: VIXCLS) — used for market regime classification',
+            ]}
+          />
         </Section>
         <Section heading="What it is used for">
           The risk-free rate feeds into options pricing models (specifically Black-Scholes) and is
-          included in the context Claude receives. It also informs the macro picture — a rising
-          risk-free rate affects the relative attractiveness of options premium vs. holding cash.
+          included in the context Claude receives. VIX is one of the three primary signals used to
+          classify market regime (along with the Fear &amp; Greed Index and SPX trend). Note: FRED
+          VIXCLS is a daily close series — during market hours it reflects the prior business
+          day's official close rather than live spot.
         </Section>
       </>
     ),
@@ -525,11 +547,14 @@ function SourceCard({
 
 const FALLBACK_CHAIN = [
   { label: 'Earnings date', chain: 'Finnhub → ORATS /earnings → yfinance → marked unavailable' },
+  { label: 'Ex-dividend date', chain: 'Alpaca Corporate Actions → yfinance .info → None (bear call spread blocks defensively on fetch failure)' },
+  { label: 'Company profile (sector, PE, market cap, 52w)', chain: 'Finnhub /stock/profile2 + /stock/metric → None (no fallback; ETF sector from hardcoded config map)' },
+  { label: 'Annual dividend yield', chain: 'Alpaca Corporate Actions → Finnhub /stock/metric → None' },
   { label: 'IV Rank', chain: 'ORATS /summaries → ORATS /ivrank → marked unavailable (strategies skip without it)' },
   { label: 'Vol surface', chain: 'ORATS /monies/implied → unavailable (EV scoring proceeds without skew surface data)' },
   { label: 'Strike candidates', chain: 'ORATS /strikes → Alpaca chain → unavailable (spread skips)' },
   { label: 'Risk-free rate', chain: 'FRED → 5.0% default' },
-  { label: 'VIX', chain: 'yfinance → None (regime defaults to NEUTRAL)' },
+  { label: 'VIX', chain: 'FRED VIXCLS → yfinance ^VIX → None (regime defaults to NEUTRAL)' },
   { label: 'Fear & Greed', chain: 'CNN → None (EUPHORIA regime blocked, others unaffected)' },
   { label: 'Technicals', chain: 'yfinance → None values passed to Claude with warning' },
   { label: 'Historical backtesting', chain: 'ORATS /hist endpoints → backtest unavailable; live trading unaffected' },

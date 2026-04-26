@@ -47,19 +47,16 @@ _FAKE_TECHNICALS = {
     "volume_30d_avg": 4_800_000,
 }
 
-_FAKE_FUNDAMENTALS = {
-    "next_earnings_date": "2026-07-01",
-    "days_to_earnings": 75,
-    "pe_ratio": 25.0,
-    "market_cap": 2_000_000_000,
+_FAKE_COMPANY_PROFILE = {
     "sector": "Technology",
-    "industry": "Software",
-    "avg_daily_volume": 5_000_000,
-    "week_52_high": 200.0,
-    "week_52_low": 120.0,
-    "next_ex_div_date": None,
-    "days_to_ex_div": None,
-    "annual_div_yield": 0.0,
+    "market_cap": 2_000_000_000,
+    "pe_ratio": 25.0,
+    "annual_dividend_yield": 0.015,
+    "fifty_two_week_high": 200.0,
+    "fifty_two_week_low": 120.0,
+    "profile_data_available": True,
+    "metric_data_available": True,
+    "is_etf": False,
 }
 
 _FAKE_ORATS_SUMMARY = {
@@ -118,9 +115,7 @@ _FAKE_EARNINGS = {
 
 _FAKE_FEAR_GREED = {"score": 55, "rating": "Greed"}
 
-_FAKE_EX_DIVIDEND = {"next_ex_dividend_date": None, "days_to_ex_dividend": None, "annual_dividend_yield": 0.0}
-
-_FAKE_VIX_TERM = {"vix9d": 14.0, "vix3m": 17.0, "vix6m": 18.5, "contango": 3.0, "term_slope_m1_m3": 4.5}
+_FAKE_EX_DIVIDEND = {"next_ex_dividend_date": None, "days_to_ex_dividend": None, "annual_dividend_yield": None, "ex_dividend_data_available": True}
 
 
 @pytest.fixture
@@ -149,7 +144,7 @@ def mock_context(tmp_path):
 
     patches = {
         "data.market_data.get_stock_technicals": MagicMock(return_value=_FAKE_TECHNICALS),
-        "data.market_data.get_fundamentals": MagicMock(return_value=_FAKE_FUNDAMENTALS),
+        "data.market_data.get_company_profile": MagicMock(return_value=_FAKE_COMPANY_PROFILE),
         "data.market_data.get_vix": MagicMock(return_value=18.5),
         "data.market_data.get_fear_greed_index": MagicMock(return_value=_FAKE_FEAR_GREED),
         "data.market_data.get_risk_free_rate": MagicMock(return_value=0.052),
@@ -163,7 +158,6 @@ def mock_context(tmp_path):
         "data.market_data.get_finnhub_analyst_data": MagicMock(return_value={}),
         "data.market_data.get_finnhub_news_sentiment": MagicMock(return_value={}),
         "data.market_data.get_earnings_calendar": MagicMock(return_value=_FAKE_EARNINGS),
-        "data.market_data.get_vix_term_structure": MagicMock(return_value=_FAKE_VIX_TERM),
         "data.market_data.get_ex_dividend_date": MagicMock(return_value=_FAKE_EX_DIVIDEND),
         "data.market_data.interpret_vix": MagicMock(return_value="MODERATE"),
         "data.context_builder._fetch_news": MagicMock(
@@ -214,7 +208,7 @@ def mock_context(tmp_path):
     ),
     (
         "macro.vix",
-        "ResearchGuide.tsx + DataSources.tsx: VIX is in Claude's macro context via yfinance",
+        "ResearchGuide.tsx + DataSources.tsx: VIX is in Claude's macro context via FRED",
     ),
     (
         "macro.fear_greed_score",

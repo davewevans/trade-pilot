@@ -17,7 +17,7 @@ logger = logging.getLogger("test-enrichment")
 
 SYMBOL = "AAPL"
 PASS_COUNT = 0
-TOTAL = 10
+TOTAL = 9
 
 
 def section(num: int, title: str) -> None:
@@ -87,21 +87,25 @@ def main() -> None:
         failed("get_vix", str(e))
         logger.exception("  Details:")
 
-    # ── 4. Fundamentals ─────────────────────────────────────
-    section(4, f"get_fundamentals('{SYMBOL}')")
+    # ── 4. Company profile ──────────────────────────────────
+    section(4, f"get_company_profile('{SYMBOL}')")
     try:
-        fund = market_data.get_fundamentals(SYMBOL)
-        logger.info("  Earnings date:    %s", fund.get("next_earnings_date"))
-        logger.info("  Days to earnings: %s", fund.get("days_to_earnings"))
-        logger.info("  Sector:           %s", fund.get("sector"))
-        logger.info("  PE ratio:         %s", fund.get("pe_ratio"))
-        # Pass if we got at least sector (yfinance sometimes returns partial data)
-        if fund.get("sector") is not None:
-            passed("get_fundamentals")
+        profile = market_data.get_company_profile(SYMBOL)
+        logger.info("  Sector:           %s", profile.get("sector"))
+        logger.info("  Market cap (M):   %s", profile.get("market_cap"))
+        logger.info("  PE ratio:         %s", profile.get("pe_ratio"))
+        logger.info("  Div yield:        %s", profile.get("annual_dividend_yield"))
+        logger.info("  52w high:         %s", profile.get("fifty_two_week_high"))
+        logger.info("  52w low:          %s", profile.get("fifty_two_week_low"))
+        logger.info("  Is ETF:           %s", profile.get("is_etf"))
+        logger.info("  Profile avail:    %s", profile.get("profile_data_available"))
+        logger.info("  Metric avail:     %s", profile.get("metric_data_available"))
+        if profile.get("sector") is not None and profile.get("fifty_two_week_high") is not None:
+            passed("get_company_profile")
         else:
-            failed("get_fundamentals", "sector is None — yfinance may be down")
+            failed("get_company_profile", "sector or 52w high is None — Finnhub may be down")
     except Exception as e:
-        failed("get_fundamentals", str(e))
+        failed("get_company_profile", str(e))
         logger.exception("  Details:")
 
     # ── 5. Stock technicals ─────────────────────────────────
@@ -194,30 +198,13 @@ def main() -> None:
         failed("get_earnings_calendar", str(e))
         logger.exception("  Details:")
 
-    # ── 9. VIX Term Structure ────────────────────────────────
-    section(9, "get_vix_term_structure()")
-    try:
-        from data.market_data import get_vix_term_structure
-        ts = get_vix_term_structure()
-        logger.info("  VIX9D:    %s", ts.get("vix9d"))
-        logger.info("  VIX:      %s", ts.get("vix_spot"))
-        logger.info("  VIX3M:    %s", ts.get("vix3m"))
-        logger.info("  VIX6M:    %s", ts.get("vix6m"))
-        logger.info("  Contango: %s", ts.get("contango"))
-        logger.info("  Term slope (spot->3m): %s", ts.get("term_slope_m1_m3"))
-        if ts.get("vix_spot") is not None:
-            passed("get_vix_term_structure")
-        else:
-            failed("get_vix_term_structure", "vix_spot is None")
-    except Exception as e:
-        failed("get_vix_term_structure", str(e))
-        logger.exception("  Details:")
-
-    # ── 10. Ex-Dividend Date ─────────────────────────────────
-    section(10, f"get_ex_dividend_date('{SYMBOL}')")
+    # ── 9. Ex-Dividend Date ─────────────────────────────────
+    section(9, f"get_ex_dividend_date('{SYMBOL}')")
     try:
         from data.market_data import get_ex_dividend_date
+        from config import settings as _settings
         exdiv = get_ex_dividend_date(SYMBOL)
+        logger.info("  (sourced via %s)", "Alpaca" if _settings.USE_ALPACA_FOR_EX_DIVIDEND else "yfinance")
         logger.info("  Ex-div date:  %s", exdiv.get("next_ex_dividend_date"))
         logger.info("  Days to ex:   %s", exdiv.get("days_to_ex_dividend"))
         logger.info("  Div yield:    %s", exdiv.get("annual_dividend_yield"))
