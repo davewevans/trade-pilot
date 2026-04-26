@@ -441,27 +441,26 @@ class TestDetectSupportBounce:
         import pandas as pd
         from data.context_builder import ContextBuilder
 
-        # Create mock historical data
         dates = pd.date_range("2026-03-01", periods=60, freq="B")
         data = {
-            "Open": [180 + i * 0.1 for i in range(60)],
-            "High": [182 + i * 0.1 for i in range(60)],
-            "Low": [178 + i * 0.1 for i in range(60)],
-            "Close": [181 + i * 0.1 for i in range(60)],
-            "Volume": [1000000] * 60,
+            "open":   [180 + i * 0.1 for i in range(60)],
+            "high":   [182 + i * 0.1 for i in range(60)],
+            "low":    [178 + i * 0.1 for i in range(60)],
+            "close":  [181 + i * 0.1 for i in range(60)],
+            "volume": [1_000_000] * 60,
         }
         hist = pd.DataFrame(data, index=dates)
-        # Make one day a clear low
-        hist.iloc[55, hist.columns.get_loc("Low")] = 170.0
-        hist.iloc[55, hist.columns.get_loc("High")] = 178.0
-        # Most recent close is above that day's high
-        hist.iloc[-1, hist.columns.get_loc("Close")] = 187.0
+        hist.iloc[55, hist.columns.get_loc("low")] = 170.0
+        hist.iloc[55, hist.columns.get_loc("high")] = 178.0
+        hist.iloc[-1, hist.columns.get_loc("close")] = 187.0
 
-        with patch("yfinance.Ticker") as mock_ticker_cls:
-            mock_ticker = MagicMock()
-            mock_ticker.history.return_value = hist
-            mock_ticker_cls.return_value = mock_ticker
+        mock_bars = MagicMock()
+        mock_bars.df = hist
 
+        with patch(
+            "alpaca.data.historical.StockHistoricalDataClient.get_stock_bars",
+            return_value=mock_bars,
+        ):
             result = ContextBuilder.detect_support_bounce("AAPL")
 
         assert result["cahold_detected"] is True
@@ -474,23 +473,24 @@ class TestDetectSupportBounce:
 
         dates = pd.date_range("2026-03-01", periods=60, freq="B")
         data = {
-            "Open": [180] * 60,
-            "High": [185] * 60,
-            "Low": [175] * 60,
-            "Close": [180] * 60,
-            "Volume": [1000000] * 60,
+            "open":   [180] * 60,
+            "high":   [185] * 60,
+            "low":    [175] * 60,
+            "close":  [180] * 60,
+            "volume": [1_000_000] * 60,
         }
         hist = pd.DataFrame(data, index=dates)
-        # Low day high is 185, but current close is only 180
-        hist.iloc[55, hist.columns.get_loc("Low")] = 170.0
-        hist.iloc[55, hist.columns.get_loc("High")] = 185.0
-        hist.iloc[-1, hist.columns.get_loc("Close")] = 180.0
+        hist.iloc[55, hist.columns.get_loc("low")] = 170.0
+        hist.iloc[55, hist.columns.get_loc("high")] = 185.0
+        hist.iloc[-1, hist.columns.get_loc("close")] = 180.0
 
-        with patch("yfinance.Ticker") as mock_ticker_cls:
-            mock_ticker = MagicMock()
-            mock_ticker.history.return_value = hist
-            mock_ticker_cls.return_value = mock_ticker
+        mock_bars = MagicMock()
+        mock_bars.df = hist
 
+        with patch(
+            "alpaca.data.historical.StockHistoricalDataClient.get_stock_bars",
+            return_value=mock_bars,
+        ):
             result = ContextBuilder.detect_support_bounce("AAPL")
 
         assert result["cahold_detected"] is False

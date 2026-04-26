@@ -355,7 +355,7 @@ class ContextBuilder:
         context["iv_rank"] = context["volatility"]["iv_rank_1y"]
         context["iv_environment"] = iv_env
 
-        # ── Earnings (Finnhub primary, yfinance fallback) ───
+        # ── Earnings (Finnhub) ───────────────────────────────
         earnings_data = results.get("earnings") or {}
         context["earnings"] = {
             "next_earnings_date": earnings_data.get("next_earnings_date"),
@@ -1799,9 +1799,21 @@ class ContextBuilder:
     ) -> dict:
         """Detect a CAHOLD (Close Above High Of Low Day) support bounce.
 
-        Returns a dict with ``cahold_detected``, the low-day date and high,
+        Bars sourced from Alpaca StockHistoricalDataClient (consistent with
+        get_stock_technicals). 90-calendar-day lookback matches the previous
+        yfinance period="3mo" behavior.
+
+        Returns a dict with cahold_detected, the low-day date and high,
         the current close, and whether the stock is above its 50-day SMA.
         """
+        import pandas as pd
+        from datetime import datetime, timezone, timedelta as _td
+        from alpaca.data.historical import StockHistoricalDataClient
+        from alpaca.data.requests import StockBarsRequest
+        from alpaca.data.timeframe import TimeFrame
+        from alpaca.data.enums import DataFeed, Adjustment
+        from config import settings
+
         result: dict = {
             "cahold_detected": False,
             "low_day_date": None,
@@ -1810,20 +1822,36 @@ class ContextBuilder:
             "above_50sma": False,
         }
 
-        try:
-            import yfinance as yf
+        end_dt = datetime.now(timezone.utc)
+        start_dt = end_dt - _td(days=90)
 
-            ticker = yf.Ticker(underlying_symbol)
-            hist = ticker.history(period="3mo")
+        try:
+            client = StockHistoricalDataClient(
+                api_key=settings.ALPACA_PAPER1_API_KEY,
+                secret_key=settings.ALPACA_PAPER1_SECRET_KEY,
+            )
+            request = StockBarsRequest(
+                symbol_or_symbols=underlying_symbol,
+                timeframe=TimeFrame.Day,
+                start=start_dt,
+                end=end_dt,
+                feed=DataFeed.IEX,
+                adjustment=Adjustment.ALL,
+            )
+            bars = client.get_stock_bars(request)
+            hist = bars.df
+            if isinstance(hist.index, pd.MultiIndex):
+                hist = hist.droplevel("symbol")
+
             if hist is None or len(hist) < lookback_days + 1:
                 return result
 
             recent = hist.tail(lookback_days)
-            low_idx = recent["Low"].idxmin()
-            low_day_high = float(recent.loc[low_idx, "High"])
-            current_close = float(hist["Close"].iloc[-1])
+            low_idx = recent["low"].idxmin()
+            low_day_high = float(recent.loc[low_idx, "high"])
+            current_close = float(hist["close"].iloc[-1])
 
-            sma_50 = float(hist["Close"].rolling(50).mean().iloc[-1])
+            sma_50 = float(hist["close"].rolling(50).mean().iloc[-1])
             above_50sma = current_close > sma_50
 
             result["low_day_date"] = str(low_idx.date()) if hasattr(low_idx, "date") else str(low_idx)

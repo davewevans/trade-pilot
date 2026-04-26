@@ -96,13 +96,15 @@ Last updated: 2026-04-25
 
 
 ---
-**#16 — yfinance structurally unreliable for ETF fundamentals.** quoteSummary endpoint returns 404 on SPY/QQQ/IWM/GLD persistently across cycles. Migration progress:
-- VIX → FRED VIXCLS ✓ (2026-04-26, with yfinance fallback)
-- VIX term structure → deleted ✓ (2026-04-26, confirmed zero callers; ORATS contango_label covers the concept)
-- ex_div → Alpaca Corporate Actions ✓ (2026-04-26, with yfinance fallback)
-- fundamentals → Finnhub /stock/profile2 + /stock/metric, ETF-aware ✓ (2026-04-26; `get_fundamentals()` decomposed; annual_dividend_yield restored via Finnhub metric)
-- earnings yfinance fallback → deleted ✓ (2026-04-26; `get_earnings_date()` removed, `get_earnings_calendar()` Finnhub-only)
-- backtester → Alpaca + FRED (pending, Stage 6)
+**#16 — yfinance migration COMPLETE (2026-04-26).** All six migration stages shipped:
+- VIX → FRED VIXCLS ✓ (Stage 1, yfinance fallback retained live)
+- VIX term structure → deleted ✓ (Stage 2, zero callers confirmed)
+- ex_div → Alpaca Corporate Actions ✓ (Stage 3, yfinance fallback retained as defensive secondary)
+- fundamentals → Finnhub /stock/profile2 + /stock/metric, ETF-aware ✓ (Stage 4; `get_fundamentals()` decomposed; annual_dividend_yield restored via Finnhub metric)
+- earnings yfinance fallback → deleted ✓ (Stage 5; `get_earnings_date()` removed, `get_earnings_calendar()` Finnhub-only)
+- backtester + CAHOLD → Alpaca + FRED ✓ (Stage 6; `_load_market_data`, `_load_symbol_prices`, `detect_support_bounce` migrated)
+
+Remaining yfinance call: `_get_ex_dividend_yfinance()` fallback in `data/market_data.py` only — to be removed in a follow-up cleanup PR. yfinance package retained in requirements.txt for that fallback until cleanup PR ships.
 
 Bear call spread defensive patch contract preserved: `context["fundamentals"]["ex_dividend_data_available"]` now reflects Alpaca ex-div fetch health (delegated from Stage 3 path). No behavioral change to the guardrail.
 
