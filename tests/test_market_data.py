@@ -48,11 +48,11 @@ def _make_ticker(info=None, raises=None):
 
 
 def test_ex_div_success_path_sets_available_true(monkeypatch):
-    """Successful yfinance fetch → ex_dividend_data_available=True."""
+    """yfinance fallback path: successful fetch → ex_dividend_data_available=True."""
     import time
     import data.market_data as md
 
-    # Use a future timestamp (year 2099) so ex-div is upcoming
+    monkeypatch.setattr(md.settings, "USE_ALPACA_FOR_EX_DIVIDEND", False)
     future_ts = int(time.mktime((2099, 12, 31, 0, 0, 0, 0, 0, 0)))
     mock_ticker = _make_ticker(info={"exDividendDate": future_ts, "dividendYield": 0.015})
     monkeypatch.setattr(md, "yf", MagicMock(Ticker=lambda sym: mock_ticker))
@@ -64,11 +64,10 @@ def test_ex_div_success_path_sets_available_true(monkeypatch):
 
 
 def test_ex_div_failure_path_sets_available_false(monkeypatch):
-    """yfinance raises → ex_dividend_data_available=False, all data fields None."""
+    """yfinance fallback path: yfinance raises → ex_dividend_data_available=False."""
     import data.market_data as md
 
-    failing_ticker = MagicMock()
-    failing_ticker.info = property(lambda self: (_ for _ in ()).throw(Exception("404 quoteSummary")))
+    monkeypatch.setattr(md.settings, "USE_ALPACA_FOR_EX_DIVIDEND", False)
 
     def bad_ticker(sym):
         raise Exception("404 quoteSummary")
@@ -83,9 +82,10 @@ def test_ex_div_failure_path_sets_available_false(monkeypatch):
 
 
 def test_ex_div_no_upcoming_ex_div_sets_available_true(monkeypatch):
-    """Successful fetch but no exDividendDate field → available=True, days=None."""
+    """yfinance fallback path: no exDividendDate field → available=True, days=None."""
     import data.market_data as md
 
+    monkeypatch.setattr(md.settings, "USE_ALPACA_FOR_EX_DIVIDEND", False)
     mock_ticker = _make_ticker(info={"dividendYield": 0.0})
     monkeypatch.setattr(md, "yf", MagicMock(Ticker=lambda sym: mock_ticker))
     md._exdiv_cache.clear()
@@ -93,6 +93,81 @@ def test_ex_div_no_upcoming_ex_div_sets_available_true(monkeypatch):
     result = md.get_ex_dividend_date("NVDA")
     assert result["ex_dividend_data_available"] is True
     assert result["days_to_ex_dividend"] is None
+
+
+# ── get_ex_dividend_date: Alpaca primary path ────────────────────────────────
+
+_ALPACA_CASH_DIV_RESPONSE = {
+    "corporate_actions": {
+        "cash_dividends": [
+            {"symbol": "SPY", "ex_date": "2099-06-20", "payable_date": "2099-06-30", "rate": 1.45},
+        ]
+    },
+    "next_page_token": None,
+}
+
+_ALPACA_EMPTY_RESPONSE = {
+    "corporate_actions": {"cash_dividends": []},
+    "next_page_token": None,
+}
+
+
+def test_ex_div_alpaca_primary_path_success(monkeypatch):
+    """Alpaca returns an upcoming dividend — correct date, days, yield=None."""
+    import data.market_data as md
+
+    monkeypatch.setattr(md.settings, "USE_ALPACA_FOR_EX_DIVIDEND", True)
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = _ALPACA_CASH_DIV_RESPONSE
+    mock_resp.raise_for_status.return_value = None
+    monkeypatch.setattr(md._requests, "get", MagicMock(return_value=mock_resp))
+    md._exdiv_cache.clear()
+
+    result = md.get_ex_dividend_date("SPY")
+    assert result["next_ex_dividend_date"] == "2099-06-20"
+    assert result["days_to_ex_dividend"] is not None
+    assert result["annual_dividend_yield"] is None
+    assert result["ex_dividend_data_available"] is True
+
+
+def test_ex_div_alpaca_empty_result_no_fallback(monkeypatch):
+    """Alpaca returns empty cash_dividends — all-None result, no yfinance call."""
+    import data.market_data as md
+
+    monkeypatch.setattr(md.settings, "USE_ALPACA_FOR_EX_DIVIDEND", True)
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = _ALPACA_EMPTY_RESPONSE
+    mock_resp.raise_for_status.return_value = None
+    mock_get = MagicMock(return_value=mock_resp)
+    monkeypatch.setattr(md._requests, "get", mock_get)
+    mock_yf = MagicMock()
+    monkeypatch.setattr(md, "yf", mock_yf)
+    md._exdiv_cache.clear()
+
+    result = md.get_ex_dividend_date("GLD")
+    assert result["next_ex_dividend_date"] is None
+    assert result["days_to_ex_dividend"] is None
+    assert result["ex_dividend_data_available"] is True
+    # yfinance must NOT have been called — empty is valid data, not an error
+    mock_yf.Ticker.assert_not_called()
+
+
+def test_ex_div_alpaca_error_falls_back_to_yfinance(monkeypatch):
+    """Alpaca raises → falls back to yfinance and returns yfinance result."""
+    import time
+    import data.market_data as md
+
+    monkeypatch.setattr(md.settings, "USE_ALPACA_FOR_EX_DIVIDEND", True)
+    monkeypatch.setattr(md._requests, "get", MagicMock(side_effect=Exception("connection refused")))
+    future_ts = int(time.mktime((2099, 12, 31, 0, 0, 0, 0, 0, 0)))
+    mock_ticker = _make_ticker(info={"exDividendDate": future_ts, "dividendYield": 0.015})
+    monkeypatch.setattr(md, "yf", MagicMock(Ticker=lambda sym: mock_ticker))
+    md._exdiv_cache.clear()
+
+    result = md.get_ex_dividend_date("SPY")
+    assert result["next_ex_dividend_date"] is not None
+    assert result["days_to_ex_dividend"] is not None
+    assert result["ex_dividend_data_available"] is True
 
 
 # ── get_fundamentals: ex_dividend_data_available signal ─────────────────────

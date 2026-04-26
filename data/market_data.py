@@ -261,53 +261,145 @@ _exdiv_cache: dict[str, tuple[float, dict]] = {}
 _EXDIV_TTL = 12 * 3600
 
 
-def get_ex_dividend_date(symbol: str) -> dict:
-    """Return the next ex-dividend date for a symbol via yfinance."""
-    cached = _exdiv_cache.get(symbol)
-    if cached:
-        ts, data = cached
-        if time.monotonic() - ts < _EXDIV_TTL:
-            return data
+def _get_ex_dividend_alpaca(symbol: str) -> dict | None:
+    """Fetch next ex-dividend via Alpaca Corporate Actions API.
+
+    Returns the contract dict on success (including the all-None case where
+    the symbol has no upcoming dividend — valid data, e.g. GLD). Returns None
+    on hard error so the caller can fall through to yfinance.
+    """
+    from datetime import date as _date
+
+    today = _date.today()
+    end = today + timedelta(days=180)
 
     try:
-        from datetime import date as date_type
+        resp = _requests.get(
+            f"{settings.ALPACA_DATA_URL}/v1/corporate-actions",
+            headers={
+                "APCA-API-KEY-ID": settings.ALPACA_PAPER1_API_KEY,
+                "APCA-API-SECRET-KEY": settings.ALPACA_PAPER1_SECRET_KEY,
+            },
+            params={
+                "symbols": symbol,
+                "types": "cash_dividend",
+                "start": today.isoformat(),
+                "end": end.isoformat(),
+            },
+            timeout=10,
+        )
+        resp.raise_for_status()
+        payload = resp.json()
+    except Exception:
+        logger.warning(
+            "Alpaca corporate actions fetch failed for %s; will fall back to yfinance",
+            symbol, exc_info=True,
+        )
+        return None
 
-        ticker = yf.Ticker(symbol)
-        info = ticker.info or {}
+    cash_divs = (
+        payload.get("corporate_actions", {}).get("cash_dividends", []) or []
+    )
 
-        ex_date_ts = info.get("exDividendDate")
-        next_ex_div = None
-        days_to_ex_div = None
-        if ex_date_ts:
-            try:
-                ex_date = pd.Timestamp(ex_date_ts, unit="s").date()
-                today = date_type.today()
-                if ex_date >= today:
-                    next_ex_div = str(ex_date)
-                    days_to_ex_div = (ex_date - today).days
-            except Exception:
-                logger.debug("Could not parse ex_dividend_date for %s", symbol)
+    today_iso = today.isoformat()
+    upcoming = sorted(
+        [d for d in cash_divs if (d.get("ex_date") or "") >= today_iso],
+        key=lambda d: d["ex_date"],
+    )
 
-        div_yield = None
-        raw_yield = info.get("dividendYield")
-        if raw_yield is not None:
-            try:
-                div_yield = round(float(raw_yield), 4)
-            except (TypeError, ValueError):
-                pass
-
-        result = {
-            "next_ex_dividend_date": next_ex_div,
-            "days_to_ex_dividend": days_to_ex_div,
-            "annual_dividend_yield": div_yield,
+    if not upcoming:
+        logger.info("Alpaca: no upcoming dividend for %s within 180 days", symbol)
+        return {
+            "next_ex_dividend_date": None,
+            "days_to_ex_dividend": None,
+            "annual_dividend_yield": None,
             "ex_dividend_data_available": True,
         }
-        _exdiv_cache[symbol] = (time.monotonic(), result)
-        return result
 
+    next_ev = upcoming[0]
+    ex_date_str = next_ev["ex_date"]
+    days = (_date.fromisoformat(ex_date_str) - today).days
+    logger.info("Alpaca: next ex-dividend for %s on %s (%d days)", symbol, ex_date_str, days)
+    return {
+        "next_ex_dividend_date": ex_date_str,
+        "days_to_ex_dividend": days,
+        # Annual yield requires a price fetch — deferred to Stage 4 (Finnhub fundamentals).
+        "annual_dividend_yield": None,
+        "ex_dividend_data_available": True,
+    }
+
+
+def _get_ex_dividend_yfinance(symbol: str) -> dict:
+    """Fetch next ex-dividend via yfinance .info — legacy fallback path.
+
+    Always returns the contract dict. Returns all-None fields when yfinance
+    has no data, when the symbol is an ETF with broken quoteSummary coverage,
+    or on any error.
+    """
+    try:
+        info = yf.Ticker(symbol).info or {}
+
+        ex_date_ts = info.get("exDividendDate")
+        if ex_date_ts is None:
+            return {
+                "next_ex_dividend_date": None,
+                "days_to_ex_dividend": None,
+                "annual_dividend_yield": None,
+                "ex_dividend_data_available": True,
+            }
+
+        ex_date = pd.Timestamp(ex_date_ts, unit="s").date()
+        today = datetime.now().date()
+        days = (ex_date - today).days
+        raw_yield = info.get("dividendYield")
+        return {
+            "next_ex_dividend_date": str(ex_date) if ex_date >= today else None,
+            "days_to_ex_dividend": days if days >= 0 else None,
+            "annual_dividend_yield": round(float(raw_yield), 4) if raw_yield is not None else None,
+            "ex_dividend_data_available": True,
+        }
     except Exception:
-        logger.warning("Failed to fetch ex-dividend info for %s", symbol, exc_info=True)
-        return {"next_ex_dividend_date": None, "days_to_ex_dividend": None, "annual_dividend_yield": None, "ex_dividend_data_available": False}
+        logger.warning("yfinance ex-dividend fetch failed for %s", symbol, exc_info=True)
+        return {
+            "next_ex_dividend_date": None,
+            "days_to_ex_dividend": None,
+            "annual_dividend_yield": None,
+            "ex_dividend_data_available": False,
+        }
+
+
+def get_ex_dividend_date(symbol: str) -> dict:
+    """Return the next ex-dividend date and yield for a symbol.
+
+    Primary source: Alpaca Corporate Actions API (types=cash_dividend).
+    Fallback: yfinance .info exDividendDate.
+
+    Returns a dict with keys:
+        next_ex_dividend_date: ISO date string "YYYY-MM-DD" or None.
+        days_to_ex_dividend:   int or None (relative to today).
+        annual_dividend_yield: float or None. None when sourced from Alpaca
+                               (yield calc deferred to Stage 4 / Finnhub).
+        ex_dividend_data_available: True on success (including no-dividend
+                               case); False only when yfinance raises.
+
+    Cache: 12 hours per symbol.
+    """
+    global _exdiv_cache
+
+    cached = _exdiv_cache.get(symbol)
+    if cached is not None and (time.monotonic() - cached[0]) < _EXDIV_TTL:
+        return cached[1]
+
+    if settings.USE_ALPACA_FOR_EX_DIVIDEND:
+        result = _get_ex_dividend_alpaca(symbol)
+        if result is not None:
+            _exdiv_cache[symbol] = (time.monotonic(), result)
+            return result
+        # Alpaca hard error — fall through to yfinance.
+
+    result = _get_ex_dividend_yfinance(symbol)
+    _exdiv_cache[symbol] = (time.monotonic(), result)
+    return result
 
 
 # ── ORATS + Finnhub integration ────────────────────────────

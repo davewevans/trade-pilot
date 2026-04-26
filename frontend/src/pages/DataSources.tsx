@@ -99,6 +99,25 @@ const SOURCES: Source[] = [
           these headlines as part of its context — recent news can signal earnings surprises,
           product announcements, or macro events that affect the trading decision.
         </p>
+        <SubHead>5 — Corporate Actions API</SubHead>
+        <p className="text-sm leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
+          Fetches upcoming cash dividends for each watchlist symbol via the Alpaca Corporate
+          Actions endpoint (<code className="font-mono">/v1/corporate-actions</code>, types=cash_dividend).
+          Used to detect ex-dividend dates within the option's DTE window — a hard-block signal
+          for bear call spreads (early assignment risk on ITM short calls) and a soft warning for
+          covered calls.
+        </p>
+        <Bullets
+          items={[
+            'Next ex-dividend date (ISO date string)',
+            'Days until ex-dividend (relative to today)',
+          ]}
+        />
+        <p className="text-sm leading-relaxed mt-2" style={{ color: 'var(--text-secondary)' }}>
+          Note: annual dividend yield is not returned on this path — yield calculation requires a
+          current price fetch. It will be restored in a future migration stage via Finnhub
+          /stock/metric. Until then, yield appears as null in Claude's context.
+        </p>
       </>
     ),
   },
@@ -254,8 +273,6 @@ const SOURCES: Source[] = [
             'Sector and industry',
             'Average daily volume',
             '52-week high and low',
-            'Next ex-dividend date and days until ex-dividend',
-            'Annual dividend yield',
           ]}
         />
       </>
@@ -527,6 +544,7 @@ function SourceCard({
 
 const FALLBACK_CHAIN = [
   { label: 'Earnings date', chain: 'Finnhub → ORATS /earnings → yfinance → marked unavailable' },
+  { label: 'Ex-dividend date', chain: 'Alpaca Corporate Actions → yfinance .info → None (bear call spread blocks defensively on fetch failure)' },
   { label: 'IV Rank', chain: 'ORATS /summaries → ORATS /ivrank → marked unavailable (strategies skip without it)' },
   { label: 'Vol surface', chain: 'ORATS /monies/implied → unavailable (EV scoring proceeds without skew surface data)' },
   { label: 'Strike candidates', chain: 'ORATS /strikes → Alpaca chain → unavailable (spread skips)' },

@@ -198,7 +198,9 @@ def main() -> None:
     section(9, f"get_ex_dividend_date('{SYMBOL}')")
     try:
         from data.market_data import get_ex_dividend_date
+        from config import settings as _settings
         exdiv = get_ex_dividend_date(SYMBOL)
+        logger.info("  (sourced via %s)", "Alpaca" if _settings.USE_ALPACA_FOR_EX_DIVIDEND else "yfinance")
         logger.info("  Ex-div date:  %s", exdiv.get("next_ex_dividend_date"))
         logger.info("  Days to ex:   %s", exdiv.get("days_to_ex_dividend"))
         logger.info("  Div yield:    %s", exdiv.get("annual_dividend_yield"))

@@ -118,7 +118,7 @@ _FAKE_EARNINGS = {
 
 _FAKE_FEAR_GREED = {"score": 55, "rating": "Greed"}
 
-_FAKE_EX_DIVIDEND = {"next_ex_dividend_date": None, "days_to_ex_dividend": None, "annual_dividend_yield": 0.0}
+_FAKE_EX_DIVIDEND = {"next_ex_dividend_date": None, "days_to_ex_dividend": None, "annual_dividend_yield": None, "ex_dividend_data_available": True}
 
 
 @pytest.fixture

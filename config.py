@@ -70,6 +70,7 @@ class Settings:
 
         self.FRED_API_KEY: str = self._require("FRED_API_KEY")
         self.USE_FRED_FOR_VIX: bool = os.getenv("USE_FRED_FOR_VIX", "true").lower() == "true"
+        self.USE_ALPACA_FOR_EX_DIVIDEND: bool = os.getenv("USE_ALPACA_FOR_EX_DIVIDEND", "true").lower() == "true"
 
         # ORATS — IV rank, skew, term structure, expected move
         self.ORATS_API_KEY: str = os.getenv("ORATS_API_KEY", "")

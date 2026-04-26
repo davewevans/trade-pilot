@@ -35,7 +35,7 @@ _SOURCE_MAP: dict[str, str] = {
     "analyst_data": "Finnhub",
     "news_sentiment": "Finnhub",
     "earnings": "Finnhub",
-    "ex_dividend": "yfinance",
+    "ex_dividend": "Alpaca Corporate Actions",
 }
 
 
