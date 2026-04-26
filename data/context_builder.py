@@ -40,21 +40,23 @@ _SOURCE_MAP: dict[str, str] = {
 
 
 def _analyst_rating_label(recommendation: dict | None) -> str | None:
-    """Derive a human-readable Buy/Hold/Sell label from Finnhub vote counts."""
+    """Derive Buy/Hold/Sell from Finnhub vote counts using system.md semantics.
+
+    Rules (matching system.md lines 397-400):
+      - (strong_sell + sell) > (strong_buy + buy)  → "Sell"
+      - (strong_buy + buy) >= 3 × (strong_sell + sell), with at least one bull → "Buy"
+      - otherwise → "Hold"
+    """
     if not recommendation:
-        return None
-    total = sum(
-        recommendation.get(k, 0) or 0
-        for k in ("strong_buy", "buy", "hold", "sell", "strong_sell")
-    )
-    if total == 0:
         return None
     bullish = (recommendation.get("strong_buy") or 0) + (recommendation.get("buy") or 0)
     bearish = (recommendation.get("sell") or 0) + (recommendation.get("strong_sell") or 0)
-    if bullish / total > 0.5:
-        return "Buy"
-    if bearish / total > 0.3:
+    if bullish == 0 and bearish == 0:
+        return "Hold"
+    if bearish > bullish:
         return "Sell"
+    if bullish > 0 and (bearish == 0 or bullish >= 3 * bearish):
+        return "Buy"
     return "Hold"
 
 
@@ -415,7 +417,7 @@ class ContextBuilder:
         context["fundamentals"] = {
             # Finnhub /stock/profile2 + /stock/metric:
             "sector": _profile.get("sector"),
-            "market_cap": _profile.get("market_cap"),
+            "market_cap_millions_usd": _profile.get("market_cap"),  # Finnhub reports in millions
             "pe_ratio": _profile.get("pe_ratio"),
             "annual_dividend_yield": _profile.get("annual_dividend_yield"),
             "fifty_two_week_high": _profile.get("fifty_two_week_high"),
