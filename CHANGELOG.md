@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.13.1] - 2026-04-26
+
+### Changed
+- **LONG_STOCK sell-the-shares triggers tightened (both wheel prompts)**: SMA trigger
+  now requires price to be more than 2% below the 200-day SMA (not just below it) to
+  prevent day-to-day flicker; downgrade trigger raised to ≥ 2 downgrades from a named
+  list of major Wall Street firms in the past 30 days (previously any downgrade, 14-day
+  window); fixed `cost_basis` typo in `wheel_long_stock.md` — field is
+  `effective_cost_basis`.
+- **Strategies page updated to match revised exit triggers**: removed phantom "flagged
+  for review" bullet, corrected 14-day → 30-day downgrade window, added 2% SMA buffer
+  language, fixed `> 35` → `≥ 35` on VIX rule; Turnover Wheel section now displays the
+  full exit-trigger list (previously omitted) with a note that the rules are
+  intentionally identical to the Standard Wheel.
+
 ## [1.13.0] - 2026-04-26
 
 ### Changed

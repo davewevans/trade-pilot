@@ -5,9 +5,10 @@ section to CHANGELOG.md. Other modules read this via ``settings.VERSION``
 rather than importing this file directly.
 """
 
-VERSION = "1.12.2"
-VERSION_DATE = "2026-04-25"
+VERSION = "1.13.1"
+VERSION_DATE = "2026-04-26"
 VERSION_NOTES = (
-    "Safety patch: bear call spread guardrail now rejects defensively when ex-dividend data fetch "
-    "fails (yfinance quoteSummary 404 on SPY/QQQ/IWM/GLD) instead of silently passing."
+    "Prompt patch: tightened LONG_STOCK sell-the-shares triggers in both wheel prompts "
+    "(2% SMA buffer, major-firm downgrade filter with 30-day window, effective_cost_basis "
+    "typo fix) and updated the Strategies page to match."
 )
