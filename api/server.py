@@ -2568,7 +2568,7 @@ def research_recommendations():
     wl_path = DATA_DIR / "watchlist.json"
     wl_data = _read_json(wl_path) or {}
     result: dict = {"generated_at": data.get("generated_at"), "watchlists": {}}
-    for key in ("wheel", "iron_condor", "spreads"):
+    for key in ("wheel", "iron_condor", "iron_butterfly", "spreads", "calendar_spread"):
         wl_entry = data.get(key, {})
         result["watchlists"][key] = {
             "current_members": wl_data.get(key, []),
