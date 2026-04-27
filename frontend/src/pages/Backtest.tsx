@@ -100,8 +100,6 @@ const STRATEGIES = [
   { value: 'bear_call_spread', label: 'Bear Call Spread' },
   { value: 'iron_condor', label: 'Iron Condor' },
   { value: 'long_call_vertical', label: 'Long Call Vertical' },
-  { value: 'iron_butterfly', label: 'Iron Butterfly' },
-  { value: 'calendar_spread', label: 'Calendar Spread' },
 ]
 
 const PRESET_SYMBOLS: { label: string; syms: string[] }[] = [
