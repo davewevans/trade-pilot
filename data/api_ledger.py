@@ -36,6 +36,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from database.db import db_retry
+
 logger = logging.getLogger(__name__)
 
 # ContextVar for ambient job attribution — set by long-running callers (e.g. api_backtest)
@@ -491,6 +493,7 @@ class ApiLedger:
         )
         self._conn.commit()
 
+    @db_retry(max_attempts=5, base_delay=0.05)
     def _insert(
         self,
         api: str,
