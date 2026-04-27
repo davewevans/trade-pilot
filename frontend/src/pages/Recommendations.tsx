@@ -170,8 +170,13 @@ function RecRow({
             backgroundColor:
               actionLabel === 'ADD'
                 ? 'color-mix(in srgb, #22c55e 20%, var(--bg-card))'
-                : 'color-mix(in srgb, #ef4444 20%, var(--bg-card))',
-            color: actionLabel === 'ADD' ? '#22c55e' : '#ef4444',
+                : actionLabel === 'REMOVE'
+                ? 'color-mix(in srgb, #ef4444 20%, var(--bg-card))'
+                : 'color-mix(in srgb, #6b7280 20%, var(--bg-card))',
+            color:
+              actionLabel === 'ADD' ? '#22c55e'
+              : actionLabel === 'REMOVE' ? '#ef4444'
+              : '#9ca3af',
             fontWeight: 700,
           }}
         >
