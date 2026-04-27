@@ -1185,6 +1185,7 @@ def run() -> None:
 
                     _precheck_accepted: list[str] = []
                     _precheck_rejected: dict[str, int] = {}
+                    _deep_rejections: dict[str, int] = {}
                     for sym in _screen_survivors:
                         try:
                             candidate_ctx = ctx_builder.build(sym, "IDLE")
@@ -1212,6 +1213,8 @@ def run() -> None:
                             last_skip_reason = skip_reason
                             _short_reason = skip_reason[:60] if skip_reason else "unknown"
                             _precheck_rejected[_short_reason] = _precheck_rejected.get(_short_reason, 0) + 1
+                            _cat = _categorize_deep_reject(skip_reason)
+                            _deep_rejections[_cat] = _deep_rejections.get(_cat, 0) + 1
 
                     if strategy_name == "bull_put_spread":
                         logger.info(
@@ -1224,6 +1227,23 @@ def run() -> None:
                                 "rejections_by_reason": _precheck_rejected,
                                 "accepted_symbols": _precheck_accepted,
                             },
+                        )
+
+                    if strategy_name in ("bull_put_spread", "bear_call_spread"):
+                        _deep_viable = len(_precheck_accepted)
+                        _deep_reject_str = (
+                            ", ".join(
+                                f"{count} {reason}"
+                                for reason, count in sorted(_deep_rejections.items())
+                            )
+                            or "none"
+                        )
+                        logger.info(
+                            "Spread deep-eval (%s): %d symbols → %d viable. Rejected: %s",
+                            strategy_name,
+                            len(_screen_survivors),
+                            _deep_viable,
+                            _deep_reject_str,
                         )
 
                     if best_ctx is None:
@@ -1418,6 +1438,28 @@ _GUARDRAIL_MAP = {
     "long_call_vertical": "validate_long_call_vertical_entry",
     "calendar_spread": "validate_calendar_spread_entry",
 }
+
+
+def _categorize_deep_reject(skip_reason: str) -> str:
+    """Map a pre_check_entry skip_reason string to a clean deep-eval category name."""
+    if not skip_reason:
+        return "other"
+    s = skip_reason.lower()
+    if "no viable" in s or "no candidates" in s:
+        return "no_candidates"
+    if "spread yield" in s and "minimum" in s:
+        return "low_spread_yield"
+    if "absolute credit" in s and "minimum" in s:
+        return "low_net_credit"
+    if "credit/width ratio" in s:
+        return "low_credit_to_width"
+    if "undervalued" in s and "orats" in s:
+        return "iv_undervalued"
+    if skip_reason == "below_liquidity_floor":
+        return "below_liquidity_floor"
+    if skip_reason == "below_winrate_floor":
+        return "below_winrate_floor"
+    return "other"
 
 
 def _handle_spread_open(

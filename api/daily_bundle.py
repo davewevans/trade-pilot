@@ -152,7 +152,7 @@ def _section_cycle_summary(target_date: date, db_path: str) -> str:
     date_str = target_date.isoformat()
     try:
         with _db_conn(db_path) as conn:
-            rows = conn.execute(
+            today_rows = conn.execute(
                 """
                 SELECT strategy_type, underlying, opened_at, closed_at, status, outcome, total_premium
                 FROM cycles
@@ -161,20 +161,50 @@ def _section_cycle_summary(target_date: date, db_path: str) -> str:
                 """,
                 (date_str,),
             ).fetchall()
-        if not rows:
-            parts.append("_No cycles found for this date._")
-        else:
-            parts.append(f"| Strategy | Underlying | Opened | Closed | Status | Outcome | Premium |")
-            parts.append(f"|----------|-----------|--------|--------|--------|---------|---------|")
-            for r in rows:
-                premium = f"${r['total_premium']:.2f}" if r["total_premium"] is not None else "—"
-                parts.append(
-                    f"| {r['strategy_type']} | {r['underlying']} "
-                    f"| {(r['opened_at'] or '')[:19]} | {(r['closed_at'] or '—')[:19]} "
-                    f"| {r['status']} | {r['outcome'] or '—'} | {premium} |"
-                )
+            prior_rows = conn.execute(
+                """
+                SELECT strategy_type, underlying, opened_at, status, total_premium
+                FROM cycles
+                WHERE status = 'ACTIVE' AND DATE(opened_at) < ?
+                ORDER BY opened_at
+                """,
+                (date_str,),
+            ).fetchall()
     except Exception:
         parts.append("_Could not read cycles table._")
+        return "\n".join(parts)
+
+    parts.append("### Opened today")
+    if today_rows:
+        parts.append("| Strategy | Underlying | Opened | Closed | Status | Outcome | Premium |")
+        parts.append("|----------|-----------|--------|--------|--------|---------|---------|")
+        for r in today_rows:
+            premium = f"${r['total_premium']:.2f}" if r["total_premium"] is not None else "—"
+            parts.append(
+                f"| {r['strategy_type']} | {r['underlying']} "
+                f"| {(r['opened_at'] or '')[:19]} | {(r['closed_at'] or '—')[:19]} "
+                f"| {r['status']} | {r['outcome'] or '—'} | {premium} |"
+            )
+    else:
+        parts.append(
+            "_0 cycles opened today (the bot may have logged decisions but none triggered "
+            "a cycle-opening action — see Decisions section)._"
+        )
+
+    parts.append("")
+    parts.append("### Active cycles from prior days")
+    if prior_rows:
+        parts.append("| Strategy | Underlying | Opened | Status | Premium |")
+        parts.append("|----------|-----------|--------|--------|---------|")
+        for r in prior_rows:
+            premium = f"${r['total_premium']:.2f}" if r["total_premium"] is not None else "—"
+            parts.append(
+                f"| {r['strategy_type']} | {r['underlying']} "
+                f"| {(r['opened_at'] or '')[:19]} | {r['status']} | {premium} |"
+            )
+    else:
+        parts.append("_No active cycles carried over from prior dates._")
+
     return "\n".join(parts)
 
 

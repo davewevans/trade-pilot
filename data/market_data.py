@@ -28,6 +28,7 @@ from alpaca.data.requests import (
 from alpaca.data.timeframe import TimeFrame
 
 from config import settings
+from utils.retry import retry_on_transient
 
 logger = logging.getLogger(__name__)
 
@@ -201,6 +202,15 @@ def start_option_stream(symbols: list[str], on_quote, on_trade) -> None:
 # ── VIX proxy ───────────────────────────────────────────────
 
 
+@retry_on_transient(max_retries=2, base_delay=1.0)
+def _fetch_vix_from_fred() -> float:
+    """Fetch VIX from FRED VIXCLS; retried by caller on transient errors."""
+    from fredapi import Fred
+    fred = Fred(api_key=settings.FRED_API_KEY)
+    series = fred.get_series("VIXCLS")
+    return float(series.dropna().iloc[-1])
+
+
 def get_vix() -> float | None:
     """Return the current VIX index value.
 
@@ -219,11 +229,7 @@ def get_vix() -> float | None:
     """
     if settings.USE_FRED_FOR_VIX:
         try:
-            from fredapi import Fred
-
-            fred = Fred(api_key=settings.FRED_API_KEY)
-            series = fred.get_series("VIXCLS")
-            vix = float(series.dropna().iloc[-1])
+            vix = _fetch_vix_from_fred()
             logger.info("Fetched VIX from FRED VIXCLS: %.2f", vix)
             return vix
         except Exception:
@@ -259,41 +265,36 @@ _exdiv_cache: dict[str, tuple[float, dict]] = {}
 _EXDIV_TTL = 12 * 3600
 
 
+@retry_on_transient(max_retries=2, base_delay=1.0)
 def _get_ex_dividend_alpaca(symbol: str) -> dict | None:
     """Fetch next ex-dividend via Alpaca Corporate Actions API.
 
     Returns the contract dict on success (including the all-None case where
-    the symbol has no upcoming dividend — valid data, e.g. GLD). Returns None
-    on hard error so the caller can fall through to yfinance.
+    the symbol has no upcoming dividend — valid data, e.g. GLD). Raises on
+    failure so the caller's retry wrapper can handle retries before falling
+    back to yfinance.
     """
     from datetime import date as _date
 
     today = _date.today()
     end = today + timedelta(days=180)
 
-    try:
-        resp = _requests.get(
-            f"{settings.ALPACA_DATA_URL}/v1/corporate-actions",
-            headers={
-                "APCA-API-KEY-ID": settings.ALPACA_PAPER1_API_KEY,
-                "APCA-API-SECRET-KEY": settings.ALPACA_PAPER1_SECRET_KEY,
-            },
-            params={
-                "symbols": symbol,
-                "types": "cash_dividend",
-                "start": today.isoformat(),
-                "end": end.isoformat(),
-            },
-            timeout=10,
-        )
-        resp.raise_for_status()
-        payload = resp.json()
-    except Exception:
-        logger.warning(
-            "Alpaca corporate actions fetch failed for %s; will fall back to yfinance",
-            symbol, exc_info=True,
-        )
-        return None
+    resp = _requests.get(
+        f"{settings.ALPACA_DATA_URL}/v1/corporate-actions",
+        headers={
+            "APCA-API-KEY-ID": settings.ALPACA_PAPER1_API_KEY,
+            "APCA-API-SECRET-KEY": settings.ALPACA_PAPER1_SECRET_KEY,
+        },
+        params={
+            "symbols": symbol,
+            "types": "cash_dividend",
+            "start": today.isoformat(),
+            "end": end.isoformat(),
+        },
+        timeout=10,
+    )
+    resp.raise_for_status()
+    payload = resp.json()
 
     cash_divs = (
         payload.get("corporate_actions", {}).get("cash_dividends", []) or []
@@ -389,7 +390,14 @@ def get_ex_dividend_date(symbol: str) -> dict:
         return cached[1]
 
     if settings.USE_ALPACA_FOR_EX_DIVIDEND:
-        result = _get_ex_dividend_alpaca(symbol)
+        try:
+            result = _get_ex_dividend_alpaca(symbol)
+        except Exception:
+            logger.warning(
+                "Alpaca corporate actions fetch failed for %s; will fall back to yfinance",
+                symbol, exc_info=True,
+            )
+            result = None
         if result is not None:
             _exdiv_cache[symbol] = (time.monotonic(), result)
             return result

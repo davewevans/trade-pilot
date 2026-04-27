@@ -5,10 +5,10 @@ section to CHANGELOG.md. Other modules read this via ``settings.VERSION``
 rather than importing this file directly.
 """
 
-VERSION = "1.13.1"
-VERSION_DATE = "2026-04-26"
+VERSION = "1.13.2"
+VERSION_DATE = "2026-04-27"
 VERSION_NOTES = (
-    "Prompt patch: tightened LONG_STOCK sell-the-shares triggers in both wheel prompts "
-    "(2% SMA buffer, major-firm downgrade filter with 30-day window, effective_cost_basis "
-    "typo fix) and updated the Strategies page to match."
+    "Reliability fixes: SQLite retry on api_ledger writes, exponential backoff before "
+    "yfinance fallbacks for FRED VIX and Alpaca corp-actions, cycle-summary empty-state "
+    "UX correction, and boot-time diagnostic logging for structured-log handler and scheduler."
 )

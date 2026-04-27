@@ -153,12 +153,14 @@ def test_ex_div_alpaca_empty_result_no_fallback(monkeypatch):
 
 
 def test_ex_div_alpaca_error_falls_back_to_yfinance(monkeypatch):
-    """Alpaca raises → falls back to yfinance and returns yfinance result."""
+    """Alpaca raises on all retries → falls back to yfinance."""
     import time
     import data.market_data as md
+    import utils.retry as _retry_mod
 
     monkeypatch.setattr(md.settings, "USE_ALPACA_FOR_EX_DIVIDEND", True)
     monkeypatch.setattr(md._requests, "get", MagicMock(side_effect=Exception("connection refused")))
+    monkeypatch.setattr(_retry_mod.time, "sleep", lambda _: None)  # skip backoff delays
     future_ts = int(time.mktime((2099, 12, 31, 0, 0, 0, 0, 0, 0)))
     mock_ticker = _make_ticker(info={"exDividendDate": future_ts, "dividendYield": 0.015})
     monkeypatch.setattr(md, "yf", MagicMock(Ticker=lambda sym: mock_ticker))
@@ -168,6 +170,103 @@ def test_ex_div_alpaca_error_falls_back_to_yfinance(monkeypatch):
     assert result["next_ex_dividend_date"] is not None
     assert result["days_to_ex_dividend"] is not None
     assert result["ex_dividend_data_available"] is True
+
+
+# ── retry-before-fallback tests ──────────────────────────────────────────────
+
+
+def test_get_vix_returns_fred_value_on_success(monkeypatch):
+    """FRED succeeds — returns live value without hitting yfinance."""
+    import data.market_data as md
+
+    monkeypatch.setattr(md.settings, "USE_FRED_FOR_VIX", True)
+    monkeypatch.setattr(md, "_fetch_vix_from_fred", lambda: 18.71)
+    mock_yf = MagicMock()
+    monkeypatch.setattr(md, "yf", mock_yf)
+
+    result = md.get_vix()
+    assert result == 18.71
+    mock_yf.Ticker.assert_not_called()
+
+
+def test_get_vix_falls_back_after_fred_failure(monkeypatch):
+    """_fetch_vix_from_fred raises (all retries exhausted) — falls back to yfinance."""
+    import data.market_data as md
+
+    monkeypatch.setattr(md.settings, "USE_FRED_FOR_VIX", True)
+    monkeypatch.setattr(md, "_fetch_vix_from_fred", MagicMock(side_effect=Exception("HTTP 500")))
+
+    mock_ticker = MagicMock()
+    mock_ticker.fast_info = {"last_price": 19.0}
+    monkeypatch.setattr(md, "yf", MagicMock(Ticker=lambda sym: mock_ticker))
+
+    result = md.get_vix()
+    assert result == 19.0
+
+
+def test_fetch_vix_from_fred_retries_on_transient_error(monkeypatch):
+    """_fetch_vix_from_fred retries twice before succeeding (tests decorator directly)."""
+    import pandas as pd
+    import data.market_data as md
+    import utils.retry as _retry_mod
+
+    monkeypatch.setattr(_retry_mod.time, "sleep", lambda _: None)
+
+    call_count = {"n": 0}
+
+    def flaky_fred_cls(api_key):
+        instance = MagicMock()
+        def flaky_get_series(name):
+            call_count["n"] += 1
+            if call_count["n"] < 3:
+                raise Exception("HTTP 500")
+            return pd.Series([18.71])
+        instance.get_series.side_effect = flaky_get_series
+        return instance
+
+    with patch("fredapi.Fred", flaky_fred_cls):
+        result = md._fetch_vix_from_fred()  # decorated version — retry runs here
+
+    assert result == 18.71
+    assert call_count["n"] == 3
+
+
+def test_alpaca_corp_actions_retries_then_succeeds(monkeypatch):
+    """Alpaca corp-actions fails twice then succeeds — returns Alpaca result, no yfinance."""
+    import time
+    import data.market_data as md
+    import utils.retry as _retry_mod
+
+    monkeypatch.setattr(md.settings, "USE_ALPACA_FOR_EX_DIVIDEND", True)
+    monkeypatch.setattr(_retry_mod.time, "sleep", lambda _: None)
+
+    call_count = {"n": 0}
+
+    def flaky_get(*args, **kwargs):
+        call_count["n"] += 1
+        if call_count["n"] < 3:
+            raise Exception("timeout")
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status.return_value = None
+        mock_resp.json.return_value = {
+            "corporate_actions": {
+                "cash_dividends": [
+                    {"symbol": "SPY", "ex_date": "2099-06-20", "payable_date": "2099-06-30", "rate": 1.45},
+                ]
+            }
+        }
+        return mock_resp
+
+    monkeypatch.setattr(md._requests, "get", flaky_get)
+    mock_yf = MagicMock()
+    monkeypatch.setattr(md, "yf", mock_yf)
+    md._exdiv_cache.clear()
+
+    result = md.get_ex_dividend_date("SPY")
+    assert result["next_ex_dividend_date"] == "2099-06-20"
+    assert result["ex_dividend_data_available"] is True
+    assert call_count["n"] == 3
+    mock_yf.Ticker.assert_not_called()
 
 
 # ── get_company_profile: ETF-aware Finnhub wrapper ───────────────────────────

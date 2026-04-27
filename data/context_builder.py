@@ -449,7 +449,21 @@ class ContextBuilder:
         }
 
         # ── Broker data (sequential — same client) ─────────
-        context["account"] = self._fetch_account()
+        account = self._fetch_account()
+        # For wheel-family strategies, the binding BP constraint is cash-equivalent
+        # (options_buying_power), not margin BP. strategies/guardrails.py validates
+        # sell_put against options_buying_power; surface the same number to Claude
+        # under the "buying_power" field so Claude's "10% of buying power" math
+        # matches what the guardrail will enforce.
+        #
+        # Spread strategies correctly use margin BP (their max_loss caps are
+        # collateralized by margin, not strike cost), so they are NOT overridden.
+        if account is not None and strategy_name in ("wheel", "turnover_wheel"):
+            obp = account.get("options_buying_power")
+            if obp is not None:
+                account = dict(account)  # shallow-copy — defensive against caller holding a reference
+                account["buying_power"] = obp
+        context["account"] = account
         context["positions"] = self._fetch_positions(symbol)
         context["open_orders"] = self._fetch_orders(symbol)
 
@@ -1468,6 +1482,27 @@ class ContextBuilder:
                     "spread_yield": spread_yield,
                 })
 
+        # Observability for deep-eval diagnosis — pure logging, no behavior change.
+        liquidity_ok_count = sum(1 for c in candidates if c.get("liquidity_ok"))
+        best_credit = max(
+            (c.get("net_credit", 0) for c in candidates if c.get("liquidity_ok")),
+            default=None,
+        )
+        best_ratio = max(
+            (c.get("credit_to_width_ratio", 0) for c in candidates if c.get("liquidity_ok")),
+            default=None,
+        )
+        logger.info(
+            "credit_spread_candidates_built",
+            extra={
+                "symbol": symbol,
+                "option_type": option_type,
+                "pairs_built": len(candidates),
+                "pairs_liquidity_ok": liquidity_ok_count,
+                "best_liquid_net_credit": best_credit,
+                "best_liquid_credit_to_width_ratio": best_ratio,
+            },
+        )
         return candidates
 
     def _build_debit_spread_candidates(
@@ -1705,10 +1740,35 @@ class ContextBuilder:
         """
         liquid = [c for c in candidates if c.get("liquidity_ok")]
         if not liquid:
+            logger.info(
+                "credit_spread_pick_best_no_liquid",
+                extra={"candidates_total": len(candidates)},
+            )
             return None
         if any(c.get("ev_score") is not None for c in liquid):
-            return max(liquid, key=lambda c: c.get("ev_score") or 0)
-        return max(liquid, key=lambda c: c.get("credit_to_width_ratio", 0))
+            best = max(liquid, key=lambda c: c.get("ev_score") or 0)
+            logger.info(
+                "credit_spread_pick_best_by_ev",
+                extra={
+                    "candidates_total": len(candidates),
+                    "candidates_liquid": len(liquid),
+                    "best_ev_score": best.get("ev_score"),
+                    "best_net_credit": best.get("net_credit"),
+                    "best_credit_to_width": best.get("credit_to_width_ratio"),
+                },
+            )
+            return best
+        best = max(liquid, key=lambda c: c.get("credit_to_width_ratio", 0))
+        logger.info(
+            "credit_spread_pick_best_by_ratio",
+            extra={
+                "candidates_total": len(candidates),
+                "candidates_liquid": len(liquid),
+                "best_net_credit": best.get("net_credit"),
+                "best_credit_to_width": best.get("credit_to_width_ratio"),
+            },
+        )
+        return best
 
     @staticmethod
     def _pick_best_debit(candidates: list[dict]) -> dict | None:
@@ -1872,9 +1932,10 @@ class ContextBuilder:
     def _fetch_account(self) -> dict | None:
         try:
             acct = self.broker.get_account()
+            _obp = acct.get("options_buying_power")
             result = {
                 "buying_power": float(acct.get("buying_power", 0)),
-                "options_buying_power": float(acct.get("options_buying_power", 0)),
+                "options_buying_power": float(_obp) if _obp is not None else None,
                 "options_approved_level": acct.get("options_approved_level"),
                 "options_trading_level": acct.get("options_trading_level"),
                 "portfolio_value": float(acct.get("portfolio_value", 0)),

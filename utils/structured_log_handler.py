@@ -93,11 +93,19 @@ def install_structured_log_handler(
     backup_count: int = 30,
 ) -> JSONLStructuredHandler:
     """Install the handler on the root logger. Idempotent — returns existing handler if already installed."""
+    _diag = logging.getLogger(__name__)
     root = logging.getLogger()
     for h in root.handlers:
         if isinstance(h, JSONLStructuredHandler):
+            _diag.info(
+                "Structured log handler already installed at %s", h._log_dir
+            )
             return h
     handler = JSONLStructuredHandler(log_dir, min_level, backup_count)
     handler.setFormatter(logging.Formatter("%(message)s"))
     root.addHandler(handler)
+    _diag.info(
+        "Structured log handler installed: dir=%s min_level=%s",
+        Path(log_dir).resolve(), logging.getLevelName(min_level),
+    )
     return handler
