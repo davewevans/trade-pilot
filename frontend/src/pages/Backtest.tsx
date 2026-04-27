@@ -24,6 +24,7 @@ interface BacktestParams {
   dte_min: number
   dte_max: number
   ivr_threshold: number
+  ivr_max: number | null
   profit_close_pct: number
   contracts: number
   spread_width_strikes: number
@@ -100,6 +101,7 @@ const STRATEGIES = [
   { value: 'bear_call_spread', label: 'Bear Call Spread' },
   { value: 'iron_condor', label: 'Iron Condor' },
   { value: 'iron_butterfly', label: 'Iron Butterfly' },
+  { value: 'calendar_spread', label: 'Calendar Spread' },
   { value: 'long_call_vertical', label: 'Long Call Vertical' },
 ]
 
@@ -119,6 +121,7 @@ const DEFAULT_PARAMS: BacktestParams = {
   dte_min: 21,
   dte_max: 45,
   ivr_threshold: 30,
+  ivr_max: null,
   profit_close_pct: 0.50,
   contracts: 1,
   spread_width_strikes: 5,
@@ -337,7 +340,11 @@ export function Backtest() {
             </label>
             <select
               value={params.strategy}
-              onChange={(e) => set('strategy', e.target.value)}
+              onChange={(e) => {
+                const s = e.target.value
+                if (s === 'calendar_spread') setParams((p) => ({ ...p, strategy: s, ivr_max: 50 }))
+                else setParams((p) => ({ ...p, strategy: s }))
+              }}
               className="w-full rounded px-2 py-1.5 text-sm"
               style={{
                 backgroundColor: 'var(--bg-secondary)',
@@ -454,7 +461,27 @@ export function Backtest() {
             />
           </div>
 
-          {/* TODO: surface ivr_max alongside ivr_threshold when calendar_spread lands (Prompt 5). */}
+          {/* Max IV Rank (optional upper bound — required for calendar_spread) */}
+          <div className="space-y-1">
+            <label className="text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>
+              Max IV Rank to Enter (%) <span style={{ color: 'var(--text-tertiary)', fontWeight: 400 }}>(optional)</span>
+            </label>
+            <input
+              type="number" min={0} max={100}
+              value={params.ivr_max ?? ''}
+              placeholder="none"
+              onChange={(e) => {
+                const v = e.target.value
+                set('ivr_max', v === '' ? null : parseFloat(v))
+              }}
+              className="w-full rounded px-2 py-1.5 text-sm"
+              style={{
+                backgroundColor: 'var(--bg-secondary)',
+                border: '1px solid var(--border)',
+                color: 'var(--text-primary)',
+              }}
+            />
+          </div>
 
           {/* Profit close % */}
           <div className="space-y-1">
