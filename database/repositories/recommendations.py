@@ -26,47 +26,46 @@ class RecommendationRepository:
     # here and confirm @db_retry() coverage.
 
     @db_retry()
-    def insert_batch(self, recommendations: list[dict]) -> int:
+    def insert_batch(self, recommendations: list[dict]) -> list[int]:
         """Insert multiple recommendations in a single transaction.
 
         Each dict must have: generated_at, watchlist_name, symbol, action,
         score, reasoning, data_confidence.
         Optional: sub_scores (dict or None), operator_decision, operator_decided_at.
 
-        Returns count inserted.
+        Returns list of inserted recommendation_ids in input order.
         """
         if not recommendations:
-            return 0
+            return []
 
-        rows = []
+        ids: list[int] = []
         for r in recommendations:
             sub = r.get("sub_scores")
             sub_json = json.dumps(sub, default=str) if isinstance(sub, dict) else None
-            rows.append((
-                r["generated_at"],
-                r["watchlist_name"],
-                r["symbol"],
-                r["action"],
-                float(r["score"]),
-                r["reasoning"],
-                r["data_confidence"],
-                r.get("operator_decision"),
-                r.get("operator_decided_at"),
-                sub_json,
-            ))
-
-        self._conn.executemany(
-            """
-            INSERT INTO watchlist_recommendations (
-                generated_at, watchlist_name, symbol, action,
-                score, reasoning, data_confidence,
-                operator_decision, operator_decided_at, sub_scores_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            rows,
-        )
+            cursor = self._conn.execute(
+                """
+                INSERT INTO watchlist_recommendations (
+                    generated_at, watchlist_name, symbol, action,
+                    score, reasoning, data_confidence,
+                    operator_decision, operator_decided_at, sub_scores_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    r["generated_at"],
+                    r["watchlist_name"],
+                    r["symbol"],
+                    r["action"],
+                    float(r["score"]),
+                    r["reasoning"],
+                    r["data_confidence"],
+                    r.get("operator_decision"),
+                    r.get("operator_decided_at"),
+                    sub_json,
+                ),
+            )
+            ids.append(cursor.lastrowid)
         self._conn.commit()
-        return len(rows)
+        return ids
 
     @db_retry()
     def record_decision(
