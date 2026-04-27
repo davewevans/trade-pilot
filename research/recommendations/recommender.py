@@ -335,21 +335,29 @@ class WatchlistRecommender:
 
         # ── Score current members ──────────────────────────────────────────
 
+        _conf_rank = {"none": 0, "low": 1, "high": 2}
+        _rank_conf = {0: "none", 1: "low", 2: "high"}
+
         member_scores: list[dict] = []
         for sym in current_members:
             sym = sym.upper()
             # Average score across all strategy_types for this watchlist
             scores = []
             combined_sub: dict[str, Any] = {}
+            conf_ranks: list[int] = []
             for strat in strategy_types:
-                score, sub, _ = self._score_candidate(sym, strat, all_members, is_incumbent=True)
+                score, sub, data_conf = self._score_candidate(sym, strat, all_members, is_incumbent=True)
                 scores.append(score)
                 # Merge sub_scores (last strategy wins for shared keys; good enough)
                 combined_sub.update(sub)
+                conf_ranks.append(_conf_rank.get(data_conf, 0))
 
             avg_score = sum(scores) / len(scores) if scores else 0.0
             member_bonus = round(avg_score + _INCUMBENT_BONUS, 3)
             combined_sub["incumbent_bonus"] = _INCUMBENT_BONUS
+
+            # Aggregate confidence: use minimum across strategies
+            agg_confidence = _rank_conf[min(conf_ranks)] if conf_ranks else "none"
 
             # Weeks observed (use first strategy type as proxy)
             weeks = self._weeks_observed(sym, strategy_types[0]) if strategy_types else 0
@@ -359,6 +367,7 @@ class WatchlistRecommender:
                 "score": member_bonus,
                 "sub_scores": combined_sub,
                 "weeks_observed": weeks,
+                "data_confidence": agg_confidence,
             })
 
         # ── Score add candidates ───────────────────────────────────────────
@@ -469,6 +478,7 @@ class WatchlistRecommender:
                     "symbol": sym,
                     "score": score,
                     "reasoning": reasoning,
+                    "data_confidence": m.get("data_confidence", "none"),
                     "sub_scores": sub,
                 })
 
