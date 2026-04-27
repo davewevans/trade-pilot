@@ -183,15 +183,15 @@ function RecRow({
         {item.reasoning}
         <SubScoreExpander sub={item.sub_scores} />
       </td>
-      <td style={{ padding: '8px 6px', width: 240 }}>
+      <td style={{ padding: '8px 6px', width: 180 }}>
         <span style={{ display: 'inline-flex', gap: 4 }}>
-          {(['accepted', 'rejected', undefined] as const).map((opt) => {
-            const label = opt === undefined ? 'Undecided' : opt === 'accepted' ? 'Accept' : 'Reject'
+          {(['accepted', 'rejected'] as const).map((opt) => {
+            const label = opt === 'accepted' ? 'Accept' : 'Reject'
             const active = decision === opt
             return (
               <button
                 key={label}
-                onClick={() => onDecide(item.recommendation_id, opt)}
+                onClick={() => onDecide(item.recommendation_id, active ? undefined : opt)}
                 style={{
                   fontSize: 11,
                   padding: '3px 8px',
@@ -202,9 +202,7 @@ function RecRow({
                   backgroundColor: active
                     ? opt === 'accepted'
                       ? '#16a34a'
-                      : opt === 'rejected'
-                      ? '#dc2626'
-                      : 'var(--accent)'
+                      : '#dc2626'
                     : 'var(--bg-secondary)',
                   color: active ? '#fff' : 'var(--text-secondary)',
                 }}
@@ -649,6 +647,25 @@ export function Recommendations() {
             <StalenessBadge last_updated={lastRun.most_recent_recommendation} label="recommendations" />
           )}
         </div>
+      </div>
+
+      {/* Legend */}
+      <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 16 }}>
+        {([
+          { label: 'ADD', color: '#22c55e', desc: 'Not on watchlist — recommended to add' },
+          { label: 'REMOVE', color: '#ef4444', desc: 'On watchlist — recommended to remove' },
+          { label: 'HOLD', color: '#6b7280', desc: 'On watchlist — no change needed' },
+          { label: 'SKIP', color: '#6b7280', desc: 'Considered but not recommended' },
+        ] as const).map(({ label, color, desc }) => (
+          <span key={label} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--text-muted)' }}>
+            <span style={{
+              fontSize: 10, padding: '1px 5px', borderRadius: 4, fontWeight: 700,
+              backgroundColor: `color-mix(in srgb, ${color} 20%, var(--bg-card))`,
+              color,
+            }}>{label}</span>
+            {desc}
+          </span>
+        ))}
       </div>
 
       {/* Watchlist sections */}
