@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.13.2] - 2026-04-27
+
+### Fixed
+- **Wheel buying-power context mismatch (2026-04-27)**: `context_builder.build()` was passing
+  Reg T margin BP (`buying_power` ≈ 2× cash) to Claude for wheel-family strategies, while
+  `strategies/guardrails.py` correctly validates CSP collateral against `options_buying_power`
+  (cash-equivalent). Claude sized against the wrong number, producing strike recommendations
+  the guardrail then rejected. For `strategy_name="wheel"` and `strategy_name="turnover_wheel"`,
+  `context["account"]["buying_power"]` is now overridden with `options_buying_power` before
+  Claude sees the context. Spread strategies are unchanged — their max-loss caps are
+  collateralized by margin, not strike cost, so margin BP is the correct binding constraint.
+- **Latent crash in `_fetch_account` when broker returns explicit null for
+  `options_buying_power`**: `float(acct.get("options_buying_power", 0))` raises `TypeError`
+  if the key is present with value `None` (the default only fires when the key is absent).
+  Fixed to preserve `None` semantically; the buying-power override guard then correctly
+  skips the override rather than crashing. Would have surfaced as an intermittent failure
+  during Alpaca partial outages returning explicit nulls.
+
 ## [1.13.1] - 2026-04-26
 
 ### Changed
