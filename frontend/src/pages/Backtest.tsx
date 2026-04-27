@@ -454,6 +454,8 @@ export function Backtest() {
             />
           </div>
 
+          {/* TODO: surface ivr_max alongside ivr_threshold when calendar_spread lands (Prompt 5). */}
+
           {/* Profit close % */}
           <div className="space-y-1">
             <label className="text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>

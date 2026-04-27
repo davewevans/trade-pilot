@@ -250,6 +250,7 @@ class BacktestSweep:
                         dte_min=params_defaults.get("dte_min", 21),
                         dte_max=params_defaults.get("dte_max", 35),
                         ivr_threshold=params_defaults.get("ivr_threshold", 30.0),
+                        ivr_max=params_defaults.get("ivr_max"),
                     )
                     result = self._engine.run(params)
 

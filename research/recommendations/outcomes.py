@@ -197,6 +197,7 @@ class OutcomeComputer:
             "dte_min": params_defaults.get("dte_min", 21),
             "dte_max": params_defaults.get("dte_max", 35),
             "ivr_threshold": params_defaults.get("ivr_threshold", 30.0),
+            "ivr_max": params_defaults.get("ivr_max"),
             "strategy_params_version": _strategy_params_version(),
         }
 
@@ -217,6 +218,7 @@ class OutcomeComputer:
                 dte_min=proxy_params["dte_min"],
                 dte_max=proxy_params["dte_max"],
                 ivr_threshold=proxy_params["ivr_threshold"],
+                ivr_max=proxy_params["ivr_max"],
             )
             result = self._engine.run(params)
         except Exception:

@@ -1795,6 +1795,7 @@ def _run_backtest_job(job_id: str, params_dict: dict) -> None:
             dte_min=int(params_dict.get("dte_min", 21)),
             dte_max=int(params_dict.get("dte_max", 45)),
             ivr_threshold=float(params_dict.get("ivr_threshold", 30.0)),
+            ivr_max=(float(params_dict["ivr_max"]) if params_dict.get("ivr_max") is not None else None),
             profit_close_pct=float(params_dict.get("profit_close_pct", 0.50)),
             contracts=int(params_dict.get("contracts", 1)),
             spread_width_strikes=int(params_dict.get("spread_width_strikes", 5)),

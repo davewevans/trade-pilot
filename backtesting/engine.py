@@ -63,6 +63,13 @@ _STRATEGY_LEG_COUNTS: dict[str, int] = {
 _ORATS_SLIPPAGE_BY_LEGS: dict[int, float] = {1: 0.75, 2: 0.66, 4: 0.53}
 
 
+# IV rank gating semantics:
+#   - ivr_threshold: minimum (entry skipped if iv_rank < ivr_threshold).
+#     Defaults to 30.0 — every existing strategy is "want IVR at least X".
+#   - ivr_max: optional maximum (entry skipped if iv_rank > ivr_max).
+#     Used only by strategies that prefer LOW IV (calendar_spread).
+#     If None, no upper bound is enforced.
+#   - Both can be set together to enforce a band.
 @dataclass
 class BacktestParams:
     strategy: str = "bull_put_spread"
@@ -73,6 +80,7 @@ class BacktestParams:
     dte_min: int = 21
     dte_max: int = 45
     ivr_threshold: float = 30.0
+    ivr_max: Optional[float] = None
     profit_close_pct: float = 0.50
     contracts: int = 1
     # Spread width in strike units (for bull/bear/condor)
@@ -343,7 +351,11 @@ class BacktestEngine:
                     continue
 
                 ivr = summary.get("iv_rank_1y")
-                if ivr is None or ivr < params.ivr_threshold:
+                if ivr is None:
+                    continue
+                if ivr < params.ivr_threshold:
+                    continue
+                if params.ivr_max is not None and ivr > params.ivr_max:
                     continue
 
                 pos = self._try_entry(params, symbol, trade_date, summary, regime, iv_env)
