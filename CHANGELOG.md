@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.13.3] - 2026-04-27
+
+### Fixed
+- **Recommendations page: all Accept/Reject buttons activating together**: `recommendation_id` was absent from the watchlist recommendations snapshot because the snapshot was written before DB insertion; all items had `recommendation_id: undefined`, causing every row to share the same key in the frontend `decisions` Map. `insert_batch` now returns the list of inserted IDs in input order; `persist` stamps each item's `recommendation_id` before writing the snapshot.
+- **Recommendations page: Undecided button always visually active by default**: the Undecided button's `active` condition was `decision === undefined`, which is true for every row in the initial state, making it appear permanently selected. Removed the Undecided button; Accept and Reject now toggle off on a second click to return to undecided.
+
+### Added
+- **Recommendations page legend**: explains ADD (not on watchlist — recommended to add), REMOVE (on watchlist — recommended to remove), HOLD (on watchlist — no change needed), and SKIP (considered but not recommended) action labels.
+
 ## [1.13.2] - 2026-04-27
 
 ### Fixed
