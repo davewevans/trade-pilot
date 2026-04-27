@@ -283,6 +283,93 @@ def test_data_health_sources_sorted_alphabetically(tmp_path):
     assert fred_idx < orats_idx < yf_idx, "sources must render alphabetically"
 
 
+# ── _section_cycle_summary tests ────────────────────────────────────────────
+
+
+def test_cycle_summary_no_cycles_at_all(tmp_path):
+    """Empty DB — both sub-sections show informative empty-state messages."""
+    db = _make_db(tmp_path)
+    result = _section_cycle_summary(TARGET_DATE, db)
+    assert "### Opened today" in result
+    assert "0 cycles opened today" in result
+    assert "see Decisions section" in result
+    assert "### Active cycles from prior days" in result
+    assert "No active cycles carried over" in result
+    assert "No cycles found for this date" not in result
+
+
+def test_cycle_summary_opened_today(tmp_path):
+    """Cycle opened on target_date appears in 'Opened today' sub-section."""
+    db = _make_db(tmp_path)
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "INSERT INTO cycles (cycle_id, strategy_type, underlying, opened_at, status) VALUES (?,?,?,?,?)",
+        ("c1", "wheel", "AAPL", f"{TARGET_DATE.isoformat()}T10:00:00", "ACTIVE"),
+    )
+    conn.commit()
+    conn.close()
+    result = _section_cycle_summary(TARGET_DATE, db)
+    assert "### Opened today" in result
+    assert "AAPL" in result
+    assert "0 cycles opened today" not in result
+    assert "### Active cycles from prior days" in result
+    assert "No active cycles carried over" in result
+
+
+def test_cycle_summary_active_from_prior_day(tmp_path):
+    """Active cycle from a prior date appears in 'Active cycles from prior days'."""
+    db = _make_db(tmp_path)
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "INSERT INTO cycles (cycle_id, strategy_type, underlying, opened_at, status) VALUES (?,?,?,?,?)",
+        ("c1", "wheel", "MSFT", "2026-04-22T10:00:00", "ACTIVE"),
+    )
+    conn.commit()
+    conn.close()
+    result = _section_cycle_summary(TARGET_DATE, db)
+    assert "### Opened today" in result
+    assert "0 cycles opened today" in result
+    assert "### Active cycles from prior days" in result
+    assert "MSFT" in result
+    assert "No active cycles carried over" not in result
+
+
+def test_cycle_summary_opened_today_and_active_prior(tmp_path):
+    """Both today's cycle and a prior active cycle populate their sub-sections."""
+    db = _make_db(tmp_path)
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "INSERT INTO cycles (cycle_id, strategy_type, underlying, opened_at, status) VALUES (?,?,?,?,?)",
+        ("c1", "wheel", "AAPL", f"{TARGET_DATE.isoformat()}T10:00:00", "ACTIVE"),
+    )
+    conn.execute(
+        "INSERT INTO cycles (cycle_id, strategy_type, underlying, opened_at, status) VALUES (?,?,?,?,?)",
+        ("c2", "wheel", "MSFT", "2026-04-22T10:00:00", "ACTIVE"),
+    )
+    conn.commit()
+    conn.close()
+    result = _section_cycle_summary(TARGET_DATE, db)
+    assert "AAPL" in result
+    assert "MSFT" in result
+    assert "0 cycles opened today" not in result
+    assert "No active cycles carried over" not in result
+
+
+def test_cycle_summary_closed_prior_not_shown(tmp_path):
+    """A CLOSED cycle from a prior date should NOT appear in active-prior sub-section."""
+    db = _make_db(tmp_path)
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "INSERT INTO cycles (cycle_id, strategy_type, underlying, opened_at, status, closed_at) VALUES (?,?,?,?,?,?)",
+        ("c1", "wheel", "SPY", "2026-04-22T10:00:00", "CLOSED", "2026-04-22T15:00:00"),
+    )
+    conn.commit()
+    conn.close()
+    result = _section_cycle_summary(TARGET_DATE, db)
+    assert "No active cycles carried over" in result
+    assert "SPY" not in result
+
+
 # ── integration test ──────────────────────────────────────────
 
 
