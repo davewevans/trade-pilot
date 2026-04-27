@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.13.2] - 2026-04-27
 
 ### Fixed
-- **Wheel buying-power context mismatch (2026-04-27)**: `context_builder.build()` was passing
+- **Wheel buying-power context mismatch**: `context_builder.build()` was passing
   Reg T margin BP (`buying_power` ≈ 2× cash) to Claude for wheel-family strategies, while
   `strategies/guardrails.py` correctly validates CSP collateral against `options_buying_power`
   (cash-equivalent). Claude sized against the wrong number, producing strike recommendations
@@ -24,6 +24,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Fixed to preserve `None` semantically; the buying-power override guard then correctly
   skips the override rather than crashing. Would have surfaced as an intermittent failure
   during Alpaca partial outages returning explicit nulls.
+- **`ApiLedger._insert` silent row drops under parallel context builds**: `_insert` was not
+  retrying on SQLite "database is locked" under the 8-thread `context_builder.build()` pool;
+  ~24 rows/cycle were silently dropped, distorting API quota tracking. Wrapped with
+  `@db_retry(max_attempts=5, base_delay=0.05)` from `database/db.py`.
+- **FRED VIX and Alpaca corp-actions falling back immediately on transient errors**: both
+  endpoints fell back to yfinance on the first failure, costing ~10s of wall time per Alpaca
+  timeout and resetting the #17 yfinance-removal soak window. Added 3-attempt exponential
+  backoff (1s/2s/4s) using `utils/retry.py::retry_on_transient` before the yfinance fallback.
+  Persistent failures still fall back as before.
+- **Daily bundle cycle-summary empty-state misleading**: `_section_cycle_summary` showed
+  "_No cycles found for this date._" implying a recording failure; the correct state after
+  100% SKIP/HOLD days is zero cycles by design. Now renders two sub-sections ("Opened today"
+  / "Active cycles from prior days") with empty-state messages that point to the Decisions
+  section. Also adds active cycles from prior dates that haven't yet been closed.
+
+### Changed
+- **Enhanced deep-evaluation logging for bear call and bull put spread strategies**: per-criterion
+  score (0.0–1.0), grade, and rationale for each of the 7 scored dimensions now logged at DEBUG
+  level during `_evaluate_entry_criteria`, making per-decision quality analysis tractable from
+  structured logs.
+
+### Added
+- **Structured log handler install diagnostic**: `install_structured_log_handler` now logs
+  `"Structured log handler installed: dir=... min_level=WARNING"` at INFO level on first install
+  and `"already installed at ..."` on re-entry, making KNOWN_ISSUES #1 diagnosable from Render
+  logs after the next redeploy.
+- **Scheduler boot-time schedule audit**: `register_jobs()` now logs pid, TZ env var, schedule
+  count, and one line per registered job at INFO level on every container start, making schedule
+  drift diagnosable from Render logs without code re-investigation.
 
 ## [1.13.1] - 2026-04-26
 
