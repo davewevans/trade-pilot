@@ -578,11 +578,23 @@ class WatchlistRecommender:
                     "sub_scores": item.get("sub_scores"),
                 })
 
-        inserted = repo.insert_batch(rows)
+        inserted_ids = repo.insert_batch(rows)
         logger.info(
             "Persisted %d recommendation rows (generated_at=%s)",
-            inserted, generated_at,
+            len(inserted_ids), generated_at,
         )
+
+        # Stamp recommendation_id back onto each item so the snapshot carries it
+        id_iter = iter(inserted_ids)
+        for wl_name in ("wheel", "iron_condor", "spreads"):
+            wl_data = results.get(wl_name)
+            if not wl_data:
+                continue
+            for action_key in ("add", "remove", "no_change"):
+                for item in wl_data.get(action_key, []):
+                    item["recommendation_id"] = next(id_iter)
+            for item in wl_data.get("considered_but_rejected", []):
+                item["recommendation_id"] = next(id_iter)
 
         # Write JSON snapshot for API consumption
         snapshot_path = self._settings.SNAPSHOTS_DIR / "watchlist_recommendations.json"
