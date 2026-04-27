@@ -5,10 +5,10 @@ section to CHANGELOG.md. Other modules read this via ``settings.VERSION``
 rather than importing this file directly.
 """
 
-VERSION = "1.13.2"
+VERSION = "1.13.3"
 VERSION_DATE = "2026-04-27"
 VERSION_NOTES = (
-    "Reliability fixes: SQLite retry on api_ledger writes, exponential backoff before "
-    "yfinance fallbacks for FRED VIX and Alpaca corp-actions, cycle-summary empty-state "
-    "UX correction, and boot-time diagnostic logging for structured-log handler and scheduler."
+    "Recommendations page fixes: per-row Accept/Reject now works correctly (recommendation_id "
+    "was missing from the snapshot, causing all buttons to activate together), removed the "
+    "always-active Undecided button, and added a legend explaining ADD/REMOVE/HOLD/SKIP labels."
 )
