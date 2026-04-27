@@ -161,7 +161,18 @@ def register_jobs() -> None:
     truth for the bot's schedule.  This function maps job names to their
     callables and wires them up; it should not contain any hardcoded times.
     """
+    import os
     from config import SCHEDULE
+
+    logger.info(
+        "Scheduler started: pid=%d tz=%s schedule_count=%d",
+        os.getpid(), os.environ.get("TZ", "system-default"), len(SCHEDULE),
+    )
+    for entry in SCHEDULE:
+        logger.info(
+            "Scheduled: %s at %s (%s)",
+            entry["job"], entry.get("time", "interval"), entry.get("tz", ET),
+        )
 
     _JOB_FN: dict[str, object] = {
         "pre_market": pre_market.run,
