@@ -7,7 +7,7 @@ Fixed" with the commit hash) or when new issues are surfaced.
 **This file is the canonical priority list — if you're debugging something
 and find it listed here, the team already knows about it.**
 
-Last updated: 2026-04-26
+Last updated: 2026-04-27
 
 ---
 
@@ -18,12 +18,19 @@ Last updated: 2026-04-26
 **#1 — Structured log capture committed but not writing files.**
 - Symptom: Daily bundle "Errors & warnings" section shows "_No structured
   log file found for this date._"
-- Likely causes: `STRUCTURED_LOG_CAPTURE_ENABLED` env var unset on Render,
-  or the handler isn't being installed in the scheduler process.
-- Investigation steps in the Friday-evening fix pack notes; check Render
-  env vars before assuming code bug.
+- Investigation (2026-04-27): original hypotheses ruled out. Env var
+  confirmed true on Render. Writer (`main.py`, `api/run.py`) and reader
+  (`api/server.py`) both use `settings.STRUCTURED_LOG_DIR` (defaults to
+  `/data/snapshots/logs`). Render persistent disk is mounted at `/data` —
+  path is covered. Wiring looks correct in both processes.
+- Most likely remaining cause: stale Render deploy (wiring shipped
+  2026-04-23; Render may not have redeployed since).
+- Added INFO diagnostic at handler install time (commit `422c4eb`). After
+  next redeploy, grep Render logs for `"Structured log handler installed:"`.
+  If the line doesn't appear, the handler isn't being reached; if it
+  appears with the right path, the issue is elsewhere.
 - Files involved: `utils/structured_log_handler.py`, `main.py`,
-  `scheduler.py`, `config.py`.
+  `api/run.py`, `config.py`.
 
 **#2 — Daily bundle data source health shows everything ✗ failed.**
 - Symptom: Bundle "Data source health" section reports every source as
@@ -33,12 +40,7 @@ Last updated: 2026-04-26
 - Cosmetic — does not affect trading.
 - File involved: `api/daily_bundle.py` (`_section_data_health`).
 
-**#3 — Daily bundle "no cycles found for this date" despite cycle running.**
-- Symptom: Bundle cycle-summary section is empty while decisions clearly
-  exist for the same date.
-- Likely cause: `market_open` job isn't writing rows to the `cycles`
-  SQLite table.
-- Files involved: `jobs/market_open.py`, `database/recorder.py`.
+**#3 — (moved to Recently Fixed — was a documentation bug, not a recorder bug)**
 
 **#4 — Daily bundle account list mixes accounts with strategy keys.**
 - Symptom: Bundle shows `iron_condor`, `wheel`, `spreads`, `patterns`
@@ -78,10 +80,13 @@ Last updated: 2026-04-26
 
 **#17 — yfinance package cleanup (post-Stage-6 follow-up).**
 - Status: queued. Requires 3+ trading days of production soak on Stage 6 first.
-- Pre-merge check: confirm production logs show zero `"yfinance ex-dividend fetch
-  failed"` or `"falling back to yfinance"` messages from `get_ex_dividend_date`
-  over the prior 3+ trading days. If the fallback HAS fired, investigate Alpaca
-  corp-actions reliability before removing.
+- Update (2026-04-27): added 3-attempt exponential backoff before yfinance
+  fallback for both FRED VIX and Alpaca corp-actions (commit `7797904`).
+  Transient failures that previously triggered fallback will now retry; the
+  soak clock should run more cleanly going forward.
+- Pre-merge check: confirm production logs show zero `"falling back to yfinance"`
+  messages from `get_ex_dividend_date` over the prior 3+ trading days. If the
+  fallback HAS fired, investigate Alpaca corp-actions reliability before removing.
 - Scope: remove `_get_ex_dividend_yfinance()` helper from `data/market_data.py`,
   remove `import yfinance as yf` line, remove `yfinance` from `requirements.txt`,
   add `data/market_data.py` to `SCOPE_LOCKED_FILES` in
@@ -156,6 +161,10 @@ Last updated: 2026-04-26
 (Move items here when resolved with the commit hash that fixed them.
 Trim entries older than 60 days during routine maintenance.)
 
+- **2026-04-27** — `ApiLedger._insert` silent row drops under parallel context builds. `_insert` was not retrying on SQLite "database is locked"; ~24 rows/cycle were silently dropped, distorting API quota tracking. Wrapped with `@db_retry(max_attempts=5, base_delay=0.05)`. Commit `f063a4a`.
+- **2026-04-27** — FRED VIX and Alpaca corp-actions falling back immediately on transient errors. Each transient failure cost ~10s of wall time (Alpaca timeout) and reset the #17 yfinance soak clock. Added 3-attempt exponential backoff (1s/2s/4s) before the yfinance fallback. Commit `7797904`.
+- **2026-04-27** — Daily bundle cycle-summary empty-state misleading (#3). Root cause hypothesis in this file was wrong: cycles are never written for SKIP/HOLD decisions by design, so zero cycles after 100% IDLE launch is correct. The actual bug was `_section_cycle_summary` showing "_No cycles found for this date._" which implied failure. Now renders two sub-sections ("Opened today" / "Active cycles from prior days") with accurate empty-state messages pointing to the Decisions section. Commit `26b74b9`.
+- **2026-04-27** — market_open "30-minute lag" was not a bug (#9). Scheduled time is `10:00 ET`; `14:00 UTC = 10:00 EDT` (UTC-4 in April). The bot ran exactly on schedule. `config.SCHEDULE` comment explains the intentional 10:00 vs 09:30 choice (narrower bid-ask spreads after the opening rush). Added boot-time schedule audit logging. Commit `03d744e`.
 - **2026-04-26** — yfinance migration complete (issue #16 split). All six stages shipped: VIX → FRED VIXCLS, VIX term structure deleted (zero callers), ex-dividend → Alpaca Corporate Actions, fundamentals → Finnhub `/stock/profile2` + `/stock/metric` (decomposed, ETF-aware), earnings yfinance fallback deleted (Finnhub-only), backtester + CAHOLD → Alpaca + FRED. Zero new vendors introduced. One yfinance call site intentionally retained (ex-div defensive fallback) — see #17.
 - **2026-04-25** — IVR fix Part A: source `iv_rank_1y` from `/ivrank` instead of `/summaries`. Wheel was hard-skipping every cycle because `/summaries` does not return `ivRank1y` despite the parser reading `row.get("ivRank1y")`. Fixed in commit `a13cad5`.
 - **2026-04-25** — IVR fix Part B-1: route `atm_iv_m*` from `/cores` instead of `/summaries`. Same class of bug as Part A; `iv_overvalued_label` was always None as a downstream consequence. Fixed in commit `1732069`.
