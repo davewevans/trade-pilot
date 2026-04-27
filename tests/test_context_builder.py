@@ -155,3 +155,112 @@ def test_iv_overvalued_label_none_when_cores_missing():
     """When /cores has no data, iv_overvalued_label stays None (not UNKNOWN)."""
     ctx = _build_ctx(_SUMMARY, _IVRANK, {})
     assert ctx["volatility"]["iv_overvalued_label"] is None
+
+
+# ── Buying-power context fix (2026-04-27) ───────────────────────────────────
+# strategies/guardrails.py validates CSP collateral against options_buying_power
+# (cash-equivalent BP). These tests ensure context_builder surfaces that same
+# number under "buying_power" for wheel-family strategies, so Claude's sizing
+# math matches what the guardrail will enforce.
+
+def _make_bp_broker(buying_power, options_buying_power):
+    """Return a minimal broker mock with two buying-power fields set."""
+    broker = MagicMock()
+    broker.get_account.return_value = {
+        "id": "test",
+        "buying_power": buying_power,
+        "options_buying_power": options_buying_power,
+        "portfolio_value": 150_000.0,
+        "equity": 150_000.0,
+        "options_approved_level": 2,
+        "options_trading_level": 2,
+    }
+    broker.get_positions.return_value = []
+    broker.get_open_orders.return_value = []
+    broker.get_option_chain.return_value = {}
+    return broker
+
+
+def _build_bp_ctx(strategy_name, buying_power=200_000, options_buying_power=100_000):
+    """Build a context with configurable BP fields and the given strategy_name."""
+    from data.context_builder import ContextBuilder
+
+    broker = _make_bp_broker(buying_power, options_buying_power)
+
+    journal = MagicMock()
+    journal.format_for_prompt.return_value = "trade1"
+    journal.format_stats_for_prompt.return_value = "win_rate: 60%"
+    journal.format_skip_history_for_prompt.return_value = "0 skips"
+    journal.format_rejections_for_prompt.return_value = None
+
+    patches = [
+        patch("data.market_data.get_orats_summary", return_value=_SUMMARY),
+        patch("data.market_data.get_orats_iv_rank", return_value=_IVRANK),
+        patch("data.market_data.get_orats_cores", return_value={}),
+        patch("data.market_data.get_orats_monies", return_value=[]),
+        patch("data.market_data.get_stock_technicals", return_value={"current_price": 175.0}),
+        patch("data.market_data.get_company_profile", return_value={}),
+        patch("data.market_data.get_vix", return_value=18.5),
+        patch("data.market_data.get_fear_greed_index", return_value={"score": 60, "rating": "greed"}),
+        patch("data.market_data.get_risk_free_rate", return_value=0.04),
+        patch("data.market_data.get_finnhub_earnings_history", return_value=[]),
+        patch("data.market_data.get_finnhub_analyst_data", return_value={}),
+        patch("data.market_data.get_finnhub_news_sentiment", return_value=None),
+        patch("data.market_data.get_earnings_calendar", return_value={}),
+        patch("data.market_data.get_ex_dividend_date", return_value={}),
+        patch("data.context_builder._fetch_news", return_value=[]),
+    ]
+    for p in patches:
+        p.start()
+    try:
+        with patch.object(
+            ContextBuilder, "_load_portfolio_patterns",
+            return_value={"top_symbols": ["AAPL"], "win_rate_30d": 0.60},
+        ):
+            builder = ContextBuilder(broker=broker, journal=journal)
+            ctx = builder.build("AAPL", "IDLE", strategy_name=strategy_name)
+    finally:
+        for p in patches:
+            try:
+                p.stop()
+            except Exception:
+                pass
+    return ctx
+
+
+def test_wheel_buying_power_overridden_with_options_bp():
+    """wheel: buying_power in context must equal options_buying_power (cash-binding number).
+
+    Before 2026-04-27 fix, buying_power surfaced Reg-T margin BP (~2× cash),
+    while guardrails enforced options_buying_power. Claude reasoned with the
+    wrong number, causing CSP recommendations that the guardrail then rejected.
+    """
+    ctx = _build_bp_ctx("wheel", buying_power=200_000, options_buying_power=100_000)
+    assert ctx["account"]["buying_power"] == 100_000.0
+
+
+def test_turnover_wheel_buying_power_overridden_with_options_bp():
+    """turnover_wheel: same override must apply as for wheel."""
+    ctx = _build_bp_ctx("turnover_wheel", buying_power=200_000, options_buying_power=100_000)
+    assert ctx["account"]["buying_power"] == 100_000.0
+
+
+def test_spread_buying_power_not_overridden():
+    """bull_put_spread (and spread strategies generally): margin BP must NOT be overridden.
+
+    Spread max-loss caps are collateralized by margin, not strike cost, so
+    buying_power (margin BP) is the correct binding constraint.
+    """
+    ctx = _build_bp_ctx("bull_put_spread", buying_power=200_000, options_buying_power=100_000)
+    assert ctx["account"]["buying_power"] == 200_000.0
+
+
+def test_wheel_buying_power_fallback_when_options_bp_none():
+    """wheel: when options_buying_power is None, buying_power must not be overridden.
+
+    Defensive: if the broker omits or nulls options_buying_power (e.g. a
+    non-options-approved account), the original buying_power is preserved
+    rather than overwriting it with None or crashing.
+    """
+    ctx = _build_bp_ctx("wheel", buying_power=50_000, options_buying_power=None)
+    assert ctx["account"]["buying_power"] == 50_000.0

@@ -449,7 +449,21 @@ class ContextBuilder:
         }
 
         # ── Broker data (sequential — same client) ─────────
-        context["account"] = self._fetch_account()
+        account = self._fetch_account()
+        # For wheel-family strategies, the binding BP constraint is cash-equivalent
+        # (options_buying_power), not margin BP. strategies/guardrails.py validates
+        # sell_put against options_buying_power; surface the same number to Claude
+        # under the "buying_power" field so Claude's "10% of buying power" math
+        # matches what the guardrail will enforce.
+        #
+        # Spread strategies correctly use margin BP (their max_loss caps are
+        # collateralized by margin, not strike cost), so they are NOT overridden.
+        if account is not None and strategy_name in ("wheel", "turnover_wheel"):
+            obp = account.get("options_buying_power")
+            if obp is not None:
+                account = dict(account)  # shallow-copy — defensive against caller holding a reference
+                account["buying_power"] = obp
+        context["account"] = account
         context["positions"] = self._fetch_positions(symbol)
         context["open_orders"] = self._fetch_orders(symbol)
 
@@ -1872,9 +1886,10 @@ class ContextBuilder:
     def _fetch_account(self) -> dict | None:
         try:
             acct = self.broker.get_account()
+            _obp = acct.get("options_buying_power")
             result = {
                 "buying_power": float(acct.get("buying_power", 0)),
-                "options_buying_power": float(acct.get("options_buying_power", 0)),
+                "options_buying_power": float(_obp) if _obp is not None else None,
                 "options_approved_level": acct.get("options_approved_level"),
                 "options_trading_level": acct.get("options_trading_level"),
                 "portfolio_value": float(acct.get("portfolio_value", 0)),
