@@ -235,10 +235,11 @@ class TestGenerateForWatchlist:
 
 class TestGenerateAll:
 
-    def test_output_has_all_three_watchlists(self, tmp_path):
+    def test_output_has_all_four_watchlists(self, tmp_path):
         watchlist = {
             "wheel": ["AAPL"],
             "iron_condor": ["SPY"],
+            "iron_butterfly": ["QQQ"],
             "spreads": ["MSFT"],
         }
         (tmp_path / "watchlist.json").write_text(json.dumps(watchlist), encoding="utf-8")
@@ -253,6 +254,7 @@ class TestGenerateAll:
 
         assert "wheel" in result
         assert "iron_condor" in result
+        assert "iron_butterfly" in result
         assert "spreads" in result
         assert "generated_at" in result
 
@@ -263,7 +265,7 @@ class TestGenerateAll:
         r = _make_recommender(settings_obj=settings)
         result = r.generate_all()
 
-        for wl in ("wheel", "iron_condor", "spreads"):
+        for wl in ("wheel", "iron_condor", "iron_butterfly", "spreads"):
             assert wl in result
 
 

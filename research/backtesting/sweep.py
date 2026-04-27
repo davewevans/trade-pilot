@@ -53,6 +53,12 @@ _STRATEGY_PARAMS: dict[str, dict] = {
         "dte_max": 60,
         "ivr_threshold": 30.0,
     },
+    "iron_butterfly": {
+        "delta": 0.50,
+        "dte_min": 20,
+        "dte_max": 35,
+        "ivr_threshold": 50.0,
+    },
 }
 
 
@@ -134,6 +140,7 @@ class BacktestSweep:
             symbols = sorted(set(
                 list(settings.WATCHLIST)
                 + list(settings.IRON_CONDOR_WATCHLIST)
+                + list(settings.IRON_BUTTERFLY_WATCHLIST)
                 + list(settings.SPREAD_WATCHLIST)
             ))
         else:
@@ -145,6 +152,7 @@ class BacktestSweep:
                 symbols = sorted(set(
                     list(settings.WATCHLIST)
                     + list(settings.IRON_CONDOR_WATCHLIST)
+                    + list(settings.IRON_BUTTERFLY_WATCHLIST)
                     + list(settings.SPREAD_WATCHLIST)
                 ))
 
@@ -585,6 +593,7 @@ class BacktestSweep:
             full_list = sorted(set(
                 list(settings.WATCHLIST)
                 + list(settings.IRON_CONDOR_WATCHLIST)
+                + list(settings.IRON_BUTTERFLY_WATCHLIST)
                 + list(settings.SPREAD_WATCHLIST)
             ))
         else:
@@ -596,10 +605,13 @@ class BacktestSweep:
                 full_list = sorted(set(
                     list(settings.WATCHLIST)
                     + list(settings.IRON_CONDOR_WATCHLIST)
+                    + list(settings.IRON_BUTTERFLY_WATCHLIST)
                     + list(settings.SPREAD_WATCHLIST)
                 ))
 
         strategies = list(SUPPORTED_STRATEGIES)
+        if not settings.RESEARCH_SWEEP_IRON_BUTTERFLY_ENABLED:
+            strategies = [s for s in strategies if s != "iron_butterfly"]
 
         # ── 2. Reset sweep_progress if force_restart ──────────────────────
         if force_restart:

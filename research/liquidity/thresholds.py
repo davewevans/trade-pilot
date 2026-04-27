@@ -19,6 +19,7 @@ STRATEGY_TYPES: tuple[str, ...] = (
     "bear_call_spread",
     "iron_condor",
     "long_call_vertical",
+    "iron_butterfly",
 )
 
 
@@ -40,6 +41,10 @@ STRATEGY_STRIKE_RANGES: dict[str, StrikeRange] = {
     "bear_call_spread":   StrikeRange("call", 0.20, 0.30, 21, 35),
     "iron_condor":        StrikeRange("both", 0.15, 0.25, 20, 50),
     "long_call_vertical": StrikeRange("call", 0.45, 0.60, 30, 60),
+    # iron_butterfly: floors tighter than iron_condor because the narrower profit
+    # zone amplifies execution-cost sensitivity. Strike range targets ATM on both
+    # sides (delta ~0.50). Slippage factor matches iron_condor (4-leg).
+    "iron_butterfly":     StrikeRange("both", 0.40, 0.55, 20, 35),
 }
 
 
@@ -82,6 +87,7 @@ LIQUIDITY_FLOORS: dict[str, LiquidityFloor] = {
     "bear_call_spread":   LiquidityFloor(min_avg_oi=100, max_avg_ba_spread_pct=0.25),
     "iron_condor":        LiquidityFloor(min_avg_oi=150, max_avg_ba_spread_pct=0.20),
     "long_call_vertical": LiquidityFloor(min_avg_oi=100, max_avg_ba_spread_pct=0.30),
+    "iron_butterfly":     LiquidityFloor(min_avg_oi=200, max_avg_ba_spread_pct=0.18),
 }
 
 
@@ -96,6 +102,7 @@ SLIPPAGE_FACTOR_BY_STRATEGY: dict[str, float] = {
     "bear_call_spread":   0.65,
     "iron_condor":        0.56,
     "long_call_vertical": 0.65,
+    "iron_butterfly":     0.56,  # 4-leg, same as iron_condor
 }
 
 

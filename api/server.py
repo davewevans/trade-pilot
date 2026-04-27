@@ -2636,11 +2636,12 @@ async def research_recommendations_apply(request: Request):
 
         # Load current watchlist
         wl_path = DATA_DIR / "watchlist.json"
-        wl_data = _read_json(wl_path) or {"wheel": [], "iron_condor": [], "spreads": []}
+        wl_data = _read_json(wl_path) or {"wheel": [], "iron_condor": [], "iron_butterfly": [], "spreads": []}
         wheel = list(wl_data.get("wheel", []))
         iron_condor = list(wl_data.get("iron_condor", []))
+        iron_butterfly = list(wl_data.get("iron_butterfly", []))
         spreads = list(wl_data.get("spreads", []))
-        wl_map = {"wheel": wheel, "iron_condor": iron_condor, "spreads": spreads}
+        wl_map = {"wheel": wheel, "iron_condor": iron_condor, "iron_butterfly": iron_butterfly, "spreads": spreads}
 
         # Pre-validate: check remove would not drop below minimum
         for item in accepted_items:
@@ -2711,18 +2712,22 @@ async def research_recommendations_apply(request: Request):
         updated_wl = {
             "wheel": wl_map["wheel"],
             "iron_condor": wl_map["iron_condor"],
+            "iron_butterfly": wl_map["iron_butterfly"],
             "spreads": wl_map["spreads"],
+            "calendar_spread": wl_map.get("calendar_spread", []),
             "updated_at": now_iso,
         }
         wl_path.write_text(json.dumps(updated_wl, indent=2), encoding="utf-8")
 
         settings.WATCHLIST = wl_map["wheel"]
         settings.IRON_CONDOR_WATCHLIST = wl_map["iron_condor"]
+        settings.IRON_BUTTERFLY_WATCHLIST = wl_map["iron_butterfly"]
         settings.SPREAD_WATCHLIST = wl_map["spreads"]
 
         logger.info(
-            "Watchlist updated via recommendations: %d wheel, %d iron_condor, %d spreads",
-            len(wl_map["wheel"]), len(wl_map["iron_condor"]), len(wl_map["spreads"]),
+            "Watchlist updated via recommendations: %d wheel, %d iron_condor, %d iron_butterfly, %d spreads",
+            len(wl_map["wheel"]), len(wl_map["iron_condor"]),
+            len(wl_map["iron_butterfly"]), len(wl_map["spreads"]),
         )
 
         return {

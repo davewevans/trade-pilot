@@ -38,7 +38,9 @@ interface RecsResponse {
   watchlists: {
     wheel: WatchlistRecs
     iron_condor: WatchlistRecs
+    iron_butterfly: WatchlistRecs
     spreads: WatchlistRecs
+    calendar_spread: WatchlistRecs
   }
 }
 
@@ -267,7 +269,14 @@ function WatchlistSection({
   onDecide: (key: string, d: Decision | undefined) => void
 }) {
   const [open, setOpen] = useState(true)
-  const displayName = name === 'iron_condor' ? 'Iron Condor' : name.charAt(0).toUpperCase() + name.slice(1)
+  const DISPLAY_NAMES: Record<string, string> = {
+    wheel: 'Wheel',
+    iron_condor: 'Iron Condor',
+    iron_butterfly: 'Iron Butterfly',
+    spreads: 'Spreads',
+    calendar_spread: 'Calendar Spread',
+  }
+  const displayName = DISPLAY_NAMES[name] ?? (name.charAt(0).toUpperCase() + name.slice(1))
   const totalRecs = data.add.length + data.remove.length
 
   return (
@@ -691,7 +700,7 @@ export function Recommendations() {
       </div>
 
       {/* Watchlist sections */}
-      {(['wheel', 'iron_condor', 'spreads'] as const).map((key) => (
+      {(['wheel', 'iron_condor', 'iron_butterfly', 'spreads'] as const).map((key) => (
         <WatchlistSection
           key={key}
           name={key}
