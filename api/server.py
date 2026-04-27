@@ -2642,7 +2642,8 @@ async def research_recommendations_apply(request: Request):
         iron_condor = list(wl_data.get("iron_condor", []))
         iron_butterfly = list(wl_data.get("iron_butterfly", []))
         spreads = list(wl_data.get("spreads", []))
-        wl_map = {"wheel": wheel, "iron_condor": iron_condor, "iron_butterfly": iron_butterfly, "spreads": spreads}
+        calendar_spread = list(wl_data.get("calendar_spread", []))
+        wl_map = {"wheel": wheel, "iron_condor": iron_condor, "iron_butterfly": iron_butterfly, "spreads": spreads, "calendar_spread": calendar_spread}
 
         # Pre-validate: check remove would not drop below minimum
         for item in accepted_items:
@@ -2715,7 +2716,7 @@ async def research_recommendations_apply(request: Request):
             "iron_condor": wl_map["iron_condor"],
             "iron_butterfly": wl_map["iron_butterfly"],
             "spreads": wl_map["spreads"],
-            "calendar_spread": wl_map.get("calendar_spread", []),
+            "calendar_spread": wl_map["calendar_spread"],
             "updated_at": now_iso,
         }
         wl_path.write_text(json.dumps(updated_wl, indent=2), encoding="utf-8")
@@ -2724,11 +2725,13 @@ async def research_recommendations_apply(request: Request):
         settings.IRON_CONDOR_WATCHLIST = wl_map["iron_condor"]
         settings.IRON_BUTTERFLY_WATCHLIST = wl_map["iron_butterfly"]
         settings.SPREAD_WATCHLIST = wl_map["spreads"]
+        settings.CALENDAR_SPREAD_WATCHLIST = wl_map["calendar_spread"]
 
         logger.info(
-            "Watchlist updated via recommendations: %d wheel, %d iron_condor, %d iron_butterfly, %d spreads",
+            "Watchlist updated via recommendations: %d wheel, %d iron_condor, %d iron_butterfly, %d spreads, %d calendar_spread",
             len(wl_map["wheel"]), len(wl_map["iron_condor"]),
             len(wl_map["iron_butterfly"]), len(wl_map["spreads"]),
+            len(wl_map["calendar_spread"]),
         )
 
         return {

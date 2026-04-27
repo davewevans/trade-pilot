@@ -189,6 +189,13 @@ class Settings:
             os.getenv("RESEARCH_SWEEP_IRON_BUTTERFLY_ENABLED", "false").lower() == "true"
         )
 
+        # When false, calendar_spread is excluded from the weekly sweep even
+        # if SUPPORTED_STRATEGIES allows it. Stage activation after
+        # iron_butterfly is verified.
+        self.RESEARCH_SWEEP_CALENDAR_SPREAD_ENABLED: bool = (
+            os.getenv("RESEARCH_SWEEP_CALENDAR_SPREAD_ENABLED", "false").lower() == "true"
+        )
+
         # Research layer — watchlist recommendations
         self.RESEARCH_RECOMMENDATIONS_ENABLED: bool = (
             os.getenv("RESEARCH_RECOMMENDATIONS_ENABLED", "true").lower() == "true"

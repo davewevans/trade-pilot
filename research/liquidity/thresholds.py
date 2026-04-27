@@ -20,6 +20,7 @@ STRATEGY_TYPES: tuple[str, ...] = (
     "iron_condor",
     "long_call_vertical",
     "iron_butterfly",
+    "calendar_spread",
 )
 
 
@@ -45,6 +46,12 @@ STRATEGY_STRIKE_RANGES: dict[str, StrikeRange] = {
     # zone amplifies execution-cost sensitivity. Strike range targets ATM on both
     # sides (delta ~0.50). Slippage factor matches iron_condor (4-leg).
     "iron_butterfly":     StrikeRange("both", 0.40, 0.55, 20, 35),
+    # NOTE: calendar_spread liquidity is sampled on the short leg only. The long
+    # leg (50-90 DTE) typically has lower OI, but back-month liquidity correlates
+    # strongly with front-month for the same strike on liquid underlyings.
+    # Revisit if post-deployment data shows long-leg execution is the dominant
+    # cost driver.
+    "calendar_spread":    StrikeRange("call", 0.45, 0.55, 20, 35),
 }
 
 
@@ -88,6 +95,7 @@ LIQUIDITY_FLOORS: dict[str, LiquidityFloor] = {
     "iron_condor":        LiquidityFloor(min_avg_oi=150, max_avg_ba_spread_pct=0.20),
     "long_call_vertical": LiquidityFloor(min_avg_oi=100, max_avg_ba_spread_pct=0.30),
     "iron_butterfly":     LiquidityFloor(min_avg_oi=200, max_avg_ba_spread_pct=0.18),
+    "calendar_spread":    LiquidityFloor(min_avg_oi=150, max_avg_ba_spread_pct=0.20),
 }
 
 
@@ -103,6 +111,7 @@ SLIPPAGE_FACTOR_BY_STRATEGY: dict[str, float] = {
     "iron_condor":        0.56,
     "long_call_vertical": 0.65,
     "iron_butterfly":     0.56,  # 4-leg, same as iron_condor
+    "calendar_spread":    0.66,  # 2-leg, same as bull/bear put/call spread
 }
 
 

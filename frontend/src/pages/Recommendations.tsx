@@ -700,7 +700,7 @@ export function Recommendations() {
       </div>
 
       {/* Watchlist sections */}
-      {(['wheel', 'iron_condor', 'iron_butterfly', 'spreads'] as const).map((key) => (
+      {(['wheel', 'iron_condor', 'iron_butterfly', 'spreads', 'calendar_spread'] as const).map((key) => (
         <WatchlistSection
           key={key}
           name={key}

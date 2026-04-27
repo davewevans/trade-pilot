@@ -235,12 +235,13 @@ class TestGenerateForWatchlist:
 
 class TestGenerateAll:
 
-    def test_output_has_all_four_watchlists(self, tmp_path):
+    def test_output_has_all_five_watchlists(self, tmp_path):
         watchlist = {
             "wheel": ["AAPL"],
             "iron_condor": ["SPY"],
             "iron_butterfly": ["QQQ"],
             "spreads": ["MSFT"],
+            "calendar_spread": ["AMZN"],
         }
         (tmp_path / "watchlist.json").write_text(json.dumps(watchlist), encoding="utf-8")
 
@@ -256,6 +257,7 @@ class TestGenerateAll:
         assert "iron_condor" in result
         assert "iron_butterfly" in result
         assert "spreads" in result
+        assert "calendar_spread" in result
         assert "generated_at" in result
 
     def test_missing_watchlist_file_uses_empty_members(self, tmp_path):
@@ -265,7 +267,7 @@ class TestGenerateAll:
         r = _make_recommender(settings_obj=settings)
         result = r.generate_all()
 
-        for wl in ("wheel", "iron_condor", "iron_butterfly", "spreads"):
+        for wl in ("wheel", "iron_condor", "iron_butterfly", "spreads", "calendar_spread"):
             assert wl in result
 
 

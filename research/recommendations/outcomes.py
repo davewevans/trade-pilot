@@ -25,6 +25,7 @@ _WATCHLIST_STRATEGIES: dict[str, list[str]] = {
     "iron_condor": ["iron_condor"],
     "iron_butterfly": ["iron_butterfly"],
     "spreads": ["bull_put_spread", "bear_call_spread", "long_call_vertical"],
+    "calendar_spread": ["calendar_spread"],
 }
 
 
