@@ -160,19 +160,49 @@ class BullPutSpreadStrategy:
         bps_data = spread_candidates.get("bull_put_spread", {})
         best = bps_data.get("best_candidate")
         if not best:
+            logger.info(
+                "bull_put_spread_deep_reject",
+                extra={"symbol": context.get("symbol", "?"), "reason": "no_candidates"},
+            )
             return "No viable bull put spread candidates found", 0.0
 
         net_credit = best.get("net_credit", 0)
         spread_yield = best.get("spread_yield", 0)
         if spread_yield < 0.001:
+            logger.info(
+                "bull_put_spread_deep_reject",
+                extra={
+                    "symbol": context.get("symbol", "?"),
+                    "reason": "low_spread_yield",
+                    "spread_yield": spread_yield,
+                    "net_credit": net_credit,
+                },
+            )
             return (
                 f"Spread yield {spread_yield:.4f} < 0.001 minimum "
                 f"(credit ${net_credit} too thin for stock price)",
                 0.0,
             )
         if net_credit < 0.30:
+            logger.info(
+                "bull_put_spread_deep_reject",
+                extra={
+                    "symbol": context.get("symbol", "?"),
+                    "reason": "low_net_credit",
+                    "net_credit": net_credit,
+                },
+            )
             return f"Absolute credit ${net_credit} < $0.30 minimum", 0.0
         if best.get("credit_to_width_ratio", 0) < 0.15:
+            logger.info(
+                "bull_put_spread_deep_reject",
+                extra={
+                    "symbol": context.get("symbol", "?"),
+                    "reason": "low_credit_to_width",
+                    "credit_to_width_ratio": best.get("credit_to_width_ratio", 0),
+                    "net_credit": net_credit,
+                },
+            )
             return (
                 f"Credit/width ratio {best.get('credit_to_width_ratio', 0)} < 0.15",
                 0.0,
@@ -236,6 +266,16 @@ class BullPutSpreadStrategy:
         research_meta["combined_multiplier"] = combined_multiplier
         research_meta["final_score"] = final_score
 
+        logger.info(
+            "bull_put_spread_deep_accept",
+            extra={
+                "symbol": context.get("symbol", "?"),
+                "net_credit": best.get("net_credit"),
+                "credit_to_width_ratio": best.get("credit_to_width_ratio"),
+                "spread_yield": best.get("spread_yield"),
+                "final_score": final_score,
+            },
+        )
         return None, final_score
 
     def _check_entry_conditions(self, context: dict) -> str | None:
