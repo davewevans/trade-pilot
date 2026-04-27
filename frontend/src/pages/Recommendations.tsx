@@ -700,15 +700,17 @@ export function Recommendations() {
       </div>
 
       {/* Watchlist sections */}
-      {(['wheel', 'iron_condor', 'iron_butterfly', 'spreads', 'calendar_spread'] as const).map((key) => (
-        <WatchlistSection
-          key={key}
-          name={key}
-          data={data.watchlists[key]}
-          decisions={decisions}
-          onDecide={handleDecide}
-        />
-      ))}
+      {(['wheel', 'iron_condor', 'iron_butterfly', 'spreads', 'calendar_spread'] as const).map((key) =>
+        data.watchlists[key] ? (
+          <WatchlistSection
+            key={key}
+            name={key}
+            data={data.watchlists[key]}
+            decisions={decisions}
+            onDecide={handleDecide}
+          />
+        ) : null
+      )}
 
       {/* Footer apply button */}
       <div
