@@ -16,7 +16,8 @@ interface SubScores {
 }
 
 interface RecItem {
-  recommendation_id: number
+  recommendation_id?: number
+  _key?: string
   symbol: string
   score: number
   reasoning: string
@@ -141,7 +142,7 @@ function RecRow({
 }: {
   item: RecItem
   decision: Decision | undefined
-  onDecide: (id: number, d: Decision | undefined) => void
+  onDecide: (key: string, d: Decision | undefined) => void
   actionLabel: string
 }) {
   return (
@@ -191,7 +192,7 @@ function RecRow({
             return (
               <button
                 key={label}
-                onClick={() => onDecide(item.recommendation_id, active ? undefined : opt)}
+                onClick={() => onDecide(item._key!, active ? undefined : opt)}
                 style={{
                   fontSize: 11,
                   padding: '3px 8px',
@@ -262,8 +263,8 @@ function WatchlistSection({
 }: {
   name: string
   data: WatchlistRecs
-  decisions: Map<number, Decision>
-  onDecide: (id: number, d: Decision | undefined) => void
+  decisions: Map<string, Decision>
+  onDecide: (key: string, d: Decision | undefined) => void
 }) {
   const [open, setOpen] = useState(true)
   const displayName = name === 'iron_condor' ? 'Iron Condor' : name.charAt(0).toUpperCase() + name.slice(1)
@@ -361,8 +362,8 @@ function RecTable({
   actionLabel,
 }: {
   items: RecItem[]
-  decisions: Map<number, Decision>
-  onDecide: (id: number, d: Decision | undefined) => void
+  decisions: Map<string, Decision>
+  onDecide: (key: string, d: Decision | undefined) => void
   actionLabel: string
 }) {
   return (
@@ -390,9 +391,9 @@ function RecTable({
       <tbody>
         {items.map((item) => (
           <RecRow
-            key={item.recommendation_id}
+            key={item._key}
             item={item}
-            decision={decisions.get(item.recommendation_id)}
+            decision={decisions.get(item._key!)}
             onDecide={onDecide}
             actionLabel={actionLabel}
           />
@@ -411,15 +412,15 @@ function ConfirmModal({
   onCancel,
   loading,
 }: {
-  decisions: Map<number, Decision>
+  decisions: Map<string, Decision>
   allRecs: RecItem[]
   onConfirm: () => void
   onCancel: () => void
   loading: boolean
 }) {
-  const recById = new Map(allRecs.map((r) => [r.recommendation_id, r]))
-  const accepted = [...decisions.entries()].filter(([, d]) => d === 'accepted').map(([id]) => recById.get(id)).filter(Boolean) as RecItem[]
-  const rejected = [...decisions.entries()].filter(([, d]) => d === 'rejected').map(([id]) => recById.get(id)).filter(Boolean) as RecItem[]
+  const recByKey = new Map(allRecs.map((r) => [r._key!, r]))
+  const accepted = [...decisions.entries()].filter(([, d]) => d === 'accepted').map(([key]) => recByKey.get(key)).filter(Boolean) as RecItem[]
+  const rejected = [...decisions.entries()].filter(([, d]) => d === 'rejected').map(([key]) => recByKey.get(key)).filter(Boolean) as RecItem[]
   return (
     <div
       style={{
@@ -453,7 +454,7 @@ function ConfirmModal({
               Accepted
             </div>
             {accepted.map((r) => (
-              <div key={r.recommendation_id} style={{ fontSize: 13, color: 'var(--text-primary)', padding: '2px 0' }}>
+              <div key={r._key} style={{ fontSize: 13, color: 'var(--text-primary)', padding: '2px 0' }}>
                 <strong>{r.symbol}</strong>{' '}
                 <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{r.reasoning}</span>
               </div>
@@ -467,7 +468,7 @@ function ConfirmModal({
               Rejected
             </div>
             {rejected.map((r) => (
-              <div key={r.recommendation_id} style={{ fontSize: 13, color: 'var(--text-muted)', padding: '2px 0' }}>
+              <div key={r._key} style={{ fontSize: 13, color: 'var(--text-muted)', padding: '2px 0' }}>
                 {r.symbol}
               </div>
             ))}
@@ -526,7 +527,7 @@ export function Recommendations() {
   const [data, setData] = useState<RecsResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [decisions, setDecisions] = useState<Map<number, Decision>>(new Map())
+  const [decisions, setDecisions] = useState<Map<string, Decision>>(new Map())
   const [showModal, setShowModal] = useState(false)
   const [applying, setApplying] = useState(false)
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null)
@@ -543,15 +544,31 @@ export function Recommendations() {
         if (!r.ok) throw new Error('Failed to load recommendations')
         return r.json()
       })
-      .then((d: RecsResponse) => { setData(d); setLoading(false) })
+      .then((d: RecsResponse) => {
+          // Stamp a stable unique key on every item. Use recommendation_id when
+          // present (backend fix); fall back to a composite so the UI works even
+          // when the snapshot pre-dates the backend fix.
+          let idx = 0
+          for (const wl of Object.values(d.watchlists)) {
+            for (const group of [wl.add, wl.remove, wl.no_change, wl.considered_but_rejected]) {
+              for (const item of group) {
+                item._key = item.recommendation_id != null
+                  ? String(item.recommendation_id)
+                  : `_${idx++}`
+              }
+            }
+          }
+          setData(d)
+          setLoading(false)
+        })
       .catch((e) => { setError(e.message); setLoading(false) })
   }, [])
 
-  const handleDecide = (id: number, d: Decision | undefined) => {
+  const handleDecide = (key: string, d: Decision | undefined) => {
     setDecisions((prev) => {
       const next = new Map(prev)
-      if (d === undefined) next.delete(id)
-      else next.set(id, d)
+      if (d === undefined) next.delete(key)
+      else next.set(key, d)
       return next
     })
   }
@@ -570,12 +587,17 @@ export function Recommendations() {
 
   const handleApply = async () => {
     setApplying(true)
+    const recByKey = new Map(allRecs.map((r) => [r._key!, r]))
     const accepted = [...decisions.entries()]
       .filter(([, d]) => d === 'accepted')
-      .map(([id]) => ({ recommendation_id: id }))
+      .map(([key]) => recByKey.get(key))
+      .filter((r): r is RecItem => r?.recommendation_id != null)
+      .map((r) => ({ recommendation_id: r.recommendation_id }))
     const rejected = [...decisions.entries()]
       .filter(([, d]) => d === 'rejected')
-      .map(([id]) => ({ recommendation_id: id }))
+      .map(([key]) => recByKey.get(key))
+      .filter((r): r is RecItem => r?.recommendation_id != null)
+      .map((r) => ({ recommendation_id: r.recommendation_id }))
 
     try {
       const r = await fetch('/api/research/recommendations/apply', {
