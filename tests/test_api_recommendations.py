@@ -91,8 +91,22 @@ def _seed_recs_snapshot(snap_dir, generated_at="2026-04-20T10:00:00"):
             "no_change": [],
             "considered_but_rejected": [],
         },
+        "iron_butterfly": {
+            "watchlist_name": "iron_butterfly",
+            "add": [],
+            "remove": [],
+            "no_change": [],
+            "considered_but_rejected": [],
+        },
         "spreads": {
             "watchlist_name": "spreads",
+            "add": [],
+            "remove": [],
+            "no_change": [],
+            "considered_but_rejected": [],
+        },
+        "calendar_spread": {
+            "watchlist_name": "calendar_spread",
             "add": [],
             "remove": [],
             "no_change": [],
@@ -166,7 +180,7 @@ class TestGetRecommendations:
         body = r.json()
         assert "generated_at" in body
         assert "watchlists" in body
-        for key in ("wheel", "iron_condor", "spreads"):
+        for key in ("wheel", "iron_condor", "iron_butterfly", "spreads", "calendar_spread"):
             assert key in body["watchlists"]
             wl = body["watchlists"][key]
             assert "current_members" in wl

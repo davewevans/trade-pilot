@@ -5,10 +5,10 @@ section to CHANGELOG.md. Other modules read this via ``settings.VERSION``
 rather than importing this file directly.
 """
 
-VERSION = "1.13.3"
+VERSION = "1.14.0"
 VERSION_DATE = "2026-04-27"
 VERSION_NOTES = (
-    "Recommendations page fixes: per-row Accept/Reject now works correctly (recommendation_id "
-    "was missing from the snapshot, causing all buttons to activate together), removed the "
-    "always-active Undecided button, and added a legend explaining ADD/REMOVE/HOLD/SKIP labels."
+    "Adds calendar_spread and iron_butterfly to the backtest engine and full research pipeline, "
+    "including watchlist recommender wiring, liquidity thresholds, sweep params, and kill-switch "
+    "flags (both default off for staged activation)."
 )

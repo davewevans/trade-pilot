@@ -1795,6 +1795,7 @@ def _run_backtest_job(job_id: str, params_dict: dict) -> None:
             dte_min=int(params_dict.get("dte_min", 21)),
             dte_max=int(params_dict.get("dte_max", 45)),
             ivr_threshold=float(params_dict.get("ivr_threshold", 30.0)),
+            ivr_max=(float(params_dict["ivr_max"]) if params_dict.get("ivr_max") is not None else None),
             profit_close_pct=float(params_dict.get("profit_close_pct", 0.50)),
             contracts=int(params_dict.get("contracts", 1)),
             spread_width_strikes=int(params_dict.get("spread_width_strikes", 5)),
@@ -2636,11 +2637,13 @@ async def research_recommendations_apply(request: Request):
 
         # Load current watchlist
         wl_path = DATA_DIR / "watchlist.json"
-        wl_data = _read_json(wl_path) or {"wheel": [], "iron_condor": [], "spreads": []}
+        wl_data = _read_json(wl_path) or {"wheel": [], "iron_condor": [], "iron_butterfly": [], "spreads": []}
         wheel = list(wl_data.get("wheel", []))
         iron_condor = list(wl_data.get("iron_condor", []))
+        iron_butterfly = list(wl_data.get("iron_butterfly", []))
         spreads = list(wl_data.get("spreads", []))
-        wl_map = {"wheel": wheel, "iron_condor": iron_condor, "spreads": spreads}
+        calendar_spread = list(wl_data.get("calendar_spread", []))
+        wl_map = {"wheel": wheel, "iron_condor": iron_condor, "iron_butterfly": iron_butterfly, "spreads": spreads, "calendar_spread": calendar_spread}
 
         # Pre-validate: check remove would not drop below minimum
         for item in accepted_items:
@@ -2711,18 +2714,24 @@ async def research_recommendations_apply(request: Request):
         updated_wl = {
             "wheel": wl_map["wheel"],
             "iron_condor": wl_map["iron_condor"],
+            "iron_butterfly": wl_map["iron_butterfly"],
             "spreads": wl_map["spreads"],
+            "calendar_spread": wl_map["calendar_spread"],
             "updated_at": now_iso,
         }
         wl_path.write_text(json.dumps(updated_wl, indent=2), encoding="utf-8")
 
         settings.WATCHLIST = wl_map["wheel"]
         settings.IRON_CONDOR_WATCHLIST = wl_map["iron_condor"]
+        settings.IRON_BUTTERFLY_WATCHLIST = wl_map["iron_butterfly"]
         settings.SPREAD_WATCHLIST = wl_map["spreads"]
+        settings.CALENDAR_SPREAD_WATCHLIST = wl_map["calendar_spread"]
 
         logger.info(
-            "Watchlist updated via recommendations: %d wheel, %d iron_condor, %d spreads",
-            len(wl_map["wheel"]), len(wl_map["iron_condor"]), len(wl_map["spreads"]),
+            "Watchlist updated via recommendations: %d wheel, %d iron_condor, %d iron_butterfly, %d spreads, %d calendar_spread",
+            len(wl_map["wheel"]), len(wl_map["iron_condor"]),
+            len(wl_map["iron_butterfly"]), len(wl_map["spreads"]),
+            len(wl_map["calendar_spread"]),
         )
 
         return {

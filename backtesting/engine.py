@@ -48,6 +48,8 @@ SUPPORTED_STRATEGIES = [
     "bear_call_spread",
     "iron_condor",
     "long_call_vertical",
+    "iron_butterfly",
+    "calendar_spread",
 ]
 
 # ORATS slippage model: leg count → percent of bid-ask width traveled past mid
@@ -57,10 +59,19 @@ _STRATEGY_LEG_COUNTS: dict[str, int] = {
     "bear_call_spread": 2,
     "long_call_vertical": 2,
     "iron_condor": 4,
+    "iron_butterfly": 4,
+    "calendar_spread": 2,
 }
 _ORATS_SLIPPAGE_BY_LEGS: dict[int, float] = {1: 0.75, 2: 0.66, 4: 0.53}
 
 
+# IV rank gating semantics:
+#   - ivr_threshold: minimum (entry skipped if iv_rank < ivr_threshold).
+#     Defaults to 30.0 — every existing strategy is "want IVR at least X".
+#   - ivr_max: optional maximum (entry skipped if iv_rank > ivr_max).
+#     Used only by strategies that prefer LOW IV (calendar_spread).
+#     If None, no upper bound is enforced.
+#   - Both can be set together to enforce a band.
 @dataclass
 class BacktestParams:
     strategy: str = "bull_put_spread"
@@ -71,6 +82,7 @@ class BacktestParams:
     dte_min: int = 21
     dte_max: int = 45
     ivr_threshold: float = 30.0
+    ivr_max: Optional[float] = None
     profit_close_pct: float = 0.50
     contracts: int = 1
     # Spread width in strike units (for bull/bear/condor)
@@ -154,6 +166,8 @@ class OpenPosition:
     historical_earnings_move: Optional[float] = None
     earnings_iv_premium: Optional[float] = None
     earnings_date: Optional[str] = None          # next earnings date at time of entry
+    # Calendar spread: the long leg uses a different expiration date than expiration_date
+    long_expiration_date: Optional[str] = None
 
 
 # ── Slippage helpers ──────────────────────────────────────────────────────────
@@ -201,7 +215,7 @@ def _apply_slippage(
 
     # For credit strategies: entry=sell, exit=buy
     # For long_call_vertical: entry=buy, exit=sell
-    is_debit_strategy = (strategy == "long_call_vertical")
+    is_debit_strategy = strategy in ("long_call_vertical", "calendar_spread")
     is_sell = (side == "entry") != is_debit_strategy  # XOR
 
     if is_sell:
@@ -341,7 +355,11 @@ class BacktestEngine:
                     continue
 
                 ivr = summary.get("iv_rank_1y")
-                if ivr is None or ivr < params.ivr_threshold:
+                if ivr is None:
+                    continue
+                if ivr < params.ivr_threshold:
+                    continue
+                if params.ivr_max is not None and ivr > params.ivr_max:
                     continue
 
                 pos = self._try_entry(params, symbol, trade_date, summary, regime, iv_env)
@@ -635,6 +653,196 @@ class BacktestEngine:
                 earnings_date=ern_date,
             )
 
+        elif strategy == "iron_butterfly":
+            # 4-leg credit: sell ATM put + ATM call, buy OTM put wing + OTM call wing
+            put_contracts = self._orats.get_strikes_on_date(
+                symbol, trade_date,
+                dte_min=params.dte_min, dte_max=params.dte_max,
+                delta_min=0.40, delta_max=0.65,
+                option_type="put",
+            )
+            if not put_contracts:
+                return None
+
+            atm_put = _pick_closest_delta(put_contracts, -0.50)
+            if atm_put is None or atm_put["mid_price"] is None:
+                return None
+
+            center_strike = atm_put["strike"]
+            expiry = atm_put["expiration_date"]
+
+            # Reject if center strike is more than 2% from spot
+            spot = summary.get("stockPrice")
+            if spot and abs(center_strike - spot) / spot > 0.02:
+                return None
+
+            call_contracts = self._orats.get_strikes_on_date(
+                symbol, trade_date,
+                dte_min=params.dte_min, dte_max=params.dte_max,
+                delta_min=0.35, delta_max=0.65,
+                option_type="call",
+            )
+            atm_call = _find_by_strike(call_contracts or [], center_strike, expiry)
+            if atm_call is None or atm_call.get("mid_price") is None:
+                return None
+
+            atm_put_mid = atm_put["mid_price"]
+            atm_call_mid = atm_call["mid_price"]
+
+            put_long_strike = round(center_strike - params.spread_width_strikes, 2)
+            call_long_strike = round(center_strike + params.spread_width_strikes, 2)
+
+            wing_puts = self._orats.get_strikes_on_date(
+                symbol, trade_date,
+                dte_min=params.dte_min, dte_max=params.dte_max,
+                delta_min=0.01, delta_max=0.40,
+                option_type="put",
+            )
+            wing_put = _find_by_strike(wing_puts or [], put_long_strike, expiry)
+            put_long_mid = wing_put["mid_price"] if (wing_put and wing_put.get("mid_price") is not None) else atm_put_mid * 0.30
+
+            wing_calls = self._orats.get_strikes_on_date(
+                symbol, trade_date,
+                dte_min=params.dte_min, dte_max=params.dte_max,
+                delta_min=0.01, delta_max=0.40,
+                option_type="call",
+            )
+            wing_call = _find_by_strike(wing_calls or [], call_long_strike, expiry)
+            call_long_mid = wing_call["mid_price"] if (wing_call and wing_call.get("mid_price") is not None) else atm_call_mid * 0.30
+
+            raw_credit = round((atm_put_mid + atm_call_mid) - (put_long_mid + call_long_mid), 4)
+            if raw_credit <= 0:
+                return None
+
+            net_credit = _apply_slippage(
+                raw_credit, strategy, "entry",
+                self._slippage_model, self._custom_slippage_pct,
+            )
+            if net_credit <= 1.00:
+                return None
+            self._total_slippage_cost += (raw_credit - net_credit) * params.contracts * 100
+
+            return OpenPosition(
+                symbol=symbol,
+                strategy=strategy,
+                entry_date=trade_date,
+                expiration_date=expiry,
+                short_strike=center_strike,
+                long_strike=put_long_strike,
+                short_strike_2=center_strike,
+                long_strike_2=call_long_strike,
+                option_type="put",
+                option_type_2="call",
+                entry_credit=net_credit,
+                entry_delta=abs(atm_put.get("delta") or 0.50),
+                entry_ivr=summary.get("iv_rank_1y", 0),
+                entry_regime=regime,
+                entry_iv_env=iv_env,
+                entry_dte=atm_put.get("dte") or params.dte_min,
+                contracts=params.contracts,
+                implied_earnings_move=ern_implied,
+                historical_earnings_move=ern_hist,
+                earnings_iv_premium=ern_premium,
+                earnings_date=ern_date,
+            )
+
+        elif strategy == "calendar_spread":
+            # 2-leg debit: sell ATM put short-term, buy ATM put longer-term, same strike
+            short_contracts = self._orats.get_strikes_on_date(
+                symbol, trade_date,
+                dte_min=params.dte_min, dte_max=params.dte_max,
+                delta_min=0.40, delta_max=0.60,
+                option_type="put",
+            )
+            if not short_contracts:
+                return None
+
+            short_leg = _pick_closest_delta(short_contracts, -0.50)
+            if short_leg is None or short_leg["mid_price"] is None:
+                return None
+
+            short_expiry = short_leg["expiration_date"]
+            atm_strike = short_leg["strike"]
+
+            try:
+                short_exp_dt = date.fromisoformat(short_expiry)
+            except ValueError:
+                return None
+
+            long_contracts = self._orats.get_strikes_on_date(
+                symbol, trade_date,
+                dte_min=50, dte_max=90,
+                delta_min=0.40, delta_max=0.60,
+                option_type="put",
+            )
+            if not long_contracts:
+                return None
+
+            # Find a long leg at the same strike with at least 30 days separation
+            long_leg = None
+            for c in long_contracts:
+                if c.get("strike") != atm_strike:
+                    continue
+                try:
+                    long_exp_dt = date.fromisoformat(c["expiration_date"])
+                except (ValueError, TypeError):
+                    continue
+                if (long_exp_dt - short_exp_dt).days >= 30:
+                    long_leg = c
+                    break
+
+            if long_leg is None or long_leg.get("mid_price") is None:
+                return None
+
+            long_expiry = long_leg["expiration_date"]
+
+            # Reject if earnings fall between the two expirations
+            if ern_date:
+                try:
+                    ern_dt = date.fromisoformat(ern_date)
+                    long_exp_dt = date.fromisoformat(long_expiry)
+                    if short_exp_dt < ern_dt <= long_exp_dt:
+                        return None
+                except (ValueError, TypeError):
+                    pass
+
+            raw_debit = round(long_leg["mid_price"] - short_leg["mid_price"], 4)
+            if raw_debit <= 0:
+                return None
+
+            net_debit = _apply_slippage(
+                raw_debit, strategy, "entry",
+                self._slippage_model, self._custom_slippage_pct,
+            )
+            if net_debit > 2.50:
+                return None
+            self._total_slippage_cost += (net_debit - raw_debit) * params.contracts * 100
+
+            return OpenPosition(
+                symbol=symbol,
+                strategy=strategy,
+                entry_date=trade_date,
+                expiration_date=short_expiry,
+                short_strike=atm_strike,
+                long_strike=None,
+                short_strike_2=None,
+                long_strike_2=None,
+                option_type="put",
+                option_type_2=None,
+                entry_credit=-net_debit,
+                entry_delta=abs(short_leg.get("delta") or 0.50),
+                entry_ivr=summary.get("iv_rank_1y", 0),
+                entry_regime=regime,
+                entry_iv_env=iv_env,
+                entry_dte=short_leg.get("dte") or params.dte_min,
+                contracts=params.contracts,
+                implied_earnings_move=ern_implied,
+                historical_earnings_move=ern_hist,
+                earnings_iv_premium=ern_premium,
+                earnings_date=ern_date,
+                long_expiration_date=long_expiry,
+            )
+
         return None
 
     # ── Position management ───────────────────────────────────────────────
@@ -656,20 +864,29 @@ class BacktestEngine:
 
         # ── Rule: DTE ≤ 7 → close ────────────────────────────────────────
         if dte_remaining <= 7:
-            exit_debit = self._lookup_contract_price(
-                pos.symbol, trade_date, pos.short_strike,
-                pos.expiration_date, pos.option_type,
-            )
-            # If we can't get current price, use 10% of original credit as estimate
-            if exit_debit is None:
-                exit_debit = abs(pos.entry_credit) * 0.10 if pos.entry_credit > 0 else abs(pos.entry_credit) * 1.50
+            if pos.strategy == "iron_butterfly":
+                exit_debit = self._compute_ib_combined_exit(pos, trade_date)
+                if exit_debit is None:
+                    exit_debit = abs(pos.entry_credit) * 0.10
+            elif pos.strategy == "calendar_spread":
+                exit_debit = self._compute_calendar_current_value(pos, trade_date)
+                if exit_debit is None:
+                    exit_debit = abs(pos.entry_credit) * 0.10
+            else:
+                exit_debit = self._lookup_contract_price(
+                    pos.symbol, trade_date, pos.short_strike,
+                    pos.expiration_date, pos.option_type,
+                )
+                # If we can't get current price, use 10% of original credit as estimate
+                if exit_debit is None:
+                    exit_debit = abs(pos.entry_credit) * 0.10 if pos.entry_credit > 0 else abs(pos.entry_credit) * 1.50
 
             raw_exit = exit_debit
             exit_debit = _apply_slippage(
                 exit_debit, pos.strategy, "exit",
                 self._slippage_model, self._custom_slippage_pct,
             )
-            if pos.strategy == "long_call_vertical":
+            if pos.strategy in ("long_call_vertical", "calendar_spread"):
                 self._total_slippage_cost += (raw_exit - exit_debit) * pos.contracts * 100
             else:
                 self._total_slippage_cost += (exit_debit - raw_exit) * pos.contracts * 100
@@ -678,6 +895,43 @@ class BacktestEngine:
 
         # Only do full price lookup every 3 days to reduce API calls
         if (trd - date.fromisoformat(pos.entry_date)).days % 3 != 0:
+            return None
+
+        # ── Iron butterfly: combined 4-leg exit evaluation ────────────────
+        if pos.strategy == "iron_butterfly":
+            combined = self._compute_ib_combined_exit(pos, trade_date)
+            if combined is None:
+                return None
+            raw_exit = combined
+            exit_val = _apply_slippage(
+                combined, pos.strategy, "exit",
+                self._slippage_model, self._custom_slippage_pct,
+            )
+            self._total_slippage_cost += (exit_val - raw_exit) * pos.contracts * 100
+            initial_credit = abs(pos.entry_credit)
+            if exit_val <= initial_credit * (1 - 0.50):
+                return self._build_trade(pos, trade_date, exit_val, "profit_target")
+            if exit_val >= initial_credit * 2.0:
+                return self._build_trade(pos, trade_date, exit_val, "max_loss")
+            return None
+
+        # ── Calendar spread: 2-leg debit exit evaluation ─────────────────
+        if pos.strategy == "calendar_spread":
+            current_val = self._compute_calendar_current_value(pos, trade_date)
+            if current_val is None:
+                return None
+            entry_debit = abs(pos.entry_credit)
+            raw_val = current_val
+            slipped_val = _apply_slippage(
+                raw_val, pos.strategy, "exit",
+                self._slippage_model, self._custom_slippage_pct,
+            )
+            self._total_slippage_cost += (raw_val - slipped_val) * pos.contracts * 100
+            gain_pct = (slipped_val - entry_debit) / entry_debit if entry_debit else 0
+            if gain_pct >= 0.50:
+                return self._build_trade(pos, trade_date, slipped_val, "profit_target")
+            if gain_pct <= -0.50:
+                return self._build_trade(pos, trade_date, slipped_val, "stop_loss")
             return None
 
         # ── Look up current option value ──────────────────────────────────
@@ -747,6 +1001,57 @@ class BacktestEngine:
 
         return None
 
+    def _compute_ib_combined_exit(
+        self, pos: OpenPosition, trade_date: str,
+    ) -> Optional[float]:
+        """Return combined current spread value for iron_butterfly: (put_short + call_short) - (put_long + call_long)."""
+        put_short = self._lookup_contract_price(
+            pos.symbol, trade_date, pos.short_strike, pos.expiration_date, "put",
+        )
+        if put_short is None:
+            return None
+
+        put_long = 0.0
+        if pos.long_strike is not None:
+            put_long = self._lookup_contract_price(
+                pos.symbol, trade_date, pos.long_strike, pos.expiration_date, "put",
+            ) or 0.0
+
+        call_short = None
+        if pos.short_strike_2 is not None:
+            call_short = self._lookup_contract_price(
+                pos.symbol, trade_date, pos.short_strike_2, pos.expiration_date, "call",
+            )
+        if call_short is None:
+            call_short = put_short  # symmetric fallback
+
+        call_long = 0.0
+        if pos.long_strike_2 is not None:
+            call_long = self._lookup_contract_price(
+                pos.symbol, trade_date, pos.long_strike_2, pos.expiration_date, "call",
+            ) or 0.0
+
+        combined = round((put_short + call_short) - (put_long + call_long), 4)
+        return max(combined, 0.0)
+
+    def _compute_calendar_current_value(
+        self, pos: OpenPosition, trade_date: str,
+    ) -> Optional[float]:
+        """Return current spread value for calendar: long_mid - short_mid."""
+        if pos.long_expiration_date is None:
+            return None
+        short_mid = self._lookup_contract_price(
+            pos.symbol, trade_date, pos.short_strike, pos.expiration_date, pos.option_type,
+        )
+        if short_mid is None:
+            return None
+        long_mid = self._lookup_contract_price(
+            pos.symbol, trade_date, pos.short_strike, pos.long_expiration_date, pos.option_type,
+        )
+        if long_mid is None:
+            return None
+        return round(long_mid - short_mid, 4)
+
     def _lookup_contract_price(
         self,
         symbol: str,
@@ -777,22 +1082,33 @@ class BacktestEngine:
             pass
 
         # Try to get actual expiration value
-        exit_debit = self._lookup_contract_price(
-            pos.symbol, last_day, pos.short_strike,
-            pos.expiration_date, pos.option_type,
-        )
-        if exit_debit is None:
-            exit_debit = 0.0  # assume expires worthless
-        else:
-            raw_exit = exit_debit
-            exit_debit = _apply_slippage(
-                exit_debit, pos.strategy, "exit",
-                self._slippage_model, self._custom_slippage_pct,
-            )
-            if pos.strategy == "long_call_vertical":
-                self._total_slippage_cost += (raw_exit - exit_debit) * pos.contracts * 100
+        if pos.strategy == "calendar_spread":
+            raw_exit = self._compute_calendar_current_value(pos, last_day)
+            if raw_exit is None or raw_exit <= 0:
+                exit_debit = 0.0
             else:
-                self._total_slippage_cost += (exit_debit - raw_exit) * pos.contracts * 100
+                exit_debit = _apply_slippage(
+                    raw_exit, pos.strategy, "exit",
+                    self._slippage_model, self._custom_slippage_pct,
+                )
+                self._total_slippage_cost += (raw_exit - exit_debit) * pos.contracts * 100
+        else:
+            exit_debit = self._lookup_contract_price(
+                pos.symbol, last_day, pos.short_strike,
+                pos.expiration_date, pos.option_type,
+            )
+            if exit_debit is None:
+                exit_debit = 0.0  # assume expires worthless
+            else:
+                raw_exit = exit_debit
+                exit_debit = _apply_slippage(
+                    exit_debit, pos.strategy, "exit",
+                    self._slippage_model, self._custom_slippage_pct,
+                )
+                if pos.strategy == "long_call_vertical":
+                    self._total_slippage_cost += (raw_exit - exit_debit) * pos.contracts * 100
+                else:
+                    self._total_slippage_cost += (exit_debit - raw_exit) * pos.contracts * 100
 
         return self._build_trade(pos, last_day, exit_debit, "still_open")
 
@@ -810,7 +1126,7 @@ class BacktestEngine:
         except ValueError:
             holding = None
 
-        if pos.strategy == "long_call_vertical":
+        if pos.strategy in ("long_call_vertical", "calendar_spread"):
             # entry_credit is negative (debit paid); exit_debit is positive (spread value at close)
             pnl = round((exit_debit + pos.entry_credit) * pos.contracts * 100, 2)
         else:
@@ -892,6 +1208,10 @@ class BacktestEngine:
             return regime == "NEUTRAL" and iv_env == "HIGH"
         if strategy == "long_call_vertical":
             return regime == "BULL" and iv_env == "LOW"
+        if strategy == "iron_butterfly":
+            return regime == "NEUTRAL" and iv_env == "HIGH"
+        if strategy == "calendar_spread":
+            return regime in ("NEUTRAL", "BULL") and iv_env in ("LOW", "MODERATE")
         return False
 
     # ── Metrics ───────────────────────────────────────────────────────────

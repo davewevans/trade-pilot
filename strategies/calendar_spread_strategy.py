@@ -1,4 +1,3 @@
-# NOT YET ACTIVE — requires account assignment in config
 """Calendar Spread strategy — sell near-term option, buy far-term option, same strike.
 
 Net debit paid. Profits from theta differential (short decays faster)
@@ -45,7 +44,7 @@ class CalendarSpreadState(str, Enum):
 
 
 class CalendarSpreadStrategy:
-    """State machine for the calendar spread strategy (INACTIVE — not yet routed)."""
+    """State machine for the calendar spread strategy."""
 
     State = CalendarSpreadState
 

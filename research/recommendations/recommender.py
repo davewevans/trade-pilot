@@ -19,7 +19,9 @@ logger = logging.getLogger(__name__)
 _WATCHLIST_STRATEGIES: dict[str, list[str]] = {
     "wheel": ["wheel_csp", "wheel_cc"],
     "iron_condor": ["iron_condor"],
+    "iron_butterfly": ["iron_butterfly"],
     "spreads": ["bull_put_spread", "bear_call_spread", "long_call_vertical"],
+    "calendar_spread": ["calendar_spread"],
 }
 
 # Win-rate tier → bonus points (added to composite score)

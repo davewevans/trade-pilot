@@ -265,7 +265,7 @@ def run() -> None:
                                                         liquidity_repo=_spread_liq_repo, backtest_stats_repo=_bt_stats_repo),
     }
 
-    # Paper Account 4 — Iron Butterfly (inactive until tested; only wired when active)
+    # Paper Account 4 — Iron Butterfly (only wired when account status is active)
     _am = settings.get_account_manager()
     _paper4 = _am.get_account("paper_4") if _am else None
     if _paper4 and _paper4.get("status") == "active":
@@ -278,7 +278,7 @@ def run() -> None:
             broker=paper4_broker, state_writer=sw, spread_tracker=tracker, recorder=recorder,
         )
 
-    # Paper Account 5 — Calendar Spread (inactive until tested; only wired when active)
+    # Paper Account 5 — Calendar Spread (only wired when account status is active)
     _paper5 = _am.get_account("paper_5") if _am else None
     if _paper5 and _paper5.get("status") == "active":
         try:

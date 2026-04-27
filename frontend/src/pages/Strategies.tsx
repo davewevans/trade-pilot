@@ -480,7 +480,7 @@ export function Strategies() {
       <AccountSection
         accent="var(--accent-butterfly, var(--purple, #A855F7))"
         header="Iron Butterfly — Maximum Premium at the Money"
-        tagline="Higher premium than iron condor, tighter profit zone. Not yet active."
+        tagline="Higher premium than iron condor, tighter profit zone. Both shorts ATM — peak profit at the center strike."
       >
         <Prose>
           An iron butterfly sells an ATM put and an ATM call at the <strong>same center
@@ -570,7 +570,7 @@ export function Strategies() {
       <AccountSection
         accent="var(--accent-calendar, var(--teal, #14B8A6))"
         header="Calendar Spread — Profiting From Time Decay Differentials"
-        tagline="Neutral, defined-risk time decay play. Not yet active."
+        tagline="Neutral, defined-risk time decay play. Vega-positive — profits from IV expansion."
       >
         <Prose>
           A calendar spread sells a short-term option and buys a longer-term option at the same strike.

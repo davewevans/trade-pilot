@@ -53,6 +53,19 @@ _STRATEGY_PARAMS: dict[str, dict] = {
         "dte_max": 60,
         "ivr_threshold": 30.0,
     },
+    "iron_butterfly": {
+        "delta": 0.50,
+        "dte_min": 20,
+        "dte_max": 35,
+        "ivr_threshold": 50.0,
+    },
+    "calendar_spread": {
+        "delta": 0.50,
+        "dte_min": 20,
+        "dte_max": 35,
+        "ivr_threshold": 0.0,
+        "ivr_max": 50.0,
+    },
 }
 
 
@@ -134,6 +147,8 @@ class BacktestSweep:
             symbols = sorted(set(
                 list(settings.WATCHLIST)
                 + list(settings.IRON_CONDOR_WATCHLIST)
+                + list(settings.IRON_BUTTERFLY_WATCHLIST)
+                + list(settings.CALENDAR_SPREAD_WATCHLIST)
                 + list(settings.SPREAD_WATCHLIST)
             ))
         else:
@@ -145,6 +160,8 @@ class BacktestSweep:
                 symbols = sorted(set(
                     list(settings.WATCHLIST)
                     + list(settings.IRON_CONDOR_WATCHLIST)
+                    + list(settings.IRON_BUTTERFLY_WATCHLIST)
+                    + list(settings.CALENDAR_SPREAD_WATCHLIST)
                     + list(settings.SPREAD_WATCHLIST)
                 ))
 
@@ -242,6 +259,7 @@ class BacktestSweep:
                         dte_min=params_defaults.get("dte_min", 21),
                         dte_max=params_defaults.get("dte_max", 35),
                         ivr_threshold=params_defaults.get("ivr_threshold", 30.0),
+                        ivr_max=params_defaults.get("ivr_max"),
                     )
                     result = self._engine.run(params)
 
@@ -585,6 +603,8 @@ class BacktestSweep:
             full_list = sorted(set(
                 list(settings.WATCHLIST)
                 + list(settings.IRON_CONDOR_WATCHLIST)
+                + list(settings.IRON_BUTTERFLY_WATCHLIST)
+                + list(settings.CALENDAR_SPREAD_WATCHLIST)
                 + list(settings.SPREAD_WATCHLIST)
             ))
         else:
@@ -596,10 +616,16 @@ class BacktestSweep:
                 full_list = sorted(set(
                     list(settings.WATCHLIST)
                     + list(settings.IRON_CONDOR_WATCHLIST)
+                    + list(settings.IRON_BUTTERFLY_WATCHLIST)
+                    + list(settings.CALENDAR_SPREAD_WATCHLIST)
                     + list(settings.SPREAD_WATCHLIST)
                 ))
 
         strategies = list(SUPPORTED_STRATEGIES)
+        if not settings.RESEARCH_SWEEP_IRON_BUTTERFLY_ENABLED:
+            strategies = [s for s in strategies if s != "iron_butterfly"]
+        if not settings.RESEARCH_SWEEP_CALENDAR_SPREAD_ENABLED:
+            strategies = [s for s in strategies if s != "calendar_spread"]
 
         # ── 2. Reset sweep_progress if force_restart ──────────────────────
         if force_restart:
