@@ -85,7 +85,7 @@ Go to your service → Environment → Add the following:
 
 ### Step 5: Monitor first market day
 1. Check logs at 6:00 AM ET for pre-market job
-2. Check logs at 9:30 AM ET for market open job
+2. Check logs at 10:00 AM ET for market open job
 3. Review reports/daily/ via Render Shell tab:
    cat /data/reports/daily/$(date +%Y-%m-%d).md
 
