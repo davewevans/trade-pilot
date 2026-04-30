@@ -2,7 +2,7 @@
 
 Reads from:
 - SQLite (decisions, trades, cycles, daily_summaries, token_usage)
-- data/snapshots/*.json (portfolio, regime_history, circuit_breaker_state)
+- data/snapshots/*.json (portfolio, regime_history, circuit_breakers)
 - data/snapshots/logs/YYYY-MM-DD.jsonl (structured warnings/errors from Prompt 7)
 
 All reads are read-only. No side effects.
@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections import Counter, defaultdict
-from datetime import date
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -87,8 +87,10 @@ def _section_header(target_date: date, db_path: str, snapshots_dir: str) -> str:
         version_str = "unknown"
 
     # Circuit breaker
-    cb = _read_json(snap / "circuit_breaker_state.json") or {}
-    cb_status = cb.get("state", "unknown")
+    cb = _read_json(snap / "circuit_breakers.json") or {}
+    cb_status = cb.get("status", "unknown")
+    cb_halted = cb.get("halted", False)
+    cb_rules = cb.get("active_rules") or []
 
     # Open positions count by strategy from portfolio snapshots
     pos_lines: list[str] = []
@@ -100,32 +102,72 @@ def _section_header(target_date: date, db_path: str, snapshots_dir: str) -> str:
     if not pos_lines:
         pos_lines = ["  - _no portfolio snapshots found_"]
 
-    return "\n".join([
+    header_lines = [
         f"## trade-pilot Daily Bundle — {target_date.isoformat()}",
         f"",
         f"**Bot version:** {version_str}",
-        f"**Circuit breaker:** {cb_status}",
-        f"**Open positions by account:**",
-        *pos_lines,
-    ])
+        f"**Circuit breaker:** {cb_status}" + (" (HALTED)" if cb_halted else ""),
+    ]
+    if cb_rules:
+        header_lines.append(f"**Active CB rules:** {', '.join(cb_rules)}")
+    header_lines.append(f"**Open positions by account:**")
+    header_lines.extend(pos_lines)
+    return "\n".join(header_lines)
 
 
 def _section_market_context(target_date: date, db_path: str, snapshots_dir: str) -> str:
     snap = Path(snapshots_dir)
     parts = ["## Market context"]
 
-    # regime_history.json
-    rh = _read_json(snap / "regime_history.json")
-    if rh and isinstance(rh, list) and rh:
-        latest = rh[-1]
-        parts.append(f"- **Regime:** {latest.get('regime', 'n/a')}")
-        parts.append(f"- **VIX:** {latest.get('vix', 'n/a')}")
-        parts.append(f"- **Fear & Greed:** {latest.get('fear_greed_value', 'n/a')} ({latest.get('fear_greed_rating', 'n/a')})")
-        parts.append(f"- **IV environment:** {latest.get('iv_environment', 'n/a')}")
-        parts.append(f"- **Stability:** {latest.get('stability', 'n/a')}")
-        parts.append(f"- **Recorded at:** {latest.get('timestamp', 'n/a')}")
+    # context.json is overwritten on every per-symbol iteration of
+    # market_open's watchlist loop (data/state_writer.py::write_context_snapshot
+    # called from jobs/market_open.py:368). It reflects the *last symbol's*
+    # context from the most recent cycle, not an aggregate. Macro fields
+    # (vix, fear_greed, regime) are stable across symbols, so reading them
+    # here is fine. Per-symbol fields would NOT be safe to read this way.
+    # On macro-blocked days, market_open exits before the loop runs, so
+    # context.json carries forward from the prior unblocked cycle.
+    ctx = _read_json(snap / "context.json")
+    if ctx and isinstance(ctx, dict):
+        macro = ctx.get("macro") or {}
+        regime = ctx.get("confirmed_market_regime", "n/a")
+        vix = macro.get("vix", "n/a")
+        fg_score = macro.get("fear_greed_score", "n/a")
+        fg_rating = macro.get("fear_greed_rating", "n/a")
+        iv_env = ctx.get("iv_environment", "n/a")
+        ctx_ts = ctx.get("timestamp", "n/a")
+
+        parts.append(f"- **Regime:** {regime}")
+        parts.append(f"- **VIX:** {vix}")
+        parts.append(f"- **Fear & Greed:** {fg_score} ({fg_rating})")
+        parts.append(f"- **IV environment:** {iv_env}")
+        parts.append(f"- **Recorded at:** {str(ctx_ts)[:19]}")
+
+        # Caveat when snapshot is older than 26h relative to end-of target_date
+        try:
+            ctx_dt = datetime.fromisoformat(str(ctx_ts)[:19])
+            target_eod = datetime(target_date.year, target_date.month, target_date.day) + timedelta(days=1)
+            hours_old = (target_eod - ctx_dt).total_seconds() / 3600
+            if hours_old > 26:
+                parts.append(
+                    f"_⚠ Context snapshot is {int(hours_old)}h old "
+                    f"(last write: {str(ctx_ts)[:19]}). "
+                    f"Macro context may be stale — pre_market doesn't persist context.json, "
+                    f"only market_open's per-symbol loop does._"
+                )
+        except (ValueError, TypeError, OverflowError):
+            pass
     else:
-        parts.append("_No regime history snapshot found._")
+        parts.append("_No context.json snapshot — pre_market / market_open may not have run today._")
+
+    # Regime stability sub-line from RegimeStabilityFilter state
+    rh = _read_json(snap / "regime_history.json")
+    if rh and isinstance(rh, dict):
+        rh_confirmed = rh.get("confirmed", "n/a")
+        rh_readings = rh.get("readings", [])
+        parts.append(
+            f"- **Regime stability:** confirmed={rh_confirmed}, recent readings={rh_readings}"
+        )
 
     # daily_summaries row for target_date
     try:
@@ -140,7 +182,10 @@ def _section_market_context(target_date: date, db_path: str, snapshots_dir: str)
                          f"skips={row['skips']}, "
                          f"premium=${row['premium_collected']:.2f}")
         else:
-            parts.append("\n_No daily_summaries row for this date._")
+            parts.append(
+                f"\n_No daily_summaries row for {target_date.isoformat()} — "
+                f"market_close may not have run, or it's mid-day._"
+            )
     except Exception:
         parts.append("\n_Could not read daily_summaries table._")
 
@@ -290,7 +335,33 @@ def _section_portfolio_greeks(snapshots_dir: str) -> str:
     return "\n".join(parts)
 
 
-def _section_data_health(snapshots_dir: str) -> str:
+_STALE_HOURS_THRESHOLD = 26  # one trading day plus buffer; tunable
+
+
+def _derive_status(info: dict, now: datetime) -> str:
+    """Return ✓ / ⚠ / ✗ with staleness awareness.
+
+    ✗  consecutive_failures >= 1 (current outage)
+    ⚠  no last_success OR last_success older than _STALE_HOURS_THRESHOLD
+    ✓  recent success and no current failures
+    """
+    if (info.get("consecutive_failures") or 0) >= 1:
+        return "✗"
+    last_success = info.get("last_success")
+    if not last_success:
+        return "⚠"
+    try:
+        last_dt = datetime.fromisoformat(last_success)
+    except ValueError:
+        return "⚠"
+    # Both timestamps are naive ISO format from SourceHealth.record() —
+    # use naive comparison to avoid tz mismatch.
+    if (now - last_dt) > timedelta(hours=_STALE_HOURS_THRESHOLD):
+        return "⚠"
+    return "✓"
+
+
+def _section_data_health(snapshots_dir: str, now: datetime | None = None) -> str:
     """Render data source health from source_health.json.
 
     SourceHealth.record() does not persist a boolean health field — it
@@ -314,6 +385,9 @@ def _section_data_health(snapshots_dir: str) -> str:
         parts.append("_No source_health.json snapshot found._")
         return "\n".join(parts)
 
+    _now = now or datetime.now()
+    parts.append("_Status: ✓ recent success · ⚠ stale (>26h since last success, expected on macro-blocked days) · ✗ active failure_")
+    parts.append("")
     parts.append("| Source | Status | Today (✓/✗) | Last success | Last failure reason |")
     parts.append("|--------|--------|-------------|--------------|---------------------|")
     # Sort sources alphabetically so output is stable across runs.
@@ -324,10 +398,9 @@ def _section_data_health(snapshots_dir: str) -> str:
             parts.append(f"| {source} | {info} | — | — | — |")
             continue
 
-        consecutive_failures = info.get("consecutive_failures", 0) or 0
         today_successes = info.get("today_successes", 0) or 0
         today_failures = info.get("today_failures", 0) or 0
-        status = "✓" if consecutive_failures == 0 else "✗"
+        status = _derive_status(info, _now)
         last_ok = info.get("last_success") or "never"
         last_fail_reason = info.get("last_failure_reason") or "—"
         # Truncate timestamps to seconds precision; truncate failure reason to

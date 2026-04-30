@@ -16,6 +16,7 @@ from api.daily_bundle import (
     _section_ai_usage,
     _section_header,
     _section_data_health,
+    _section_market_context,
 )
 
 TARGET_DATE = date(2026, 4, 23)
@@ -83,11 +84,23 @@ def _make_db(path: Path) -> str:
 
 def _make_snapshots(snap_dir: Path) -> None:
     snap_dir.mkdir(parents=True, exist_ok=True)
-    (snap_dir / "regime_history.json").write_text(json.dumps([{
-        "regime": "NEUTRAL", "vix": 18.5, "fear_greed_value": 42,
-        "fear_greed_rating": "Fear", "iv_environment": "normal",
-        "stability": "stable", "timestamp": "2026-04-23T10:00:00",
-    }]))
+    (snap_dir / "context.json").write_text(json.dumps({
+        "timestamp": "2026-04-23T10:00:00",
+        "confirmed_market_regime": "NEUTRAL",
+        "raw_market_regime": "NEUTRAL",
+        "regime_stable": True,
+        "iv_environment": "normal",
+        "macro": {
+            "vix": 18.5,
+            "vix_regime": "elevated",
+            "fear_greed_score": 42,
+            "fear_greed_rating": "Fear",
+        },
+    }))
+    (snap_dir / "regime_history.json").write_text(json.dumps({
+        "readings": ["NEUTRAL", "NEUTRAL", "NEUTRAL"],
+        "confirmed": "NEUTRAL",
+    }))
     (snap_dir / "source_health.json").write_text(json.dumps({
         "alpaca": {
             "last_success": "2026-04-23T10:00:00",
@@ -108,7 +121,19 @@ def _make_snapshots(snap_dir: Path) -> None:
             "last_checked": "2026-04-23T09:55:00",
         },
     }))
-    (snap_dir / "circuit_breaker_state.json").write_text(json.dumps({"state": "GREEN"}))
+    (snap_dir / "circuit_breakers.json").write_text(json.dumps({
+        "timestamp": "2026-04-23T10:00:00",
+        "status": "GREEN",
+        "halted": False,
+        "active_rules": [],
+        "daily_pnl": 0.0,
+        "daily_pnl_pct": 0.0,
+        "weekly_pnl": 0.0,
+        "weekly_pnl_pct": 0.0,
+        "peak_equity": 100000.0,
+        "current_drawdown_pct": 0.0,
+        "dry_run": False,
+    }))
 
 
 # ── section tests ─────────────────────────────────────────────
@@ -221,7 +246,7 @@ def test_data_health_renders_healthy_source_as_check(tmp_path):
             "last_checked": "2026-04-25T14:00:00",
         },
     })
-    out = _section_data_health(str(tmp_path))
+    out = _section_data_health(str(tmp_path), now=datetime(2026, 4, 25, 16, 0, 0))
     assert "| ORATS | ✓ | 47/0" in out
 
 
@@ -281,6 +306,200 @@ def test_data_health_sources_sorted_alphabetically(tmp_path):
     orats_idx = out.index("| ORATS ")
     yf_idx = out.index("| yfinance ")
     assert fred_idx < orats_idx < yf_idx, "sources must render alphabetically"
+
+
+# ── _section_data_health staleness tests ────────────────────────────────────
+
+
+def test_data_health_stale_source_renders_warn(tmp_path):
+    _write_health(tmp_path, {
+        "ORATS": {
+            "last_success": "2026-04-25T14:00:00",
+            "last_failure": None,
+            "last_failure_reason": None,
+            "consecutive_failures": 0,
+            "today_successes": 0,
+            "today_failures": 0,
+            "last_checked": "2026-04-25T14:00:00",
+        },
+    })
+    # now is more than 26h after last_success
+    out = _section_data_health(str(tmp_path), now=datetime(2026, 4, 26, 17, 0, 0))
+    assert "| ORATS | ⚠ | 0/0" in out
+
+
+def test_data_health_no_last_success_renders_warn(tmp_path):
+    _write_health(tmp_path, {
+        "Finnhub": {
+            "last_success": None,
+            "last_failure": None,
+            "last_failure_reason": None,
+            "consecutive_failures": 0,
+            "today_successes": 0,
+            "today_failures": 0,
+            "last_checked": None,
+        },
+    })
+    out = _section_data_health(str(tmp_path), now=datetime(2026, 4, 25, 16, 0, 0))
+    assert "| Finnhub | ⚠ |" in out
+
+
+def test_data_health_recent_success_renders_check(tmp_path):
+    _write_health(tmp_path, {
+        "ORATS": {
+            "last_success": "2026-04-25T14:00:00",
+            "last_failure": None,
+            "last_failure_reason": None,
+            "consecutive_failures": 0,
+            "today_successes": 5,
+            "today_failures": 0,
+            "last_checked": "2026-04-25T14:00:00",
+        },
+    })
+    # now is only 1h after last_success
+    out = _section_data_health(str(tmp_path), now=datetime(2026, 4, 25, 15, 0, 0))
+    assert "| ORATS | ✓ | 5/0" in out
+
+
+# ── _section_header circuit breaker tests ───────────────────────────────────
+
+
+def _write_circuit_breakers(snap: Path, payload: dict) -> None:
+    (snap / "circuit_breakers.json").write_text(
+        json.dumps(payload), encoding="utf-8",
+    )
+
+
+def test_section_header_circuit_breaker_green_not_halted(tmp_path):
+    db = _make_db(tmp_path)
+    snap = tmp_path / "snapshots"
+    snap.mkdir()
+    _write_circuit_breakers(snap, {
+        "timestamp": "2026-04-23T10:00:00",
+        "status": "GREEN",
+        "halted": False,
+        "active_rules": [],
+        "daily_pnl": 0.0,
+        "daily_pnl_pct": 0.0,
+        "weekly_pnl": 0.0,
+        "weekly_pnl_pct": 0.0,
+        "peak_equity": 100000.0,
+        "current_drawdown_pct": 0.0,
+        "dry_run": False,
+    })
+    out = _section_header(TARGET_DATE, db, str(snap))
+    assert "**Circuit breaker:** GREEN" in out
+    assert "(HALTED)" not in out
+    assert "Active CB rules" not in out
+
+
+def test_section_header_circuit_breaker_red_halted_with_rule(tmp_path):
+    db = _make_db(tmp_path)
+    snap = tmp_path / "snapshots"
+    snap.mkdir()
+    _write_circuit_breakers(snap, {
+        "timestamp": "2026-04-23T10:00:00",
+        "status": "RED",
+        "halted": True,
+        "active_rules": ["drawdown_lock"],
+        "daily_pnl": -5000.0,
+        "daily_pnl_pct": -5.0,
+        "weekly_pnl": -5000.0,
+        "weekly_pnl_pct": -5.0,
+        "peak_equity": 100000.0,
+        "current_drawdown_pct": 15.1,
+        "dry_run": False,
+    })
+    out = _section_header(TARGET_DATE, db, str(snap))
+    assert "**Circuit breaker:** RED (HALTED)" in out
+    assert "**Active CB rules:** drawdown_lock" in out
+
+
+# ── _section_market_context tests ───────────────────────────────────────────
+
+
+def _write_context(snap: Path, payload: dict) -> None:
+    (snap / "context.json").write_text(json.dumps(payload), encoding="utf-8")
+
+
+def test_market_context_all_sources_present(tmp_path):
+    db = _make_db(tmp_path)
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "INSERT INTO daily_summaries (date, decisions_total, skips, trades_executed, premium_collected) VALUES (?,?,?,?,?)",
+        (TARGET_DATE.isoformat(), 10, 3, 2, 150.0),
+    )
+    conn.commit()
+    conn.close()
+
+    snap = tmp_path / "snapshots"
+    snap.mkdir()
+    _write_context(snap, {
+        "timestamp": "2026-04-23T10:00:00",
+        "confirmed_market_regime": "BULL",
+        "raw_market_regime": "BULL",
+        "regime_stable": True,
+        "iv_environment": "low",
+        "macro": {"vix": 14.2, "fear_greed_score": 72, "fear_greed_rating": "Greed"},
+    })
+    (snap / "regime_history.json").write_text(json.dumps({
+        "readings": ["BULL", "BULL", "BULL"], "confirmed": "BULL",
+    }))
+
+    out = _section_market_context(TARGET_DATE, db, str(snap))
+    assert "**Regime:** BULL" in out
+    assert "**VIX:** 14.2" in out
+    assert "72 (Greed)" in out
+    assert "**IV environment:** low" in out
+    assert "**Recorded at:** 2026-04-23T10:00:00" in out
+    assert "**Regime stability:** confirmed=BULL" in out
+    assert "decisions=10" in out
+
+
+def test_market_context_no_context_json_shows_caveat(tmp_path):
+    db = _make_db(tmp_path)
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "INSERT INTO daily_summaries (date, decisions_total, skips, trades_executed, premium_collected) VALUES (?,?,?,?,?)",
+        (TARGET_DATE.isoformat(), 5, 1, 1, 50.0),
+    )
+    conn.commit()
+    conn.close()
+
+    snap = tmp_path / "snapshots"
+    snap.mkdir()
+
+    out = _section_market_context(TARGET_DATE, db, str(snap))
+    assert "No context.json snapshot" in out
+    assert "decisions=5" in out
+
+
+def test_market_context_both_missing_shows_distinct_messages(tmp_path):
+    db = _make_db(tmp_path)
+    snap = tmp_path / "snapshots"
+    snap.mkdir()
+
+    out = _section_market_context(TARGET_DATE, db, str(snap))
+    assert "No context.json snapshot" in out
+    assert f"No daily_summaries row for {TARGET_DATE.isoformat()}" in out
+
+
+def test_market_context_stale_context_shows_staleness_caveat(tmp_path):
+    db = _make_db(tmp_path)
+    snap = tmp_path / "snapshots"
+    snap.mkdir()
+    # Write context timestamped 3 days before TARGET_DATE (2026-04-20)
+    _write_context(snap, {
+        "timestamp": "2026-04-20T14:00:00",
+        "confirmed_market_regime": "NEUTRAL",
+        "iv_environment": "normal",
+        "macro": {"vix": 18.0, "fear_greed_score": 45, "fear_greed_rating": "Fear"},
+    })
+
+    out = _section_market_context(TARGET_DATE, db, str(snap))
+    assert "⚠ Context snapshot is" in out
+    assert "h old" in out
+    assert "market_open's per-symbol loop" in out
 
 
 # ── _section_cycle_summary tests ────────────────────────────────────────────

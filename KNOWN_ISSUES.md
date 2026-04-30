@@ -7,7 +7,7 @@ Fixed" with the commit hash) or when new issues are surfaced.
 **This file is the canonical priority list — if you're debugging something
 and find it listed here, the team already knows about it.**
 
-Last updated: 2026-04-27
+Last updated: 2026-04-28
 
 ---
 
@@ -161,6 +161,7 @@ Last updated: 2026-04-27
 (Move items here when resolved with the commit hash that fixed them.
 Trim entries older than 60 days during routine maintenance.)
 
+- **2026-04-28** — MACRO_EVENT_PROXIMITY fired live for the first time. FOMC scheduled for 2026-04-29 14:00 ET triggered `market_open` early-exit at 10:00 ET; zero entry decisions issued, zero LLM entry-cycle tokens consumed. First production validation of the Tier 3 macro-event blocker. No code change — observation only.
 - **2026-04-27** — `ApiLedger._insert` silent row drops under parallel context builds. `_insert` was not retrying on SQLite "database is locked"; ~24 rows/cycle were silently dropped, distorting API quota tracking. Wrapped with `@db_retry(max_attempts=5, base_delay=0.05)`. Commit `f063a4a`.
 - **2026-04-27** — FRED VIX and Alpaca corp-actions falling back immediately on transient errors. Each transient failure cost ~10s of wall time (Alpaca timeout) and reset the #17 yfinance soak clock. Added 3-attempt exponential backoff (1s/2s/4s) before the yfinance fallback. Commit `7797904`.
 - **2026-04-27** — Daily bundle cycle-summary empty-state misleading (#3). Root cause hypothesis in this file was wrong: cycles are never written for SKIP/HOLD decisions by design, so zero cycles after 100% IDLE launch is correct. The actual bug was `_section_cycle_summary` showing "_No cycles found for this date._" which implied failure. Now renders two sub-sections ("Opened today" / "Active cycles from prior days") with accurate empty-state messages pointing to the Decisions section. Commit `26b74b9`.

@@ -5,10 +5,11 @@ section to CHANGELOG.md. Other modules read this via ``settings.VERSION``
 rather than importing this file directly.
 """
 
-VERSION = "1.14.0"
-VERSION_DATE = "2026-04-27"
+VERSION = "1.14.1"
+VERSION_DATE = "2026-04-28"
 VERSION_NOTES = (
-    "Adds calendar_spread and iron_butterfly to the backtest engine and full research pipeline, "
-    "including watchlist recommender wiring, liquidity thresholds, sweep params, and kill-switch "
-    "flags (both default off for staged activation)."
+    "Fixes three daily bundle reporting bugs: circuit breaker status now reads from the correct "
+    "file and key, source health staleness detection added (⚠ for sources silent >26 hours, "
+    "expected on macro-blocked days), and market context reads from context.json instead of the "
+    "wrong regime_history.json shape."
 )
