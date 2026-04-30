@@ -108,7 +108,19 @@ def _make_snapshots(snap_dir: Path) -> None:
             "last_checked": "2026-04-23T09:55:00",
         },
     }))
-    (snap_dir / "circuit_breaker_state.json").write_text(json.dumps({"state": "GREEN"}))
+    (snap_dir / "circuit_breakers.json").write_text(json.dumps({
+        "timestamp": "2026-04-23T10:00:00",
+        "status": "GREEN",
+        "halted": False,
+        "active_rules": [],
+        "daily_pnl": 0.0,
+        "daily_pnl_pct": 0.0,
+        "weekly_pnl": 0.0,
+        "weekly_pnl_pct": 0.0,
+        "peak_equity": 100000.0,
+        "current_drawdown_pct": 0.0,
+        "dry_run": False,
+    }))
 
 
 # ── section tests ─────────────────────────────────────────────
@@ -221,7 +233,7 @@ def test_data_health_renders_healthy_source_as_check(tmp_path):
             "last_checked": "2026-04-25T14:00:00",
         },
     })
-    out = _section_data_health(str(tmp_path))
+    out = _section_data_health(str(tmp_path), now=datetime(2026, 4, 25, 16, 0, 0))
     assert "| ORATS | ✓ | 47/0" in out
 
 
@@ -281,6 +293,113 @@ def test_data_health_sources_sorted_alphabetically(tmp_path):
     orats_idx = out.index("| ORATS ")
     yf_idx = out.index("| yfinance ")
     assert fred_idx < orats_idx < yf_idx, "sources must render alphabetically"
+
+
+# ── _section_data_health staleness tests ────────────────────────────────────
+
+
+def test_data_health_stale_source_renders_warn(tmp_path):
+    _write_health(tmp_path, {
+        "ORATS": {
+            "last_success": "2026-04-25T14:00:00",
+            "last_failure": None,
+            "last_failure_reason": None,
+            "consecutive_failures": 0,
+            "today_successes": 0,
+            "today_failures": 0,
+            "last_checked": "2026-04-25T14:00:00",
+        },
+    })
+    # now is more than 26h after last_success
+    out = _section_data_health(str(tmp_path), now=datetime(2026, 4, 26, 17, 0, 0))
+    assert "| ORATS | ⚠ | 0/0" in out
+
+
+def test_data_health_no_last_success_renders_warn(tmp_path):
+    _write_health(tmp_path, {
+        "Finnhub": {
+            "last_success": None,
+            "last_failure": None,
+            "last_failure_reason": None,
+            "consecutive_failures": 0,
+            "today_successes": 0,
+            "today_failures": 0,
+            "last_checked": None,
+        },
+    })
+    out = _section_data_health(str(tmp_path), now=datetime(2026, 4, 25, 16, 0, 0))
+    assert "| Finnhub | ⚠ |" in out
+
+
+def test_data_health_recent_success_renders_check(tmp_path):
+    _write_health(tmp_path, {
+        "ORATS": {
+            "last_success": "2026-04-25T14:00:00",
+            "last_failure": None,
+            "last_failure_reason": None,
+            "consecutive_failures": 0,
+            "today_successes": 5,
+            "today_failures": 0,
+            "last_checked": "2026-04-25T14:00:00",
+        },
+    })
+    # now is only 1h after last_success
+    out = _section_data_health(str(tmp_path), now=datetime(2026, 4, 25, 15, 0, 0))
+    assert "| ORATS | ✓ | 5/0" in out
+
+
+# ── _section_header circuit breaker tests ───────────────────────────────────
+
+
+def _write_circuit_breakers(snap: Path, payload: dict) -> None:
+    (snap / "circuit_breakers.json").write_text(
+        json.dumps(payload), encoding="utf-8",
+    )
+
+
+def test_section_header_circuit_breaker_green_not_halted(tmp_path):
+    db = _make_db(tmp_path)
+    snap = tmp_path / "snapshots"
+    snap.mkdir()
+    _write_circuit_breakers(snap, {
+        "timestamp": "2026-04-23T10:00:00",
+        "status": "GREEN",
+        "halted": False,
+        "active_rules": [],
+        "daily_pnl": 0.0,
+        "daily_pnl_pct": 0.0,
+        "weekly_pnl": 0.0,
+        "weekly_pnl_pct": 0.0,
+        "peak_equity": 100000.0,
+        "current_drawdown_pct": 0.0,
+        "dry_run": False,
+    })
+    out = _section_header(TARGET_DATE, db, str(snap))
+    assert "**Circuit breaker:** GREEN" in out
+    assert "(HALTED)" not in out
+    assert "Active CB rules" not in out
+
+
+def test_section_header_circuit_breaker_red_halted_with_rule(tmp_path):
+    db = _make_db(tmp_path)
+    snap = tmp_path / "snapshots"
+    snap.mkdir()
+    _write_circuit_breakers(snap, {
+        "timestamp": "2026-04-23T10:00:00",
+        "status": "RED",
+        "halted": True,
+        "active_rules": ["drawdown_lock"],
+        "daily_pnl": -5000.0,
+        "daily_pnl_pct": -5.0,
+        "weekly_pnl": -5000.0,
+        "weekly_pnl_pct": -5.0,
+        "peak_equity": 100000.0,
+        "current_drawdown_pct": 15.1,
+        "dry_run": False,
+    })
+    out = _section_header(TARGET_DATE, db, str(snap))
+    assert "**Circuit breaker:** RED (HALTED)" in out
+    assert "**Active CB rules:** drawdown_lock" in out
 
 
 # ── _section_cycle_summary tests ────────────────────────────────────────────
