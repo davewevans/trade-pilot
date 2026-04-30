@@ -119,18 +119,55 @@ def _section_market_context(target_date: date, db_path: str, snapshots_dir: str)
     snap = Path(snapshots_dir)
     parts = ["## Market context"]
 
-    # regime_history.json
-    rh = _read_json(snap / "regime_history.json")
-    if rh and isinstance(rh, list) and rh:
-        latest = rh[-1]
-        parts.append(f"- **Regime:** {latest.get('regime', 'n/a')}")
-        parts.append(f"- **VIX:** {latest.get('vix', 'n/a')}")
-        parts.append(f"- **Fear & Greed:** {latest.get('fear_greed_value', 'n/a')} ({latest.get('fear_greed_rating', 'n/a')})")
-        parts.append(f"- **IV environment:** {latest.get('iv_environment', 'n/a')}")
-        parts.append(f"- **Stability:** {latest.get('stability', 'n/a')}")
-        parts.append(f"- **Recorded at:** {latest.get('timestamp', 'n/a')}")
+    # context.json is overwritten on every per-symbol iteration of
+    # market_open's watchlist loop (data/state_writer.py::write_context_snapshot
+    # called from jobs/market_open.py:368). It reflects the *last symbol's*
+    # context from the most recent cycle, not an aggregate. Macro fields
+    # (vix, fear_greed, regime) are stable across symbols, so reading them
+    # here is fine. Per-symbol fields would NOT be safe to read this way.
+    # On macro-blocked days, market_open exits before the loop runs, so
+    # context.json carries forward from the prior unblocked cycle.
+    ctx = _read_json(snap / "context.json")
+    if ctx and isinstance(ctx, dict):
+        macro = ctx.get("macro") or {}
+        regime = ctx.get("confirmed_market_regime", "n/a")
+        vix = macro.get("vix", "n/a")
+        fg_score = macro.get("fear_greed_score", "n/a")
+        fg_rating = macro.get("fear_greed_rating", "n/a")
+        iv_env = ctx.get("iv_environment", "n/a")
+        ctx_ts = ctx.get("timestamp", "n/a")
+
+        parts.append(f"- **Regime:** {regime}")
+        parts.append(f"- **VIX:** {vix}")
+        parts.append(f"- **Fear & Greed:** {fg_score} ({fg_rating})")
+        parts.append(f"- **IV environment:** {iv_env}")
+        parts.append(f"- **Recorded at:** {str(ctx_ts)[:19]}")
+
+        # Caveat when snapshot is older than 26h relative to end-of target_date
+        try:
+            ctx_dt = datetime.fromisoformat(str(ctx_ts)[:19])
+            target_eod = datetime(target_date.year, target_date.month, target_date.day) + timedelta(days=1)
+            hours_old = (target_eod - ctx_dt).total_seconds() / 3600
+            if hours_old > 26:
+                parts.append(
+                    f"_⚠ Context snapshot is {int(hours_old)}h old "
+                    f"(last write: {str(ctx_ts)[:19]}). "
+                    f"Macro context may be stale — pre_market doesn't persist context.json, "
+                    f"only market_open's per-symbol loop does._"
+                )
+        except (ValueError, TypeError, OverflowError):
+            pass
     else:
-        parts.append("_No regime history snapshot found._")
+        parts.append("_No context.json snapshot — pre_market / market_open may not have run today._")
+
+    # Regime stability sub-line from RegimeStabilityFilter state
+    rh = _read_json(snap / "regime_history.json")
+    if rh and isinstance(rh, dict):
+        rh_confirmed = rh.get("confirmed", "n/a")
+        rh_readings = rh.get("readings", [])
+        parts.append(
+            f"- **Regime stability:** confirmed={rh_confirmed}, recent readings={rh_readings}"
+        )
 
     # daily_summaries row for target_date
     try:
@@ -145,7 +182,10 @@ def _section_market_context(target_date: date, db_path: str, snapshots_dir: str)
                          f"skips={row['skips']}, "
                          f"premium=${row['premium_collected']:.2f}")
         else:
-            parts.append("\n_No daily_summaries row for this date._")
+            parts.append(
+                f"\n_No daily_summaries row for {target_date.isoformat()} — "
+                f"market_close may not have run, or it's mid-day._"
+            )
     except Exception:
         parts.append("\n_Could not read daily_summaries table._")
 
@@ -346,7 +386,7 @@ def _section_data_health(snapshots_dir: str, now: datetime | None = None) -> str
         return "\n".join(parts)
 
     _now = now or datetime.now()
-    parts.append("_Status: ✓ recent success · ⚠ stale (>26h since last success) · ✗ active failure_")
+    parts.append("_Status: ✓ recent success · ⚠ stale (>26h since last success, expected on macro-blocked days) · ✗ active failure_")
     parts.append("")
     parts.append("| Source | Status | Today (✓/✗) | Last success | Last failure reason |")
     parts.append("|--------|--------|-------------|--------------|---------------------|")

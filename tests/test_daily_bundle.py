@@ -16,6 +16,7 @@ from api.daily_bundle import (
     _section_ai_usage,
     _section_header,
     _section_data_health,
+    _section_market_context,
 )
 
 TARGET_DATE = date(2026, 4, 23)
@@ -83,11 +84,23 @@ def _make_db(path: Path) -> str:
 
 def _make_snapshots(snap_dir: Path) -> None:
     snap_dir.mkdir(parents=True, exist_ok=True)
-    (snap_dir / "regime_history.json").write_text(json.dumps([{
-        "regime": "NEUTRAL", "vix": 18.5, "fear_greed_value": 42,
-        "fear_greed_rating": "Fear", "iv_environment": "normal",
-        "stability": "stable", "timestamp": "2026-04-23T10:00:00",
-    }]))
+    (snap_dir / "context.json").write_text(json.dumps({
+        "timestamp": "2026-04-23T10:00:00",
+        "confirmed_market_regime": "NEUTRAL",
+        "raw_market_regime": "NEUTRAL",
+        "regime_stable": True,
+        "iv_environment": "normal",
+        "macro": {
+            "vix": 18.5,
+            "vix_regime": "elevated",
+            "fear_greed_score": 42,
+            "fear_greed_rating": "Fear",
+        },
+    }))
+    (snap_dir / "regime_history.json").write_text(json.dumps({
+        "readings": ["NEUTRAL", "NEUTRAL", "NEUTRAL"],
+        "confirmed": "NEUTRAL",
+    }))
     (snap_dir / "source_health.json").write_text(json.dumps({
         "alpaca": {
             "last_success": "2026-04-23T10:00:00",
@@ -400,6 +413,93 @@ def test_section_header_circuit_breaker_red_halted_with_rule(tmp_path):
     out = _section_header(TARGET_DATE, db, str(snap))
     assert "**Circuit breaker:** RED (HALTED)" in out
     assert "**Active CB rules:** drawdown_lock" in out
+
+
+# ── _section_market_context tests ───────────────────────────────────────────
+
+
+def _write_context(snap: Path, payload: dict) -> None:
+    (snap / "context.json").write_text(json.dumps(payload), encoding="utf-8")
+
+
+def test_market_context_all_sources_present(tmp_path):
+    db = _make_db(tmp_path)
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "INSERT INTO daily_summaries (date, decisions_total, skips, trades_executed, premium_collected) VALUES (?,?,?,?,?)",
+        (TARGET_DATE.isoformat(), 10, 3, 2, 150.0),
+    )
+    conn.commit()
+    conn.close()
+
+    snap = tmp_path / "snapshots"
+    snap.mkdir()
+    _write_context(snap, {
+        "timestamp": "2026-04-23T10:00:00",
+        "confirmed_market_regime": "BULL",
+        "raw_market_regime": "BULL",
+        "regime_stable": True,
+        "iv_environment": "low",
+        "macro": {"vix": 14.2, "fear_greed_score": 72, "fear_greed_rating": "Greed"},
+    })
+    (snap / "regime_history.json").write_text(json.dumps({
+        "readings": ["BULL", "BULL", "BULL"], "confirmed": "BULL",
+    }))
+
+    out = _section_market_context(TARGET_DATE, db, str(snap))
+    assert "**Regime:** BULL" in out
+    assert "**VIX:** 14.2" in out
+    assert "72 (Greed)" in out
+    assert "**IV environment:** low" in out
+    assert "**Recorded at:** 2026-04-23T10:00:00" in out
+    assert "**Regime stability:** confirmed=BULL" in out
+    assert "decisions=10" in out
+
+
+def test_market_context_no_context_json_shows_caveat(tmp_path):
+    db = _make_db(tmp_path)
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "INSERT INTO daily_summaries (date, decisions_total, skips, trades_executed, premium_collected) VALUES (?,?,?,?,?)",
+        (TARGET_DATE.isoformat(), 5, 1, 1, 50.0),
+    )
+    conn.commit()
+    conn.close()
+
+    snap = tmp_path / "snapshots"
+    snap.mkdir()
+
+    out = _section_market_context(TARGET_DATE, db, str(snap))
+    assert "No context.json snapshot" in out
+    assert "decisions=5" in out
+
+
+def test_market_context_both_missing_shows_distinct_messages(tmp_path):
+    db = _make_db(tmp_path)
+    snap = tmp_path / "snapshots"
+    snap.mkdir()
+
+    out = _section_market_context(TARGET_DATE, db, str(snap))
+    assert "No context.json snapshot" in out
+    assert f"No daily_summaries row for {TARGET_DATE.isoformat()}" in out
+
+
+def test_market_context_stale_context_shows_staleness_caveat(tmp_path):
+    db = _make_db(tmp_path)
+    snap = tmp_path / "snapshots"
+    snap.mkdir()
+    # Write context timestamped 3 days before TARGET_DATE (2026-04-20)
+    _write_context(snap, {
+        "timestamp": "2026-04-20T14:00:00",
+        "confirmed_market_regime": "NEUTRAL",
+        "iv_environment": "normal",
+        "macro": {"vix": 18.0, "fear_greed_score": 45, "fear_greed_rating": "Fear"},
+    })
+
+    out = _section_market_context(TARGET_DATE, db, str(snap))
+    assert "⚠ Context snapshot is" in out
+    assert "h old" in out
+    assert "market_open's per-symbol loop" in out
 
 
 # ── _section_cycle_summary tests ────────────────────────────────────────────
