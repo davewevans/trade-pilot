@@ -42,6 +42,19 @@ def client():
 
 
 @pytest.fixture
+def authed_client():
+    """TestClient that carries a valid session token (bypasses auth middleware)."""
+    from api.server import app, _issue_session
+
+    token, _ = _issue_session()
+    return TestClient(
+        app,
+        raise_server_exceptions=False,
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+
+@pytest.fixture
 def snap():
     return _patch_paths.snap
 
@@ -533,3 +546,61 @@ class TestRegimeHistory:
         (snap / "regime_history.json").write_text(json.dumps(data))
         r = client.get("/api/regime-history")
         assert r.json()["confirmed"] == "BULL"
+
+
+# ── /api/macro-block-status ─────────────────────────────────
+
+
+class TestMacroBlockStatusEndpoint:
+    """GET /api/macro-block-status — banner data source."""
+
+    def test_unauthenticated_returns_401(self, client):
+        r = client.get("/api/macro-block-status")
+        assert r.status_code == 401
+
+    def test_returns_active_false_when_not_blocked(self, authed_client):
+        from datetime import date
+        with patch("data.macro_calendar.is_blocked", return_value=(False, "")), \
+             patch("data.macro_calendar.next_event", return_value=None), \
+             patch("data.macro_calendar.next_clear_session", return_value=date(2026, 5, 4)):
+            r = authed_client.get("/api/macro-block-status")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["active"] is False
+        assert body["reason"] is None
+        assert body["next_clear_session"] == "2026-05-04"
+
+    def test_returns_active_true_with_event_details(self, authed_client):
+        from datetime import date
+        with patch(
+            "data.macro_calendar.is_blocked",
+            return_value=(True, "MACRO_EVENT_PROXIMITY: NFP on 2026-05-01 at 08:30 ET"),
+        ), patch(
+            "data.macro_calendar.next_event",
+            return_value={
+                "type": "NFP",
+                "date": "2026-05-01",
+                "time_et": "08:30",
+                "description": "Non-Farm Payrolls (May 2026)",
+                "hours_until": 1.5,
+                "is_today": True,
+                "is_next_trading_day": False,
+            },
+        ), patch("data.macro_calendar.next_clear_session", return_value=date(2026, 5, 4)):
+            r = authed_client.get("/api/macro-block-status")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["active"] is True
+        assert body["event_type"] == "NFP"
+        assert body["event_date"] == "2026-05-01"
+        assert body["event_time_et"] == "08:30"
+        assert body["next_clear_session"] == "2026-05-04"
+        assert body["next_event"]["type"] == "NFP"
+
+    def test_returns_503_when_calendar_raises(self, authed_client):
+        with patch(
+            "data.macro_calendar.is_blocked",
+            side_effect=RuntimeError("calendar broken"),
+        ):
+            r = authed_client.get("/api/macro-block-status")
+        assert r.status_code == 503

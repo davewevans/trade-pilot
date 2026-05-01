@@ -416,6 +416,16 @@ class Settings:
             os.getenv("MACRO_EVENT_BLOCK_ENABLED", "true").lower() == "true"
         )
 
+        # ── Macro event block notifications ───────────────────
+        # Edge-triggered ntfy push when the macro block becomes active or clears.
+        # Independent of MACRO_EVENT_BLOCK_ENABLED so the operator can mute
+        # notifications without disabling the block itself.
+        # Default false — flip to true on Render after first deploy verifies
+        # the no-op path works. First post-flip transition will fire a real push.
+        self.MACRO_BLOCK_NOTIFY_ENABLED: bool = (
+            os.getenv("MACRO_BLOCK_NOTIFY_ENABLED", "false").lower() == "true"
+        )
+
         # ── Fill realism / shadow execution ───────────────────
         # Measurement-only NBBO capture around every order submit.
         # When false, all shadow_execution code is a no-op — no DB writes,

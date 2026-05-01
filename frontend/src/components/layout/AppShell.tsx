@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactNode, type FormEvent } from 'react'
+import { MacroBlockBanner } from '../MacroBlockBanner'
 import { Sidebar } from './Sidebar'
 import { TopBar } from './TopBar'
 
@@ -95,6 +96,7 @@ export function AppShell({ children }: { children: ReactNode }) {
     <div className="h-full flex flex-col">
       {sessionExpired && <SessionExpiredOverlay onAuthenticated={() => setSessionExpired(false)} />}
       <TopBar />
+      <MacroBlockBanner />
       <div className="flex flex-1 overflow-hidden">
         <Sidebar />
         <main className="flex-1 overflow-auto p-6">{children}</main>

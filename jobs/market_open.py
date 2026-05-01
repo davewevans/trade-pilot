@@ -120,6 +120,13 @@ def run() -> None:
     if settings.MACRO_EVENT_BLOCK_ENABLED:
         from data.macro_calendar import is_blocked as _macro_is_blocked
         _macro_blocked, _macro_reason = _macro_is_blocked(et_now)
+        # Edge-triggered notification — fires only on status change.
+        # Honors MACRO_BLOCK_NOTIFY_ENABLED internally; safe to call unconditionally.
+        try:
+            from notifications.macro_block_state import check_and_notify as _mb_check
+            _mb_check(et_now)
+        except Exception:
+            logger.warning("macro_block notification check failed (non-fatal)", exc_info=True)
         if _macro_blocked:
             logger.info("MACRO EVENT BLOCK ACTIVE: %s — skipping all entries", _macro_reason)
             append_section(
