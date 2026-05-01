@@ -21,6 +21,7 @@ from data.macro_calendar import (
     generate_nfp_dates,
     is_blocked,
     load_events,
+    next_clear_session,
     next_event,
 )
 
@@ -303,3 +304,52 @@ class TestIsBlocked:
             blocked, reason = is_blocked(now)
         assert blocked is False
         assert reason == ""
+
+
+# ── next_clear_session ────────────────────────────────────────────────────────
+
+
+class TestNextClearSession:
+    def _patch_sessions(self, current, nxt):
+        return patch("data.macro_calendar._get_session_pair", return_value=(current, nxt))
+
+    def _patch_events(self, events):
+        return patch("data.macro_calendar.all_tier_1_events", return_value=events)
+
+    def test_returns_next_session_when_no_events_nearby(self):
+        now = et(2026, 5, 4, 10, 0)
+        with self._patch_sessions(date(2026, 5, 4), date(2026, 5, 5)), \
+             self._patch_events([]):
+            result = next_clear_session(now)
+        assert result == date(2026, 5, 5)
+
+    def test_raises_for_naive_datetime(self):
+        with pytest.raises(ValueError, match="timezone-aware"):
+            next_clear_session(datetime(2026, 5, 1, 10, 0))
+
+    def test_returns_none_when_no_clear_session_in_window(self):
+        # Events cover every session pair for 14+ days — sentinel None is expected.
+        now = et(2026, 5, 4, 10, 0)
+        # Build a dense event list covering every date in the lookahead window.
+        events = [
+            {"type": "FOMC", "date": f"2026-{m:02d}-{d:02d}", "time_et": "14:00", "description": "x"}
+            for m in range(5, 7) for d in range(1, 32)
+            if (m == 5 and d <= 31) or (m == 6 and d <= 30)
+        ]
+        # Patch _get_session_pair to always return a fixed pair so the loop advances
+        # predictably and doesn't call the real mcal.
+        call_count = 0
+        session_dates = [date(2026, 5, 4 + i) for i in range(20)]
+
+        def fake_sessions(probe):
+            nonlocal call_count
+            idx = call_count
+            call_count += 1
+            cur = session_dates[idx] if idx < len(session_dates) else None
+            nxt = session_dates[idx + 1] if idx + 1 < len(session_dates) else None
+            return cur, nxt
+
+        with patch("data.macro_calendar._get_session_pair", side_effect=fake_sessions), \
+             self._patch_events(events):
+            result = next_clear_session(now, max_lookahead_days=14)
+        assert result is None

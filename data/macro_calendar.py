@@ -200,3 +200,56 @@ def _event_datetime(event: dict) -> datetime:
     h, m = (int(x) for x in time_str.split(":"))
     d = date.fromisoformat(event["date"])
     return datetime(d.year, d.month, d.day, h, m, tzinfo=ZoneInfo("America/New_York"))
+
+
+def next_clear_session(now_et: datetime, max_lookahead_days: int = 14) -> date | None:
+    """Return the first future NYSE trading session for which is_blocked() would be False.
+
+    Walks forward one trading day at a time using the same session-pair logic that
+    is_blocked() uses. Returns None if no clear session is found within
+    max_lookahead_days calendar days — this is a sentinel for "extreme cluster, operator
+    should investigate manually" and should never happen under normal calendar conditions.
+
+    Args:
+        now_et: Timezone-aware ET datetime. Raises ValueError if naive.
+        max_lookahead_days: Calendar-day cap on the search. Default 14 covers the
+            worst realistic case (back-to-back FOMC + CPI + NFP weeks).
+
+    Returns:
+        The earliest date >= today's-next-session that is not blocked, or None.
+    """
+    if now_et.tzinfo is None:
+        raise ValueError("now_et must be timezone-aware")
+
+    # Start from the next trading session after today.
+    _, candidate = _get_session_pair(now_et)
+    if candidate is None:
+        return None
+
+    cutoff = (now_et + timedelta(days=max_lookahead_days)).date()
+    events_by_date = {
+        e["date"]: e
+        for e in all_tier_1_events(now_et)
+    }
+
+    while candidate <= cutoff:
+        # Build the (current, next) session pair for this candidate date by walking
+        # forward through trading days from `candidate`.
+        # Synthesize an ET datetime at 10:00 on the candidate date for _get_session_pair.
+        probe = datetime(
+            candidate.year, candidate.month, candidate.day,
+            10, 0, tzinfo=now_et.tzinfo,
+        )
+        cur_session, next_session = _get_session_pair(probe)
+        block_dates = {d for d in (cur_session, next_session) if d is not None}
+
+        # If neither session contains a Tier 1 event, this candidate is clear.
+        if not any(d.isoformat() in events_by_date for d in block_dates):
+            return candidate
+
+        # Otherwise advance to the next trading day.
+        if next_session is None or next_session <= candidate:
+            return None
+        candidate = next_session
+
+    return None
