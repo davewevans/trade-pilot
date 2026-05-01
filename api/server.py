@@ -817,6 +817,79 @@ def context():
     return data
 
 
+@app.get("/api/macro-block-status")
+def macro_block_status():
+    """Return current Tier 1 macro event block status.
+
+    Used by the dashboard top banner to surface "the bot is intentionally idle
+    because of a Tier 1 event" when the user looks at an otherwise-empty UI.
+
+    Response shape:
+        {
+          "active": bool,
+          "reason": str | None,
+          "event_type": str | None,
+          "event_date": str | None,
+          "event_time_et": str | None,
+          "next_clear_session": str | None,
+          "next_event": { ... } | None,
+          "checked_at": str
+        }
+    """
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from data.macro_calendar import is_blocked, next_clear_session, next_event
+
+    et_now = datetime.now(ZoneInfo(settings.TIMEZONE))
+
+    try:
+        blocked, reason = is_blocked(et_now)
+    except Exception:
+        logger.exception("macro_block_status: is_blocked() failed")
+        return JSONResponse(
+            status_code=503,
+            content={"error": "macro calendar unavailable"},
+        )
+
+    response = {
+        "active": blocked,
+        "reason": reason if blocked else None,
+        "event_type": None,
+        "event_date": None,
+        "event_time_et": None,
+        "next_clear_session": None,
+        "next_event": None,
+        "checked_at": et_now.isoformat(timespec="seconds"),
+    }
+
+    try:
+        nxt = next_event(et_now)
+        if nxt is not None:
+            response["next_event"] = {
+                "type": nxt.get("type"),
+                "date": nxt.get("date"),
+                "time_et": nxt.get("time_et"),
+                "description": nxt.get("description", ""),
+                "hours_until": nxt.get("hours_until"),
+                "is_today": nxt.get("is_today", False),
+                "is_next_trading_day": nxt.get("is_next_trading_day", False),
+            }
+            if blocked:
+                response["event_type"] = nxt.get("type")
+                response["event_date"] = nxt.get("date")
+                response["event_time_et"] = nxt.get("time_et")
+    except Exception:
+        logger.warning("macro_block_status: next_event lookup failed", exc_info=True)
+
+    try:
+        clear = next_clear_session(et_now)
+        response["next_clear_session"] = clear.isoformat() if clear is not None else None
+    except Exception:
+        logger.warning("macro_block_status: next_clear_session lookup failed", exc_info=True)
+
+    return response
+
+
 @app.get("/api/circuit-breakers")
 def circuit_breakers():
     data = _read_json(SNAPSHOTS / "circuit_breakers.json")

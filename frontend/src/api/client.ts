@@ -384,6 +384,25 @@ export interface HeartbeatResponse {
   stale_minutes: number | null
 }
 
+export interface MacroBlockStatus {
+  active: boolean
+  reason: string | null
+  event_type: 'FOMC' | 'CPI' | 'NFP' | null
+  event_date: string | null
+  event_time_et: string | null
+  next_clear_session: string | null
+  next_event: {
+    type: string
+    date: string
+    time_et: string
+    description: string
+    hours_until: number
+    is_today: boolean
+    is_next_trading_day: boolean
+  } | null
+  checked_at: string
+}
+
 export const api = {
   health: () => get<HealthStatus>('/api/health'),
 
@@ -653,6 +672,8 @@ export const api = {
     const qs = account ? `?account=${encodeURIComponent(account)}` : ''
     return get<PortfolioGreeks>(`/api/portfolio-greeks${qs}`)
   },
+
+  macroBlockStatus: () => get<MacroBlockStatus>('/api/macro-block-status'),
 
   haltStatus: () => get<HaltInfo>('/api/halt-status'),
 
