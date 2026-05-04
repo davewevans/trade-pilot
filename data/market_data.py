@@ -201,6 +201,56 @@ def start_option_stream(symbols: list[str], on_quote, on_trade) -> None:
 
 # ── VIX proxy ───────────────────────────────────────────────
 
+_VIX_CACHE: dict = {"value": None, "fetched_at": None}
+
+
+def _is_market_hours() -> bool:
+    """Return True if current ET time falls within regular trading hours."""
+    from zoneinfo import ZoneInfo
+    now = datetime.now(ZoneInfo("America/New_York"))
+    if now.weekday() >= 5:
+        return False
+    market_open = now.replace(hour=9, minute=30, second=0, microsecond=0)
+    market_close = now.replace(hour=16, minute=0, second=0, microsecond=0)
+    return market_open <= now <= market_close
+
+
+def get_vix_with_age(fresh_vix: "float | None") -> dict:
+    """Apply stale-tolerance logic to an already-fetched VIX value.
+
+    Call this after get_vix() resolves (e.g. after the parallel-fetch pool).
+    Updates the in-memory cache on a fresh fetch. When VIX_STALE_TOLERANCE_ENABLED
+    is true and the fresh fetch failed, returns a cached value if it is still
+    within the configured age window.
+
+    Returns {"value": float|None, "age_seconds": int|None, "stale": bool}.
+    """
+    from config import settings
+    now = time.time()
+
+    if fresh_vix is not None:
+        _VIX_CACHE["value"] = fresh_vix
+        _VIX_CACHE["fetched_at"] = now
+        return {"value": fresh_vix, "age_seconds": 0, "stale": False}
+
+    # Fresh fetch failed.
+    if not settings.VIX_STALE_TOLERANCE_ENABLED:
+        return {"value": None, "age_seconds": None, "stale": True}
+
+    cached_value = _VIX_CACHE["value"]
+    cached_at = _VIX_CACHE["fetched_at"]
+    if cached_value is None or cached_at is None:
+        return {"value": None, "age_seconds": None, "stale": True}
+
+    age = int(now - cached_at)
+    max_age = (
+        settings.VIX_STALE_MAX_AGE_SECONDS_MARKET_HOURS if _is_market_hours()
+        else settings.VIX_STALE_MAX_AGE_SECONDS_OFF_HOURS
+    )
+    if age > max_age:
+        return {"value": None, "age_seconds": age, "stale": True}
+    return {"value": cached_value, "age_seconds": age, "stale": True}
+
 
 @retry_on_transient(max_retries=2, base_delay=1.0)
 def _fetch_vix_from_fred() -> float:

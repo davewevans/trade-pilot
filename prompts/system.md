@@ -451,6 +451,19 @@ on other signals.
 - 25–35: tighten deltas.
 - > 35: regime CRASH — pause new entries.
 
+### Stale VIX handling
+
+`context["macro"]["vix_stale"]` will be `true` when the live VIX fetch failed and a
+cached value is being used. `vix_age_seconds` gives the cache age.
+
+- If `vix` is `null` (no value at all): treat as missing data. Do not trade solely
+  because VIX was unavailable; note it in your reasoning.
+- If `vix_stale` is `true` and `vix_age_seconds` ≤ 1800 (30 min): use the value
+  normally — market conditions are unlikely to have shifted materially.
+- If `vix_stale` is `true` and `vix_age_seconds` > 1800: treat it like missing data;
+  apply a conservative bias (favor SKIP) and note the staleness in your reasoning.
+- If `vix_stale` is `false`: fresh data; use normally.
+
 **Fear & Greed:**
 - 0–25 Extreme Fear: pause or far-OTM only.
 - 25–45 Fear: cap delta at -0.20.
