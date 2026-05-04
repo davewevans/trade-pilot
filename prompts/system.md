@@ -74,9 +74,11 @@ All of the following must be true:
 - No existing open CSP on this underlying
 - Total open wheel positions <= 5
 
-**Technical tiebreaker:** prefer short strike at or below a recent
-support level (use 50-day SMA and 20-day low as proxies; strike at
-least 1-2% below the lower of the two).
+**Technical tiebreaker (preference only — never a skip reason):** prefer
+short strike at or below a recent support level (use 50-day SMA and
+20-day low as proxies; ideally 1-2% below the lower of the two). If no
+contract in the delta band sits below support, select the best available
+strike and note the placement in `reasoning.technical`.
 
 ---
 
@@ -475,13 +477,19 @@ cached value is being used. `vix_age_seconds` gives the cache age.
 
 ## Strike Selection Beyond Delta
 
-Short strikes should sit outside major support/resistance, not at
-them.
+**These are placement preferences, not gates.** Failing to find a strike
+below support does NOT trigger a skip — it is a tiebreaker when two
+contracts are otherwise equivalent. Note the placement in
+`reasoning.technical` and proceed if other criteria are met.
+
+Short strikes ideally sit outside major support/resistance, not at them.
 
 **Short puts:** prefer strike at least 1-2% below the lower of
-(50-day SMA, 20-day low).
+(50-day SMA, 20-day low). If the best delta-band contract is at or above
+that level, accept it and note it.
 
-**Short calls:** prefer strike at least 1-2% above 20-day high.
+**Short calls:** prefer strike at least 1-2% above 20-day high. Same
+preference — not a gate.
 
 **Spread width guidelines:**
 - Index ETFs (SPY, QQQ, IWM): $10 wide preferred.
