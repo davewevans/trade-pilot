@@ -408,6 +408,16 @@ class Settings:
             os.getenv("CROSS_ACCOUNT_ANTI_CROWDING_ENABLED", "true").lower() == "true"
         )
 
+        # ── Structural untradeability filter ──────────────────
+        # Pre-Claude check: if the lowest-strike contract in the -0.20 to -0.30
+        # delta band has a notional cost (strike × 100) exceeding 10% of
+        # options_buying_power, skip the Claude call entirely. Default false —
+        # flip true after verifying the expected symbols produce
+        # STRUCTURALLY_UNTRADEABLE skip codes on a dry-run.
+        self.STRUCTURAL_UNTRADEABLE_FILTER_ENABLED: bool = (
+            os.getenv("STRUCTURAL_UNTRADEABLE_FILTER_ENABLED", "false").lower() == "true"
+        )
+
         # ── Macro event block ─────────────────────────────────
         # Hard-blocks new entries the day of and the trading day before any Tier 1
         # macro event (FOMC, CPI, NFP) listed in data/macro_events.json.
