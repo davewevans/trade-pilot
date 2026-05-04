@@ -1,8 +1,10 @@
 """Tests for data.api_ledger — API usage ledger and hard cap enforcement."""
 
+import sqlite3
 import time
 import threading
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -278,3 +280,88 @@ def test_concurrent_writes_correct_count(tmp_path):
 
     usage = ledger.get_usage("orats_historical")
     assert usage["month_used"] == n * 2
+
+
+# ---------------------------------------------------------------------------
+# case 11: _insert retries on "database is locked" and succeeds
+# ---------------------------------------------------------------------------
+
+
+def test_insert_retries_on_locked_then_succeeds(tmp_path):
+    """_insert should retry via @db_retry when SQLite raises 'database is locked'.
+
+    sqlite3.Connection.execute is a C-extension method (read-only attribute) so
+    we replace _conn with a MagicMock that delegates to the real connection after
+    the first two failures.
+    """
+    ledger = make_ledger(tmp_path)
+    real_conn = ledger._conn
+    call_count = {"n": 0}
+
+    def flaky_execute(sql, *args):
+        if "INSERT" in sql and call_count["n"] < 2:
+            call_count["n"] += 1
+            raise sqlite3.OperationalError("database is locked")
+        return real_conn.execute(sql, *args)
+
+    mock_conn = MagicMock()
+    mock_conn.execute.side_effect = flaky_execute
+    mock_conn.commit.side_effect = real_conn.commit
+    ledger._conn = mock_conn
+
+    # Should not raise — @db_retry retries up to 5 times
+    ledger._insert("orats_historical", "hist/summaries", time.time(), "AAPL",
+                   False, 200, 50, None, None)
+    assert call_count["n"] == 2  # flaky path was hit twice before success
+
+    # Row was eventually written to the real DB
+    ledger._conn = real_conn
+    row = real_conn.execute(
+        "SELECT COUNT(*) FROM api_usage_ledger WHERE cache_hit=0 AND blocked_reason IS NULL"
+    ).fetchone()
+    assert row[0] == 1
+
+
+# ---------------------------------------------------------------------------
+# case 12: record() is non-fatal when _insert fails after all retries
+# ---------------------------------------------------------------------------
+
+
+def test_record_is_nonfatal_when_insert_fails(tmp_path):
+    """record() must not raise when _insert exhausts retries — caller must not be affected."""
+    ledger = make_ledger(tmp_path)
+
+    mock_conn = MagicMock()
+    mock_conn.execute.side_effect = sqlite3.OperationalError("database is locked")
+    ledger._conn = mock_conn
+
+    # Should complete without raising even though every attempt fails
+    ledger.record("orats_historical", "hist/summaries", "AAPL", False, 200, 50, None)
+
+
+# ---------------------------------------------------------------------------
+# case 13: _count_window retries on "database is locked"
+# ---------------------------------------------------------------------------
+
+
+def test_count_window_retries_on_locked_then_succeeds(tmp_path):
+    """_count_window must retry via @db_retry when SQLite raises 'database is locked'."""
+    ledger = make_ledger(tmp_path)
+    ledger.record("orats_historical", "hist/summaries", "AAPL", False, 200, 50, None)
+    real_conn = ledger._conn
+    call_count = {"n": 0}
+
+    def flaky_execute(sql, *args):
+        if "SELECT COUNT" in sql and call_count["n"] < 1:
+            call_count["n"] += 1
+            raise sqlite3.OperationalError("database is locked")
+        return real_conn.execute(sql, *args)
+
+    mock_conn = MagicMock()
+    mock_conn.execute.side_effect = flaky_execute
+    ledger._conn = mock_conn
+
+    now = time.time()
+    count = ledger._count_window("orats_historical", now - 3600)
+    assert count == 1
+    assert call_count["n"] == 1  # flaky path was hit exactly once before success
