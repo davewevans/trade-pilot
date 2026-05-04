@@ -213,17 +213,20 @@ class ApiLedger:
                         "minute_used": minute_used,
                         "minute_cap": caps["minute"],
                     }
-                    self._insert(
-                        api=api,
-                        endpoint=endpoint,
-                        ts=now,
-                        symbol=symbol,
-                        cache_hit=False,
-                        status_code=None,
-                        duration_ms=None,
-                        job_name=job_name,
-                        blocked_reason=reason,
-                    )
+                    try:
+                        self._insert(
+                            api=api,
+                            endpoint=endpoint,
+                            ts=now,
+                            symbol=symbol,
+                            cache_hit=False,
+                            status_code=None,
+                            duration_ms=None,
+                            job_name=job_name,
+                            blocked_reason=reason,
+                        )
+                    except Exception:
+                        logger.warning("ApiLedger: failed to write blocked row", exc_info=True)
                     self._emit_api_log(api, endpoint, symbol, False, None, None, reason, job_name)
                     quota_exc = OratsQuotaExceeded(reason=reason, usage=usage)
                     break  # only raise on the first exceeded cap
@@ -303,28 +306,32 @@ class ApiLedger:
         elif not job_name:
             job_name = os.environ.get("TRADE_PILOT_JOB_NAME")
 
-        with self._lock:
-            self._insert(
-                api=api,
-                endpoint=endpoint,
-                ts=time.time(),
-                symbol=symbol,
-                cache_hit=cache_hit,
-                status_code=status_code,
-                duration_ms=duration_ms,
-                job_name=job_name,
-                blocked_reason=None,
-            )
-            # Count only real billable calls toward the snapshot trigger
-            if not cache_hit and self._caps_for(api) is not None:
-                self._billable_since_snapshot += 1
-                if self._billable_since_snapshot >= self._SNAPSHOT_INTERVAL:
-                    self._billable_since_snapshot = 0
-                    do_snapshot = True
+        try:
+            with self._lock:
+                self._insert(
+                    api=api,
+                    endpoint=endpoint,
+                    ts=time.time(),
+                    symbol=symbol,
+                    cache_hit=cache_hit,
+                    status_code=status_code,
+                    duration_ms=duration_ms,
+                    job_name=job_name,
+                    blocked_reason=None,
+                )
+                # Count only real billable calls toward the snapshot trigger
+                if not cache_hit and self._caps_for(api) is not None:
+                    self._billable_since_snapshot += 1
+                    if self._billable_since_snapshot >= self._SNAPSHOT_INTERVAL:
+                        self._billable_since_snapshot = 0
+                        do_snapshot = True
+                    else:
+                        do_snapshot = False
                 else:
                     do_snapshot = False
-            else:
-                do_snapshot = False
+        except Exception:
+            logger.warning("ApiLedger.record failed — ledger row not written", exc_info=True)
+            do_snapshot = False
 
         self._emit_api_log(api, endpoint, symbol, cache_hit, status_code, duration_ms, None, job_name)
         if do_snapshot:
@@ -506,31 +513,29 @@ class ApiLedger:
         job_name: Optional[str],
         blocked_reason: Optional[str],
     ) -> None:
-        try:
-            self._conn.execute(
-                """
-                INSERT INTO api_usage_ledger
-                    (api, endpoint, ts, symbol, cache_hit,
-                     status_code, duration_ms, process_id, job_name, blocked_reason)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    api,
-                    endpoint,
-                    ts,
-                    symbol,
-                    1 if cache_hit else 0,
-                    status_code,
-                    duration_ms,
-                    os.getpid(),
-                    job_name,
-                    blocked_reason,
-                ),
-            )
-            self._conn.commit()
-        except Exception:
-            logger.warning("ApiLedger._insert failed", exc_info=True)
+        self._conn.execute(
+            """
+            INSERT INTO api_usage_ledger
+                (api, endpoint, ts, symbol, cache_hit,
+                 status_code, duration_ms, process_id, job_name, blocked_reason)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                api,
+                endpoint,
+                ts,
+                symbol,
+                1 if cache_hit else 0,
+                status_code,
+                duration_ms,
+                os.getpid(),
+                job_name,
+                blocked_reason,
+            ),
+        )
+        self._conn.commit()
 
+    @db_retry(max_attempts=5, base_delay=0.05)
     def _count_window(self, api: str, since: float) -> int:
         """Count billable (non-cache-hit, non-blocked) calls for *api* since *since*."""
         row = self._conn.execute(

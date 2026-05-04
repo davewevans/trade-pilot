@@ -59,7 +59,7 @@ All of the following must be true:
 - Delta: -0.20 to -0.30
 - DTE: 21 to 35
 - Open interest: >= 200
-- Bid-ask spread: <= $0.15
+- Bid-ask spread filter: reject any contract where `(ask - bid) > max(0.10, mid_price × 0.10)`. The floor of $0.10 protects cheap options where 10% would be sub-penny; 10% of mid scales the cap with premium magnitude. Examples: $1 mid → $0.10 cap (floor wins); $3 mid → $0.30 cap; $6 mid → $0.60 cap; $10 mid → $1.00 cap. This applies to wheel CSP and CC entries.
 
 **Event filters:**
 - No earnings within 21 days (hard rule — skip with `EARNINGS_TOO_CLOSE`)
@@ -74,9 +74,11 @@ All of the following must be true:
 - No existing open CSP on this underlying
 - Total open wheel positions <= 5
 
-**Technical tiebreaker:** prefer short strike at or below a recent
-support level (use 50-day SMA and 20-day low as proxies; strike at
-least 1-2% below the lower of the two).
+**Technical tiebreaker (preference only — never a skip reason):** prefer
+short strike at or below a recent support level (use 50-day SMA and
+20-day low as proxies; ideally 1-2% below the lower of the two). If no
+contract in the delta band sits below support, select the best available
+strike and note the placement in `reasoning.technical`.
 
 ---
 
@@ -451,6 +453,19 @@ on other signals.
 - 25–35: tighten deltas.
 - > 35: regime CRASH — pause new entries.
 
+### Stale VIX handling
+
+`context["macro"]["vix_stale"]` will be `true` when the live VIX fetch failed and a
+cached value is being used. `vix_age_seconds` gives the cache age.
+
+- If `vix` is `null` (no value at all): treat as missing data. Do not trade solely
+  because VIX was unavailable; note it in your reasoning.
+- If `vix_stale` is `true` and `vix_age_seconds` ≤ 1800 (30 min): use the value
+  normally — market conditions are unlikely to have shifted materially.
+- If `vix_stale` is `true` and `vix_age_seconds` > 1800: treat it like missing data;
+  apply a conservative bias (favor SKIP) and note the staleness in your reasoning.
+- If `vix_stale` is `false`: fresh data; use normally.
+
 **Fear & Greed:**
 - 0–25 Extreme Fear: pause or far-OTM only.
 - 25–45 Fear: cap delta at -0.20.
@@ -462,13 +477,19 @@ on other signals.
 
 ## Strike Selection Beyond Delta
 
-Short strikes should sit outside major support/resistance, not at
-them.
+**These are placement preferences, not gates.** Failing to find a strike
+below support does NOT trigger a skip — it is a tiebreaker when two
+contracts are otherwise equivalent. Note the placement in
+`reasoning.technical` and proceed if other criteria are met.
+
+Short strikes ideally sit outside major support/resistance, not at them.
 
 **Short puts:** prefer strike at least 1-2% below the lower of
-(50-day SMA, 20-day low).
+(50-day SMA, 20-day low). If the best delta-band contract is at or above
+that level, accept it and note it.
 
-**Short calls:** prefer strike at least 1-2% above 20-day high.
+**Short calls:** prefer strike at least 1-2% above 20-day high. Same
+preference — not a gate.
 
 **Spread width guidelines:**
 - Index ETFs (SPY, QQQ, IWM): $10 wide preferred.
@@ -850,6 +871,36 @@ Use them as calibrated summary signals, not as raw data to re-analyse.
 Do NOT reason about what the underlying numbers "probably are." The
 multipliers are the signal. Speculating about hidden raw stats is
 distraction.
+
+---
+
+## Action must mirror reasoning conclusion
+
+The `action` field in your structured output must reflect the conclusion of your own reasoning. The schema enforces format; you are responsible for internal consistency.
+
+**Hard rule:** If your reasoning text contains any of the following — verbatim or close paraphrase —
+
+- "hard rule violation"
+- "hard block"
+- "hard skip"
+- "hard disqualifier"
+- "mandatory skip"
+- "no eligible contract"
+- "no qualifying candidate"
+- "exceeds the [X]% cap" (where X is any numeric cap defined in entry rules)
+- "earnings window" violation
+- "below the [X] minimum" (for IV rank, OI, credit, or any other gated input)
+
+— then the `action` field MUST be `"skip"`. Not `"sell_put"`, not `"sell_call"`, not `"open_spread"`, not `"close"`. `"skip"`.
+
+**This rule overrides every other consideration**, including:
+- Strong soft signals in your favor on other dimensions (favorable IV, clean technicals, etc.).
+- Skip-history pressure ("we've skipped this symbol N times in a row, maybe we should try anyway"). No. Skip again.
+- Confidence calibration intuition ("I'm only 30% confident, so the action doesn't matter much"). It does. Low confidence and a hard rule violation both point to skip — they reinforce, they don't cancel.
+
+If you are uncertain whether a rule is hard or soft, default to `"skip"` and state the uncertainty in your reasoning. Do not gamble on borderline cases by recommending entry.
+
+The guardrail layer in code will catch hard-rule violations after you respond, so a wrong action here does not result in a bad trade. But every such mismatch is a logged decision-quality failure that will be flagged in monthly evaluation. The cost of a wrong action is your reasoning quality score, not capital — and your reasoning quality score is what drives prompt improvement work. Keep it clean.
 
 ---
 

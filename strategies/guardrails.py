@@ -79,6 +79,48 @@ _OCC_CALL_RE = re.compile(r"^[A-Z]+\d{6}C\d{8}$")
 _OCC_ROOT_RE = re.compile(r"^([A-Z]+)\d{6}[CP]\d{8}$")
 
 
+def is_structurally_untradeable_for_csp(
+    context: dict,
+    options_buying_power: float,
+    position_cap_pct: float = 0.10,
+) -> tuple[bool, str | None]:
+    """Pre-Claude check: are all -0.20 to -0.30 delta CSP candidates over the BP cap?
+
+    Uses the already-built context option chain to find the lowest-strike contract
+    in the target delta band. If even that strike's notional (strike × 100) exceeds
+    the BP cap, no contract can pass the post-Claude guardrail. Skip the Claude call.
+
+    Returns (True, reason) when structurally untradeable.
+    Returns (False, None) when tradeable OR when the delta band is empty —
+    an empty band is NO_ELIGIBLE_STRIKE, handled downstream by Claude.
+    """
+    chain = context.get("option_chain") or {}
+    contracts = chain.get("contracts") or []
+
+    band = [
+        c for c in contracts
+        if c.get("delta") is not None and -0.30 <= float(c["delta"]) <= -0.20
+    ]
+
+    if not band:
+        return False, None
+
+    min_strike = min(float(c.get("strike_price", 0) or 0) for c in band)
+    if min_strike <= 0:
+        return False, None
+
+    cap = options_buying_power * position_cap_pct
+    position_cost = min_strike * 100.0
+
+    if position_cost > cap:
+        return True, (
+            f"STRUCTURALLY_UNTRADEABLE: lowest eligible strike ${min_strike:.2f} × 100 "
+            f"= ${position_cost:,.0f} exceeds {position_cap_pct:.0%} of "
+            f"options_buying_power ${options_buying_power:,.0f} (cap ${cap:,.0f})"
+        )
+    return False, None
+
+
 class Guardrails:
     """Hard safety checks applied to every Claude recommendation before execution.
 

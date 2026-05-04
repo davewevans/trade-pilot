@@ -408,6 +408,33 @@ class Settings:
             os.getenv("CROSS_ACCOUNT_ANTI_CROWDING_ENABLED", "true").lower() == "true"
         )
 
+        # ── Structural untradeability filter ──────────────────
+        # Pre-Claude check: if the lowest-strike contract in the -0.20 to -0.30
+        # delta band has a notional cost (strike × 100) exceeding 10% of
+        # options_buying_power, skip the Claude call entirely. Default false —
+        # flip true after verifying the expected symbols produce
+        # STRUCTURALLY_UNTRADEABLE skip codes on a dry-run.
+        self.STRUCTURAL_UNTRADEABLE_FILTER_ENABLED: bool = (
+            os.getenv("STRUCTURAL_UNTRADEABLE_FILTER_ENABLED", "false").lower() == "true"
+        )
+
+        # ── VIX stale-tolerance ────────────────────────────────
+        # When enabled, a cached VIX value is used if the live fetch returns None,
+        # provided the cache is within the configured age window.
+        # Default false — flip true after verifying the stale flag appears in
+        # context["macro"]["vix_stale"] on a dry-run with VIX fetch disabled.
+        self.VIX_STALE_TOLERANCE_ENABLED: bool = (
+            os.getenv("VIX_STALE_TOLERANCE_ENABLED", "false").lower() == "true"
+        )
+        # Max cache age during regular trading hours (09:30–16:00 ET). Default 30 min.
+        self.VIX_STALE_MAX_AGE_SECONDS_MARKET_HOURS: int = int(
+            os.getenv("VIX_STALE_MAX_AGE_SECONDS_MARKET_HOURS", "1800")
+        )
+        # Max cache age outside trading hours (overnight, weekends). Default 4 hours.
+        self.VIX_STALE_MAX_AGE_SECONDS_OFF_HOURS: int = int(
+            os.getenv("VIX_STALE_MAX_AGE_SECONDS_OFF_HOURS", "14400")
+        )
+
         # ── Macro event block ─────────────────────────────────
         # Hard-blocks new entries the day of and the trading day before any Tier 1
         # macro event (FOMC, CPI, NFP) listed in data/macro_events.json.

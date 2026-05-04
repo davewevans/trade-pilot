@@ -57,6 +57,7 @@ class SkipReason(str, Enum):
     DATA_MISSING = "data_missing"
     UNKNOWN = "unknown"
     ANTI_CROWDING_CROSS_ACCOUNT = "anti_crowding_cross_account"
+    STRUCTURALLY_UNTRADEABLE = "structurally_untradeable"
 
 
 REASON_TO_GATE = {
@@ -92,4 +93,5 @@ REASON_TO_GATE = {
     SkipReason.DATA_MISSING: SkipGate.DATA_MISSING,
     SkipReason.UNKNOWN: SkipGate.PRE_CHECK,
     SkipReason.ANTI_CROWDING_CROSS_ACCOUNT: SkipGate.PORTFOLIO,
+    SkipReason.STRUCTURALLY_UNTRADEABLE: SkipGate.PRE_CHECK,
 }

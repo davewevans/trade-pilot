@@ -438,11 +438,14 @@ class ContextBuilder:
         }
 
         # ── Macro ───────────────────────────────────────────
-        vix = results["vix"]
+        _vix_info = market_data.get_vix_with_age(results["vix"])
+        vix = _vix_info["value"]
         fg = results["fear_greed"] or {}
         context["macro"] = {
             "vix": vix,
             "vix_regime": market_data.interpret_vix(vix) if vix is not None else None,
+            "vix_stale": _vix_info["stale"],
+            "vix_age_seconds": _vix_info["age_seconds"],
             "fear_greed_score": fg.get("score"),
             "fear_greed_rating": fg.get("rating"),
             "risk_free_rate": results["risk_free_rate"],

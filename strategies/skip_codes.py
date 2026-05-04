@@ -125,6 +125,12 @@ class SkipCode:
     See config.DIRECTIONAL_FAMILY_MAP. Wheel and Turnover Wheel are exceptions
     — they are allowed to coexist by design (comparative-experiment setup)."""
 
+    STRUCTURALLY_UNTRADEABLE = "STRUCTURALLY_UNTRADEABLE"
+    """Every contract in the -0.20 to -0.30 delta band has a notional cost
+    (strike × 100) that exceeds the 10% options_buying_power cap. No contract
+    on this symbol can pass the post-Claude guardrail today. Pre-Claude skip to
+    avoid wasting the Claude API call."""
+
     # ── Fallback ───────────────────────────────────────────────
 
     OTHER = "OTHER"
@@ -146,6 +152,7 @@ class SkipCode:
         CONFIDENCE_LOW, STRIKE_BELOW_COST_BASIS,
         SCHEMA_INVALID,
         ANTI_CROWDING_CROSS_ACCOUNT,
+        STRUCTURALLY_UNTRADEABLE,
         OTHER,
     )
 

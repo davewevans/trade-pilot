@@ -456,6 +456,47 @@ def run() -> None:
                     )
                     continue
 
+            # ── Structural BP cap pre-check (IDLE entry only) ──
+            if state.value == "IDLE" and settings.STRUCTURAL_UNTRADEABLE_FILTER_ENABLED:
+                from strategies.guardrails import is_structurally_untradeable_for_csp as _is_su
+                from strategies.skip_codes import SkipCode as _SC
+                from strategies.skip_reasons import SkipGate, SkipReason
+                _acct = context.get("account") or {}
+                _obp = float(_acct.get("options_buying_power") or _acct.get("buying_power") or 0)
+                _su, _su_reason = _is_su(context, _obp)
+                if _su:
+                    logger.info("%s wheel structurally untradeable: %s", symbol, _su_reason)
+                    journal.append({
+                        "symbol": None,
+                        "underlying": symbol,
+                        "wheel_state": state.value,
+                        "action": "skip",
+                        "skip_reason": _SC.STRUCTURALLY_UNTRADEABLE,
+                        "reasoning": _su_reason,
+                        "confidence": None,
+                        "status": "skipped",
+                        "strategy_type": "wheel_csp",
+                        "iv_rank": context.get("iv_rank"),
+                    })
+                    if recorder is not None:
+                        recorder.record_decision(
+                            strategy_type="wheel",
+                            underlying=symbol,
+                            action="SKIP",
+                            wheel_state=state.value,
+                            reasoning=_su_reason,
+                            context=context,
+                            skip_gate=SkipGate.PRE_CHECK,
+                            skip_reason_code=SkipReason.STRUCTURALLY_UNTRADEABLE,
+                            job_run_id=job_run_id,
+                            pre_check_verdict="SKIP",
+                            prompt_version=None,
+                        )
+                    report_lines.append(
+                        f"**{symbol}** -- SKIPPED (structurally untradeable: BP cap)"
+                    )
+                    continue
+
             import time as _time
             _t0_ask = _time.monotonic()
             decision = advisor.ask(context, state)
@@ -819,6 +860,47 @@ def run() -> None:
                             )
                         report_lines.append(
                             f"**{symbol}** [TW] -- SKIPPED (anti-crowding: {_ac_reason})"
+                        )
+                        continue
+
+                # ── Structural BP cap pre-check (IDLE entry only) ──
+                if tw_state.value == "IDLE" and settings.STRUCTURAL_UNTRADEABLE_FILTER_ENABLED:
+                    from strategies.guardrails import is_structurally_untradeable_for_csp as _is_su_tw
+                    from strategies.skip_codes import SkipCode as _SC_tw
+                    from strategies.skip_reasons import SkipGate, SkipReason
+                    _acct_tw = context.get("account") or {}
+                    _obp_tw = float(_acct_tw.get("options_buying_power") or _acct_tw.get("buying_power") or 0)
+                    _su_tw, _su_reason_tw = _is_su_tw(context, _obp_tw)
+                    if _su_tw:
+                        logger.info("%s [TW] structurally untradeable: %s", symbol, _su_reason_tw)
+                        journal.append({
+                            "symbol": None,
+                            "underlying": symbol,
+                            "wheel_state": tw_state.value,
+                            "action": "skip",
+                            "skip_reason": _SC_tw.STRUCTURALLY_UNTRADEABLE,
+                            "reasoning": _su_reason_tw,
+                            "confidence": None,
+                            "status": "skipped",
+                            "strategy_type": "turnover_wheel_csp",
+                            "iv_rank": context.get("iv_rank"),
+                        })
+                        if recorder is not None:
+                            recorder.record_decision(
+                                strategy_type="turnover_wheel",
+                                underlying=symbol,
+                                action="SKIP",
+                                wheel_state=tw_state.value,
+                                reasoning=_su_reason_tw,
+                                context=context,
+                                skip_gate=SkipGate.PRE_CHECK,
+                                skip_reason_code=SkipReason.STRUCTURALLY_UNTRADEABLE,
+                                job_run_id=job_run_id,
+                                pre_check_verdict="SKIP",
+                                prompt_version=None,
+                            )
+                        report_lines.append(
+                            f"**{symbol}** [TW] -- SKIPPED (structurally untradeable: BP cap)"
                         )
                         continue
 

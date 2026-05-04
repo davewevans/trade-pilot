@@ -133,6 +133,87 @@ def test_fallback_to_in_memory_when_db_unavailable():
     assert result == {"ticker": "AAPL"}
 
 
+# ── Defensive null / type checks ─────────────────────────────────────────────
+
+def test_get_returns_none_on_non_string_endpoint(cache):
+    cache.set("summaries", "AAPL", {"x": 1}, 3600)
+    result = cache.get(None, "AAPL", 3600)
+    assert result is None
+
+
+def test_get_returns_none_on_non_string_cache_key(cache):
+    cache.set("summaries", "AAPL", {"x": 1}, 3600)
+    result = cache.get("summaries", 42, 3600)
+    assert result is None
+
+
+def test_get_returns_none_on_null_fetched_at(tmp_path):
+    # Schema in production has `fetched_at REAL NOT NULL`, but old rows written
+    # before that constraint existed may have NULL. Create the table without NOT
+    # NULL on fetched_at so we can insert a bad row directly.
+    db_path = tmp_path / "nullable.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.execute(
+        """CREATE TABLE orats_cache (
+            endpoint    TEXT NOT NULL,
+            cache_key   TEXT NOT NULL,
+            data_json   TEXT NOT NULL,
+            fetched_at  REAL,
+            ttl_seconds REAL NOT NULL,
+            PRIMARY KEY (endpoint, cache_key)
+        )"""
+    )
+    conn.execute(
+        "INSERT INTO orats_cache (endpoint, cache_key, data_json, fetched_at, ttl_seconds) "
+        "VALUES (?, ?, ?, ?, ?)",
+        ("summaries", "AAPL", '{"iv_rank": 42}', None, 3600),
+    )
+    conn.commit()
+    conn.close()
+
+    c = ORATSCache(db_path=db_path)
+    result = c.get("summaries", "AAPL", 3600)
+    assert result is None
+
+
+def test_get_returns_none_on_interface_error(cache):
+    from unittest.mock import MagicMock
+
+    # Replace _conn with a mock that raises InterfaceError on execute.
+    # (sqlite3.Connection.execute is a C extension method and cannot be
+    # patched via patch.object on Python 3.14.)
+    mock_conn = MagicMock()
+    mock_conn.execute.side_effect = sqlite3.InterfaceError("bad param")
+    cache._conn = mock_conn
+
+    result = cache.get("summaries", "AAPL", 3600)
+    assert result is None
+
+
+def test_set_rejects_non_string_endpoint(cache):
+    cache.set(None, "AAPL", {"x": 1}, 3600)
+    # Row must not exist in DB
+    row = cache._conn.execute(
+        "SELECT 1 FROM orats_cache WHERE cache_key='AAPL'"
+    ).fetchone()
+    assert row is None
+
+
+def test_set_rejects_non_string_cache_key(cache):
+    cache.set("summaries", 123, {"x": 1}, 3600)
+    row = cache._conn.execute(
+        "SELECT 1 FROM orats_cache WHERE endpoint='summaries'"
+    ).fetchone()
+    assert row is None
+
+
+def test_get_happy_path_unaffected_by_defensive_checks(cache):
+    """Existing happy-path contract: valid string params still hit and return data."""
+    data = {"iv_rank_1y": 55.0}
+    cache.set("ivrank", "SPY", data, 3600)
+    assert cache.get("ivrank", "SPY", 3600) == data
+
+
 def test_set_handles_datetime_in_data(tmp_path):
     """Regression: json.dumps blew up on datetime objects in ORATS payloads."""
     from datetime import datetime
