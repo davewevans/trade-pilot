@@ -59,7 +59,7 @@ All of the following must be true:
 - Delta: -0.20 to -0.30
 - DTE: 21 to 35
 - Open interest: >= 200
-- Bid-ask spread: <= $0.15
+- Bid-ask spread filter: reject any contract where `(ask - bid) > max(0.10, mid_price × 0.10)`. The floor of $0.10 protects cheap options where 10% would be sub-penny; 10% of mid scales the cap with premium magnitude. Examples: $1 mid → $0.10 cap (floor wins); $3 mid → $0.30 cap; $6 mid → $0.60 cap; $10 mid → $1.00 cap. This applies to wheel CSP and CC entries.
 
 **Event filters:**
 - No earnings within 21 days (hard rule — skip with `EARNINGS_TOO_CLOSE`)
