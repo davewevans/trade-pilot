@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.15.0] - 2026-05-05
+
+### Fixed
+- **Structured log capture not writing files**: `JSONLStructuredHandler` was based on `TimedRotatingFileHandler`, which keeps `baseFilename` static after midnight rollover. The Render Background Worker runs continuously, so all log entries accumulated in the process-start-date file (`2026-04-23.jsonl`) while the daily bundle read `{today}.jsonl`. Replaced with a `logging.FileHandler` subclass that re-opens to `{ET-date}.jsonl` on each `emit()` when the calendar date changes.
+- **`STRUCTURED_LOG_CAPTURE_ENABLED` silent-disable on empty string**: `os.getenv("X", "true").lower() == "true"` returns `False` when the env var is set to `""`. This was the original suspected cause of the structured-log outage. Fixed as part of a broader env var hardening (see Added below).
+- **Sentry receiving no events from caught exceptions**: the scheduler process (`main.py`) had no `sentry_sdk.init()` call at all — every error in the trading-decision process was Sentry-silent. The API process had init but without `LoggingIntegration`, so `logger.warning(..., exc_info=True)` paths were also invisible. Both are now covered.
+
+### Added
+- **`utils/sentry_setup.py`**: idempotent `init_sentry(process_role=)` called from both `main.py` (scheduler) and `api/server.py` (API server). Wires `LoggingIntegration(event_level=WARNING)` so caught-and-logged warnings reach Sentry. Includes `before_send` filter for known-benign noise patterns and tags every event with `job` and `process_role`.
+- **`_env_bool()` helper in `config.py`**: safe boolean env var parser that returns the default for unset, empty, or whitespace-only values and treats only `"false"`, `"0"`, `"no"`, `"off"` as explicit-false. Replaces the footgun `os.getenv("X", "true").lower() == "true"` pattern across 19 default-true settings, including three safety-critical flags (`CLOCK_DRIFT_HALT_ENABLED`, `STARTUP_RECONCILE_ENABLED`, `DROP_COPY_RECONCILE_ENABLED`).
+- **30-day structured log retention**: `_purge_old_logs()` deletes `.jsonl` files older than `STRUCTURED_LOG_RETENTION_DAYS` at handler install time, replacing the `backupCount` that `TimedRotatingFileHandler` previously managed.
+
 ## [1.14.1] - 2026-04-28
 
 ## [1.14.0] - 2026-04-27
