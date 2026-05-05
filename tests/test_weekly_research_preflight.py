@@ -16,7 +16,10 @@ from jobs.weekly_research import _run_preflight_check
 
 
 def make_ledger(tmp_path: Path) -> ApiLedger:
-    return ApiLedger(tmp_path / "test.db")
+    from database.db import Database
+    db = Database(path=tmp_path / "test.db")
+    db.init_schema()
+    return ApiLedger(db.get_connection())
 
 
 def make_sweep_with_estimate(cold: int, warm: int) -> MagicMock:
@@ -138,9 +141,8 @@ def test_estimate_cost_reflects_cache_state(tmp_path, monkeypatch):
     db_path = tmp_path / "test.db"
     db = Database(db_path)
     db.init_schema()
-    db.close()
 
-    cache = ORATSCache(db_path=db_path)
+    cache = ORATSCache(conn=db.get_connection())
 
     # Create a minimal BacktestSweep
     sweep = BacktestSweep(

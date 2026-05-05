@@ -404,12 +404,9 @@ class BacktestSweep:
     # ── sweep_progress table helpers ─────────────────────────────────────────
 
     def _sweep_db_conn(self):
-        """Return a dedicated sqlite3 connection to the main database."""
-        import sqlite3 as _sqlite3
-        from config import settings as _settings
-        conn = _sqlite3.connect(str(_settings.DATABASE_PATH), check_same_thread=False)
-        conn.execute("PRAGMA journal_mode=WAL")
-        return conn
+        """Return the process-wide database connection."""
+        from database.db import get_db
+        return get_db().get_connection()
 
     def _load_sweep_progress(
         self,
@@ -424,27 +421,24 @@ class BacktestSweep:
         result: dict[tuple[str, str], dict] = {}
         try:
             conn = self._sweep_db_conn()
-            try:
-                placeholders_sym = ",".join("?" * len(symbols))
-                placeholders_strat = ",".join("?" * len(strategies))
-                rows = conn.execute(
-                    f"""
-                    SELECT symbol, strategy, last_primed_at, prime_cost_calls, last_error
-                    FROM sweep_progress
-                    WHERE symbol IN ({placeholders_sym})
-                      AND strategy IN ({placeholders_strat})
-                      AND lookback_years = ?
-                    """,
-                    [*symbols, *strategies, lookback_years],
-                ).fetchall()
-                for sym, strat, primed_at, cost, error in rows:
-                    result[(sym, strat)] = {
-                        "last_primed_at": primed_at,
-                        "prime_cost_calls": cost,
-                        "last_error": error,
-                    }
-            finally:
-                conn.close()
+            placeholders_sym = ",".join("?" * len(symbols))
+            placeholders_strat = ",".join("?" * len(strategies))
+            rows = conn.execute(
+                f"""
+                SELECT symbol, strategy, last_primed_at, prime_cost_calls, last_error
+                FROM sweep_progress
+                WHERE symbol IN ({placeholders_sym})
+                  AND strategy IN ({placeholders_strat})
+                  AND lookback_years = ?
+                """,
+                [*symbols, *strategies, lookback_years],
+            ).fetchall()
+            for sym, strat, primed_at, cost, error in rows:
+                result[(sym, strat)] = {
+                    "last_primed_at": primed_at,
+                    "prime_cost_calls": cost,
+                    "last_error": error,
+                }
         except Exception:
             logger.warning("_load_sweep_progress failed", exc_info=True)
         return result
@@ -461,23 +455,20 @@ class BacktestSweep:
         """Upsert a sweep_progress row after processing a pair."""
         try:
             conn = self._sweep_db_conn()
-            try:
-                primed_at = time.time() if success else None
-                conn.execute(
-                    """
-                    INSERT INTO sweep_progress (symbol, strategy, lookback_years,
-                        last_primed_at, prime_cost_calls, last_error)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(symbol, strategy, lookback_years) DO UPDATE SET
-                        last_primed_at   = excluded.last_primed_at,
-                        prime_cost_calls = excluded.prime_cost_calls,
-                        last_error       = excluded.last_error
-                    """,
-                    (symbol, strategy, lookback_years, primed_at, cost_calls, error),
-                )
-                conn.commit()
-            finally:
-                conn.close()
+            primed_at = time.time() if success else None
+            conn.execute(
+                """
+                INSERT INTO sweep_progress (symbol, strategy, lookback_years,
+                    last_primed_at, prime_cost_calls, last_error)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(symbol, strategy, lookback_years) DO UPDATE SET
+                    last_primed_at   = excluded.last_primed_at,
+                    prime_cost_calls = excluded.prime_cost_calls,
+                    last_error       = excluded.last_error
+                """,
+                (symbol, strategy, lookback_years, primed_at, cost_calls, error),
+            )
+            conn.commit()
         except Exception:
             logger.warning(
                 "_update_sweep_progress failed for %s/%s", symbol, strategy, exc_info=True
@@ -487,21 +478,18 @@ class BacktestSweep:
         """Clear sweep_progress for all matching pairs (used on force_restart)."""
         try:
             conn = self._sweep_db_conn()
-            try:
-                placeholders_sym = ",".join("?" * len(symbols))
-                placeholders_strat = ",".join("?" * len(strategies))
-                conn.execute(
-                    f"""
-                    DELETE FROM sweep_progress
-                    WHERE symbol IN ({placeholders_sym})
-                      AND strategy IN ({placeholders_strat})
-                      AND lookback_years = ?
-                    """,
-                    [*symbols, *strategies, lookback_years],
-                )
-                conn.commit()
-            finally:
-                conn.close()
+            placeholders_sym = ",".join("?" * len(symbols))
+            placeholders_strat = ",".join("?" * len(strategies))
+            conn.execute(
+                f"""
+                DELETE FROM sweep_progress
+                WHERE symbol IN ({placeholders_sym})
+                  AND strategy IN ({placeholders_strat})
+                  AND lookback_years = ?
+                """,
+                [*symbols, *strategies, lookback_years],
+            )
+            conn.commit()
         except Exception:
             logger.warning("_reset_sweep_progress failed", exc_info=True)
 

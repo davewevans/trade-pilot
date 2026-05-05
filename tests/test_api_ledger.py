@@ -17,7 +17,10 @@ from data.api_ledger import ApiLedger, OratsQuotaExceeded, _set_ledger_for_testi
 
 
 def make_ledger(tmp_path: Path) -> ApiLedger:
-    return ApiLedger(tmp_path / "test.db")
+    from database.db import Database
+    db = Database(path=tmp_path / "test.db")
+    db.init_schema()
+    return ApiLedger(db.get_connection())
 
 
 def _set_caps(settings, monthly=99999, daily=99999, minute=99999, api="orats_historical"):

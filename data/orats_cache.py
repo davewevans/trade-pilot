@@ -8,10 +8,11 @@ import json
 import logging
 import sqlite3
 import time
-from pathlib import Path
 from typing import Union
 
 logger = logging.getLogger(__name__)
+
+_SINGLETON = object()  # sentinel: use the process-wide Database singleton
 
 
 class ORATSCache:
@@ -28,30 +29,23 @@ class ORATSCache:
     # Safety cap: prevent unbounded memory growth when running in fallback mode.
     _FALLBACK_MAX_ENTRIES = 500
 
-    def __init__(self, db_path: Union[str, Path, None] = None):
-        from config import settings
-        if db_path is None:
-            db_path = settings.DATABASE_PATH
-        self._db_path = str(db_path)
-        self._conn: sqlite3.Connection | None = None
+    def __init__(self, conn: "sqlite3.Connection | None" = _SINGLETON):
+        """Initialise the cache.
+
+        Args:
+            conn: Open sqlite3.Connection, or None for in-memory fallback, or omit
+                  to use the process-wide Database singleton (production default).
+                  The cache does NOT own this connection.
+        """
+        if conn is _SINGLETON:
+            from database.db import get_db  # late import — avoids circular
+            conn = get_db().get_connection()
+        self._conn: sqlite3.Connection | None = conn
         self._fallback: dict[tuple[str, str], tuple[float, float, object]] = {}
-        try:
-            self._conn = sqlite3.connect(self._db_path, check_same_thread=False)
-            self._conn.execute("PRAGMA journal_mode=WAL")
-            self._conn.execute("PRAGMA foreign_keys=ON")
-            self._conn.commit()
-        except Exception as exc:
-            allow_fallback = settings.ORATS_CACHE_ALLOW_FALLBACK == "1"
-            if settings.RENDER and not allow_fallback:
-                raise RuntimeError(
-                    f"SQLite cache init failed at {self._db_path!r} — "
-                    "set ORATS_CACHE_ALLOW_FALLBACK=1 to allow in-memory fallback in production"
-                ) from exc
+        if self._conn is None:
             logger.critical(
-                "ORATSCache: could not open SQLite at %s — using in-memory fallback (DEGRADED MODE)",
-                self._db_path, exc_info=True,
+                "ORATSCache: no connection — using in-memory fallback (DEGRADED MODE)"
             )
-            self._conn = None
 
     # ── public API ──────────────────────────────────────────────────────────
 
@@ -184,7 +178,6 @@ class ORATSCache:
             }
             return {
                 "backend": "sqlite",
-                "db_path": self._db_path,
                 "total": total,
                 "expired": expired,
                 "by_endpoint": by_endpoint,

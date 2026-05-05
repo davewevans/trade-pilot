@@ -293,25 +293,47 @@ def _trade_pnl(trade: dict) -> float | None:
         return None
 
 
-def _open_db() -> sqlite3.Connection | None:
-    """Open a read-only-style sqlite3 connection or None if unavailable.
+class _ConnectionProxy:
+    """Thin proxy around sqlite3.Connection that makes close() a no-op.
 
-    Returns None silently if the DB file doesn't exist (so the API can
-    fall back to JSONL during the dual-write transition). Logs and
-    returns None on any other error.
+    API handlers call conn.close() in finally blocks. Closing the
+    process-wide singleton would break all subsequent requests, so this
+    proxy swallows those calls while delegating everything else.
     """
-    path = Path(DB_PATH)
-    if not path.exists():
-        return None
+
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        self.__dict__["_conn"] = conn
+
+    def close(self) -> None:
+        pass  # singleton is managed by get_db(), not the handler
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.__dict__["_conn"], name)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        if name == "_conn":
+            self.__dict__["_conn"] = value
+        else:
+            setattr(self.__dict__["_conn"], name, value)
+
+    def __enter__(self) -> sqlite3.Connection:
+        return self.__dict__["_conn"].__enter__()
+
+    def __exit__(self, *args: Any) -> Any:
+        return self.__dict__["_conn"].__exit__(*args)
+
+
+def _open_db() -> sqlite3.Connection | None:
+    """Return the process-wide DB connection wrapped in a no-close proxy.
+
+    Returns None if the singleton cannot be initialised (logs the error).
+    Handlers that receive None fall back to JSONL where available.
+    """
     try:
-        # check_same_thread=False because FastAPI may serve requests on
-        # different threads; we open a fresh connection per request, so
-        # there's no shared mutable state.
-        conn = sqlite3.connect(str(path), check_same_thread=False)
-        conn.row_factory = sqlite3.Row
-        return conn
+        from database.db import get_db
+        return _ConnectionProxy(get_db().get_connection())
     except Exception:
-        logger.exception("Failed to open SQLite DB at %s", path)
+        logger.exception("Failed to get database connection")
         return None
 
 

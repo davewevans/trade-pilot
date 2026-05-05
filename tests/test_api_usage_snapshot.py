@@ -16,7 +16,10 @@ from data.api_ledger import ApiLedger
 
 
 def make_ledger(tmp_path: Path) -> ApiLedger:
-    return ApiLedger(tmp_path / "test.db")
+    from database.db import Database
+    db = Database(path=tmp_path / "test.db")
+    db.init_schema()
+    return ApiLedger(db.get_connection())
 
 
 # ---------------------------------------------------------------------------

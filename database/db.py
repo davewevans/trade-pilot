@@ -3,6 +3,7 @@
 import functools
 import logging
 import sqlite3
+import threading
 import time
 from pathlib import Path
 from typing import Any, Callable, TypeVar
@@ -531,15 +532,17 @@ class Database:
         self.path: Path = Path(path) if path is not None else Path(settings.DATABASE_PATH)
         self.path.parent.mkdir(parents=True, exist_ok=True)
 
-        # check_same_thread=True (default) is intentional. If threading
-        # is needed later, that decision should be explicit.
-        self._conn = sqlite3.connect(str(self.path))
+        self._conn = sqlite3.connect(
+            str(self.path),
+            check_same_thread=False,  # shared across modules in the same process
+            isolation_level=None,     # autocommit — each statement is its own transaction
+        )
         self._conn.row_factory = sqlite3.Row
 
-        # WAL mode is required for concurrent reader/writer processes.
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA foreign_keys=ON")
-        self._conn.commit()
+        self._conn.execute("PRAGMA busy_timeout=30000")  # 30s for cross-process contention
+        self._conn.execute("PRAGMA synchronous=NORMAL")  # safe with WAL, faster writes
 
         logger.info("SQLite database opened at %s (WAL mode)", self.path)
 
@@ -583,3 +586,33 @@ class Database:
             self._conn.close()
         except Exception:
             logger.warning("Error while closing database connection", exc_info=True)
+
+
+# ── Process-wide singleton ──────────────────────────────────────────────────
+# One Database instance per Python process. The scheduler and API server are
+# separate processes on Render and each gets their own. Within a process, all
+# modules share a single sqlite3.Connection — sqlite3 serialises statements on
+# a single connection at the C level, eliminating intra-process writer contention.
+
+_db_instance: "Database | None" = None
+_db_init_lock = threading.Lock()
+
+
+def get_db() -> Database:
+    """Return the process-wide Database singleton (lazy init).
+
+    All production code should call this instead of sqlite3.connect() directly.
+    """
+    global _db_instance
+    if _db_instance is None:
+        with _db_init_lock:
+            if _db_instance is None:
+                _db_instance = Database()
+                _db_instance.init_schema()
+    return _db_instance
+
+
+def _set_db_for_testing(db: "Database | None") -> None:
+    """Replace (or clear) the process singleton. Not for production use."""
+    global _db_instance
+    _db_instance = db
