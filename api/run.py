@@ -25,7 +25,7 @@ if _settings.STRUCTURED_LOG_CAPTURE_ENABLED:
     from utils.structured_log_handler import install_structured_log_handler
     install_structured_log_handler(
         log_dir=_settings.STRUCTURED_LOG_DIR,
-        backup_count=_settings.STRUCTURED_LOG_RETENTION_DAYS,
+        retention_days=_settings.STRUCTURED_LOG_RETENTION_DAYS,
     )
 
 

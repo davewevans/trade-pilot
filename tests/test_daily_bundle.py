@@ -25,6 +25,20 @@ TARGET_DATE = date(2026, 4, 23)
 # ── fixtures ─────────────────────────────────────────────────
 
 
+@pytest.fixture(autouse=True)
+def _patch_db_conn(monkeypatch):
+    """Redirect _db_conn to use direct sqlite3.connect so tests supply their own DB path."""
+    import sqlite3 as _sqlite3
+    from api import daily_bundle
+
+    def _test_db_conn(db_path: str) -> _sqlite3.Connection:
+        conn = _sqlite3.connect(db_path)
+        conn.row_factory = _sqlite3.Row
+        return conn
+
+    monkeypatch.setattr(daily_bundle, "_db_conn", _test_db_conn)
+
+
 def _make_db(path: Path) -> str:
     db = str(path / "trade_pilot.db")
     conn = sqlite3.connect(db)

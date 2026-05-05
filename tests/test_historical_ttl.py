@@ -18,18 +18,12 @@ from datetime import date, timedelta
 
 def _make_hist_cache(tmp_path):
     """Return an ORATSCache backed by a fresh SQLite DB in tmp_path."""
-    from unittest.mock import MagicMock
-    db = tmp_path / "hist_test.db"
-    mock_settings = MagicMock()
-    mock_settings.DATABASE_PATH = db
-    mock_settings.RENDER = False
-    mock_settings.ORATS_CACHE_ALLOW_FALLBACK = "0"
-
+    import sqlite3
     from data.orats_cache import ORATSCache
-    with patch("config.settings", mock_settings):
-        cache = ORATSCache(db_path=db)
-    # Ensure the orats_cache table exists
-    cache._conn.execute("""
+
+    db = tmp_path / "hist_test.db"
+    conn = sqlite3.connect(str(db))
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS orats_cache (
             endpoint   TEXT NOT NULL,
             cache_key  TEXT NOT NULL,
@@ -39,8 +33,8 @@ def _make_hist_cache(tmp_path):
             PRIMARY KEY (endpoint, cache_key)
         )
     """)
-    cache._conn.commit()
-    return cache
+    conn.commit()
+    return ORATSCache(conn=conn)
 
 
 # ---------------------------------------------------------------------------

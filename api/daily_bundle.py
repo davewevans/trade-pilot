@@ -11,7 +11,6 @@ All reads are read-only. No side effects.
 from __future__ import annotations
 
 import json
-import sqlite3
 from collections import Counter, defaultdict
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -56,8 +55,10 @@ def build_daily_bundle(
 # ── helpers ──────────────────────────────────────────────────
 
 
-def _db_conn(db_path: str) -> sqlite3.Connection:
-    conn = sqlite3.connect(db_path)
+def _db_conn(db_path: str) -> "sqlite3.Connection":
+    from database.db import get_db
+    import sqlite3
+    conn = get_db().get_connection()
     conn.row_factory = sqlite3.Row
     return conn
 

@@ -28,9 +28,8 @@ def cache(tmp_path):
         "CREATE INDEX IF NOT EXISTS idx_orats_cache_endpoint ON orats_cache(endpoint)"
     )
     conn.commit()
-    conn.close()
-
-    c = ORATSCache(db_path=db_path)
+    # Keep conn open — ORATSCache does not own the connection.
+    c = ORATSCache(conn=conn)
     return c
 
 
@@ -106,9 +105,8 @@ def test_cache_with_in_memory_sqlite(tmp_path):
         )"""
     )
     conn.commit()
-    conn.close()
-
-    c = ORATSCache(db_path=db_path)
+    # Keep conn open — passed to ORATSCache which does not own it.
+    c = ORATSCache(conn=conn)
     assert c.get("ivrank", "SPY", 1800) is None
     c.set("ivrank", "SPY", {"ivRank1y": 65.0}, 1800)
     assert c.get("ivrank", "SPY", 1800) == {"ivRank1y": 65.0}
@@ -124,8 +122,8 @@ def test_stats_returns_expected_shape(cache):
 
 
 def test_fallback_to_in_memory_when_db_unavailable():
-    """When db_path is invalid, ORATSCache falls back to in-memory dict."""
-    c = ORATSCache(db_path="/nonexistent/path/db.sqlite")
+    """When conn=None is passed, ORATSCache uses the in-memory dict fallback."""
+    c = ORATSCache(conn=None)
     assert c._conn is None
 
     c.set("summaries", "AAPL", {"ticker": "AAPL"}, 3600)
@@ -169,9 +167,8 @@ def test_get_returns_none_on_null_fetched_at(tmp_path):
         ("summaries", "AAPL", '{"iv_rank": 42}', None, 3600),
     )
     conn.commit()
-    conn.close()
-
-    c = ORATSCache(db_path=db_path)
+    # Keep conn open — passed to ORATSCache which does not own it.
+    c = ORATSCache(conn=conn)
     result = c.get("summaries", "AAPL", 3600)
     assert result is None
 
@@ -232,9 +229,8 @@ def test_set_handles_datetime_in_data(tmp_path):
         )"""
     )
     conn.commit()
-    conn.close()
-
-    cache = ORATSCache(db_path=db_path)
+    # Keep conn open — passed to ORATSCache which does not own it.
+    cache = ORATSCache(conn=conn)
     # Payload that would fail without default=str
     data = {"as_of": datetime(2026, 4, 23, 10, 0), "iv_rank": 42.5}
     cache.set("cores", "AAPL", data, ttl_seconds=3600)

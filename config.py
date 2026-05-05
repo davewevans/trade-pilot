@@ -12,6 +12,25 @@ load_dotenv()
 log = logging.getLogger(__name__)
 
 
+def _env_bool(name: str, default: bool = True) -> bool:
+    """Parse a boolean env var with safe defaults.
+
+    Returns ``default`` when the env var is unset, empty, or whitespace-only.
+    Explicit-false values: ``"false"``, ``"0"``, ``"no"``, ``"off"`` (case-insensitive).
+    Anything else (``"true"``, ``"1"``, ``"yes"``, unrecognized values) returns ``True``.
+
+    Avoids the silent-disable footgun of ``os.getenv("X", "true").lower() == "true"``,
+    which returns ``False`` when the env var is set to an empty string.
+    """
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    normalized = raw.strip().lower()
+    if normalized == "":
+        return default
+    return normalized not in ("false", "0", "no", "off")
+
+
 class Settings:
     def __init__(self):
         # Re-exported from version.py so callers reference settings.VERSION
@@ -25,7 +44,7 @@ class Settings:
 
         self.ALPACA_PAPER1_API_KEY: str = self._require("ALPACA_PAPER1_API_KEY")
         self.ALPACA_PAPER1_SECRET_KEY: str = self._require("ALPACA_PAPER1_SECRET_KEY")
-        self.ALPACA_PAPER: bool = os.getenv("ALPACA_PAPER", "true").lower() == "true"
+        self.ALPACA_PAPER: bool = _env_bool("ALPACA_PAPER")
 
         # Paper Account 2 credentials
         self.ALPACA_PAPER2_API_KEY: str = os.getenv("ALPACA_PAPER2_API_KEY", "")
@@ -69,8 +88,8 @@ class Settings:
         self.THINKING_MODE: str = os.getenv("THINKING_MODE", "off")
 
         self.FRED_API_KEY: str = self._require("FRED_API_KEY")
-        self.USE_FRED_FOR_VIX: bool = os.getenv("USE_FRED_FOR_VIX", "true").lower() == "true"
-        self.USE_ALPACA_FOR_EX_DIVIDEND: bool = os.getenv("USE_ALPACA_FOR_EX_DIVIDEND", "true").lower() == "true"
+        self.USE_FRED_FOR_VIX: bool = _env_bool("USE_FRED_FOR_VIX")
+        self.USE_ALPACA_FOR_EX_DIVIDEND: bool = _env_bool("USE_ALPACA_FOR_EX_DIVIDEND")
 
         # ORATS — IV rank, skew, term structure, expected move
         self.ORATS_API_KEY: str = os.getenv("ORATS_API_KEY", "")
@@ -89,9 +108,7 @@ class Settings:
         # high-price names (SPY, AMZN), avoiding Alpaca's 500-contract cap and
         # speeding context builds. Default True — old behaviour is provably wrong
         # (data loss at cap). Set False only to roll back if the clamp cuts something.
-        self.OPTION_CHAIN_STRIKE_PRECLAMP_ENABLED: bool = (
-            os.getenv("OPTION_CHAIN_STRIKE_PRECLAMP_ENABLED", "true").lower() == "true"
-        )
+        self.OPTION_CHAIN_STRIKE_PRECLAMP_ENABLED: bool = _env_bool("OPTION_CHAIN_STRIKE_PRECLAMP_ENABLED")
         # One-sided clamp width as fraction of spot. 0.25 = ±25%.
         # Do not lower below 0.15 without verifying target delta range stays inside.
         self.OPTION_CHAIN_STRIKE_CLAMP_PCT: float = float(
@@ -113,9 +130,7 @@ class Settings:
         # Structured JSONL log capture to persistent disk. Tees WARNING/ERROR
         # records (with tracebacks + extra fields) to a daily file. Consumed
         # by the daily_bundle endpoint.
-        self.STRUCTURED_LOG_CAPTURE_ENABLED: bool = (
-            os.getenv("STRUCTURED_LOG_CAPTURE_ENABLED", "true").lower() == "true"
-        )
+        self.STRUCTURED_LOG_CAPTURE_ENABLED: bool = _env_bool("STRUCTURED_LOG_CAPTURE_ENABLED")
         self.STRUCTURED_LOG_DIR: str = os.getenv(
             "STRUCTURED_LOG_DIR",
             str(self.DATA_DIR / "snapshots" / "logs"),
@@ -136,9 +151,7 @@ class Settings:
         self.DRY_RUN: bool = os.getenv("DRY_RUN", "false").lower() == "true"
 
         # Research layer — liquidity scoring
-        self.RESEARCH_SCORE_MULTIPLIER_ENABLED: bool = (
-            os.getenv("RESEARCH_SCORE_MULTIPLIER_ENABLED", "true").lower() == "true"
-        )
+        self.RESEARCH_SCORE_MULTIPLIER_ENABLED: bool = _env_bool("RESEARCH_SCORE_MULTIPLIER_ENABLED")
         self.RESEARCH_MIN_SNAPSHOTS_FOR_SCORING: int = int(
             os.getenv("RESEARCH_MIN_SNAPSHOTS_FOR_SCORING", "30")
         )
@@ -150,9 +163,7 @@ class Settings:
         )
 
         # Research layer — backtest stats
-        self.RESEARCH_WINRATE_MULTIPLIER_ENABLED: bool = (
-            os.getenv("RESEARCH_WINRATE_MULTIPLIER_ENABLED", "true").lower() == "true"
-        )
+        self.RESEARCH_WINRATE_MULTIPLIER_ENABLED: bool = _env_bool("RESEARCH_WINRATE_MULTIPLIER_ENABLED")
         self.RESEARCH_BACKTEST_MIN_TRADES_HIGH_CONFIDENCE: int = int(
             os.getenv("RESEARCH_BACKTEST_MIN_TRADES_HIGH_CONFIDENCE", "30")
         )
@@ -197,9 +208,7 @@ class Settings:
         )
 
         # Research layer — watchlist recommendations
-        self.RESEARCH_RECOMMENDATIONS_ENABLED: bool = (
-            os.getenv("RESEARCH_RECOMMENDATIONS_ENABLED", "true").lower() == "true"
-        )
+        self.RESEARCH_RECOMMENDATIONS_ENABLED: bool = _env_bool("RESEARCH_RECOMMENDATIONS_ENABLED")
         self.RESEARCH_MAX_RECOMMENDATIONS_PER_LIST: int = int(
             os.getenv("RESEARCH_MAX_RECOMMENDATIONS_PER_LIST", "5")
         )
@@ -260,16 +269,14 @@ class Settings:
         # ── Healthchecks.io ────────────────────────────────────
         # Global kill switch. Set HEALTHCHECKS_ENABLED=false to silence all
         # pings without removing individual HC_PING_URL_* vars. Default true.
-        self.HEALTHCHECKS_ENABLED: bool = (
-            os.getenv("HEALTHCHECKS_ENABLED", "true").lower() == "true"
-        )
+        self.HEALTHCHECKS_ENABLED: bool = _env_bool("HEALTHCHECKS_ENABLED")
         # ntfy server URL. Defaults to the public ntfy.sh server.
         # Override for self-hosted deployments (e.g. "https://ntfy.example.com").
         self.NTFY_SERVER: str = os.getenv("NTFY_SERVER", "https://ntfy.sh")
 
         # ── Clock drift fail-safe ──────────────────────────────
         # Set CLOCK_DRIFT_HALT_ENABLED=false to disable the check entirely.
-        self.CLOCK_DRIFT_HALT_ENABLED: bool = os.getenv("CLOCK_DRIFT_HALT_ENABLED", "true").lower() == "true"
+        self.CLOCK_DRIFT_HALT_ENABLED: bool = _env_bool("CLOCK_DRIFT_HALT_ENABLED")
         # Drift exceeding this threshold (in seconds, strict >) triggers a halt.
         self.CLOCK_DRIFT_THRESHOLD_SECONDS: int = int(os.getenv("CLOCK_DRIFT_THRESHOLD_SECONDS", "30"))
         # Per-attempt HTTP timeout when fetching reference time from Alpaca.
@@ -278,7 +285,7 @@ class Settings:
         self.CLOCK_DRIFT_FETCH_MAX_RETRIES: int = int(os.getenv("CLOCK_DRIFT_FETCH_MAX_RETRIES", "3"))
         # Controls severity of fill notifications.
         # "true" (default) → critical (immediate push); "false" → info (digest only).
-        self.ALERT_FILLS: bool = os.getenv("ALERT_FILLS", "true").lower() == "true"
+        self.ALERT_FILLS: bool = _env_bool("ALERT_FILLS")
 
         # ── Evaluation / scoring ───────────────────────────────
         # Enable the programmatic decision scorer CLI job.
@@ -338,33 +345,23 @@ class Settings:
 
         # Force-close rules: bypass Claude for catastrophic positions (deep ITM + near expiry).
         # Default true — this is a safety mechanism. Set to "false" to disable.
-        self.FORCE_CLOSE_ENABLED: bool = (
-            os.getenv("FORCE_CLOSE_ENABLED", "true").lower() == "true"
-        )
+        self.FORCE_CLOSE_ENABLED: bool = _env_bool("FORCE_CLOSE_ENABLED")
 
         # Strategy health dashboard page. Read-only; defaults on.
         # Set STRATEGY_HEALTH_PAGE_ENABLED=false to hide the sidebar link
         # and 404 the API endpoint. Does not affect any strategy logic.
-        self.STRATEGY_HEALTH_PAGE_ENABLED: bool = (
-            os.getenv("STRATEGY_HEALTH_PAGE_ENABLED", "true").lower() == "true"
-        )
+        self.STRATEGY_HEALTH_PAGE_ENABLED: bool = _env_bool("STRATEGY_HEALTH_PAGE_ENABLED")
 
         # Turnover Wheel strategy enable flag.
         # Set TURNOVER_WHEEL_ENABLED=false to exclude it from the active
         # strategy list without touching any other configuration.
-        self.TURNOVER_WHEEL_ENABLED: bool = (
-            os.getenv("TURNOVER_WHEEL_ENABLED", "true").lower() == "true"
-        )
+        self.TURNOVER_WHEEL_ENABLED: bool = _env_bool("TURNOVER_WHEEL_ENABLED")
 
         # ── Drop-copy reconciliation ──────────────────────────────────────────
         # Kill switches. Both default to True for paper. Flip either to False
         # to disable without code changes.
-        self.STARTUP_RECONCILE_ENABLED: bool = (
-            os.getenv("STARTUP_RECONCILE_ENABLED", "true").lower() == "true"
-        )
-        self.DROP_COPY_RECONCILE_ENABLED: bool = (
-            os.getenv("DROP_COPY_RECONCILE_ENABLED", "true").lower() == "true"
-        )
+        self.STARTUP_RECONCILE_ENABLED: bool = _env_bool("STARTUP_RECONCILE_ENABLED")
+        self.DROP_COPY_RECONCILE_ENABLED: bool = _env_bool("DROP_COPY_RECONCILE_ENABLED")
 
         # Enforcement mode:
         #   "log_only" → compute diffs, write report, NEVER overwrite local state
@@ -404,9 +401,7 @@ class Settings:
         # open on the same underlying in another account. Management actions
         # (roll, close) are never blocked. Kill switch: set to "false" to bypass
         # the pre-check while keeping book_exposure visible in Claude context.
-        self.CROSS_ACCOUNT_ANTI_CROWDING_ENABLED: bool = (
-            os.getenv("CROSS_ACCOUNT_ANTI_CROWDING_ENABLED", "true").lower() == "true"
-        )
+        self.CROSS_ACCOUNT_ANTI_CROWDING_ENABLED: bool = _env_bool("CROSS_ACCOUNT_ANTI_CROWDING_ENABLED")
 
         # ── Structural untradeability filter ──────────────────
         # Pre-Claude check: if the lowest-strike contract in the -0.20 to -0.30
@@ -439,9 +434,7 @@ class Settings:
         # Hard-blocks new entries the day of and the trading day before any Tier 1
         # macro event (FOMC, CPI, NFP) listed in data/macro_events.json.
         # Management cycles (rolls, closes) are never blocked.
-        self.MACRO_EVENT_BLOCK_ENABLED: bool = (
-            os.getenv("MACRO_EVENT_BLOCK_ENABLED", "true").lower() == "true"
-        )
+        self.MACRO_EVENT_BLOCK_ENABLED: bool = _env_bool("MACRO_EVENT_BLOCK_ENABLED")
 
         # ── Macro event block notifications ───────────────────
         # Edge-triggered ntfy push when the macro block becomes active or clears.
@@ -457,9 +450,7 @@ class Settings:
         # Measurement-only NBBO capture around every order submit.
         # When false, all shadow_execution code is a no-op — no DB writes,
         # no ORATS calls, no schedule job activity.
-        self.SHADOW_EXECUTION_ENABLED: bool = (
-            os.getenv("SHADOW_EXECUTION_ENABLED", "true").lower() == "true"
-        )
+        self.SHADOW_EXECUTION_ENABLED: bool = _env_bool("SHADOW_EXECUTION_ENABLED")
 
         # Create required directories
         self.DATA_DIR.mkdir(parents=True, exist_ok=True)

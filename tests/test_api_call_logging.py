@@ -29,7 +29,10 @@ def make_ledger_with_log_handler(tmp_path: Path):
     api_log.setLevel(logging.INFO)
     api_log.propagate = False
 
-    ledger = ApiLedger(tmp_path / "test.db")
+    from database.db import Database
+    _db = Database(path=tmp_path / "test.db")
+    _db.init_schema()
+    ledger = ApiLedger(_db.get_connection())
     return ledger, log_path, handler
 
 

@@ -118,13 +118,15 @@ class ApiLedger:
     # Minimum seconds between consecutive minute_cap ntfy alerts (rate-limit).
     _MINUTE_CAP_ALERT_COOLDOWN = 300  # 5 minutes
 
-    def __init__(self, db_path: Path) -> None:
-        self._db_path = Path(db_path)
-        self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
-        self._conn.execute("PRAGMA journal_mode=WAL")
-        self._conn.execute("PRAGMA busy_timeout=5000")
-        self._conn.commit()
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        """Initialise the ledger.
+
+        Args:
+            conn: An open sqlite3.Connection (from get_db().get_connection()).
+                  The ledger does NOT open or close this connection — it is owned
+                  by the caller (typically the process-wide Database singleton).
+        """
+        self._conn = conn
         self._lock = threading.RLock()  # RLock so check_and_reserve can call _insert while holding it
         self._billable_since_snapshot = 0
         # Tracks which monthly threshold pct has already fired this month.
@@ -588,9 +590,8 @@ def get_ledger() -> ApiLedger:
     if _ledger is None:
         with _ledger_init_lock:
             if _ledger is None:
-                from config import settings  # late import
-
-                _ledger = ApiLedger(settings.DATABASE_PATH)
+                from database.db import get_db  # late import — avoids circular
+                _ledger = ApiLedger(get_db().get_connection())
     return _ledger
 
 

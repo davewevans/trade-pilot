@@ -5,11 +5,10 @@ section to CHANGELOG.md. Other modules read this via ``settings.VERSION``
 rather than importing this file directly.
 """
 
-VERSION = "1.14.1"
-VERSION_DATE = "2026-04-28"
+VERSION = "1.15.0"
+VERSION_DATE = "2026-05-05"
 VERSION_NOTES = (
-    "Fixes three daily bundle reporting bugs: circuit breaker status now reads from the correct "
-    "file and key, source health staleness detection added (⚠ for sources silent >26 hours, "
-    "expected on macro-blocked days), and market context reads from context.json instead of the "
-    "wrong regime_history.json shape."
+    "Observability foundation: structured log capture fixed (TimedRotatingFileHandler baseFilename "
+    "bug), Sentry wired to both scheduler and API processes with LoggingIntegration, and 19 "
+    "boolean env vars hardened against silent-disable on empty string via new _env_bool() helper."
 )
