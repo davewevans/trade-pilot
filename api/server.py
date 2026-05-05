@@ -32,18 +32,8 @@ logger = logging.getLogger(__name__)
 
 
 # ── Sentry error monitoring ───────────────────────────────────
-# Initialised before the FastAPI app so the SDK can auto-instrument it.
-# Disabled when SENTRY_DSN is not set (local dev or intentional opt-out).
-if settings.SENTRY_DSN:
-    import sentry_sdk
-    sentry_sdk.init(
-        dsn=settings.SENTRY_DSN,
-        environment="production" if settings.RENDER else "development",
-        release=settings.VERSION,
-        traces_sample_rate=0.1,
-        send_default_pii=False,
-    )
-    logger.info("Sentry initialised (release=%s)", settings.VERSION)
+from utils.sentry_setup import init_sentry
+init_sentry(process_role="api_server")
 
 
 # ── Auth: password + stateless HMAC-signed tokens ───────────

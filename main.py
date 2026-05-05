@@ -690,8 +690,11 @@ def main() -> None:
         from utils.structured_log_handler import install_structured_log_handler
         install_structured_log_handler(
             log_dir=settings.STRUCTURED_LOG_DIR,
-            backup_count=settings.STRUCTURED_LOG_RETENTION_DAYS,
+            retention_days=settings.STRUCTURED_LOG_RETENTION_DAYS,
         )
+
+    from utils.sentry_setup import init_sentry
+    init_sentry(process_role="scheduler")
 
     logger.info("Mode: %s", "PRODUCTION" if settings.RENDER else "LOCAL")
     logger.info("Dry Run: %s", settings.DRY_RUN)

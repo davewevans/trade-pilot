@@ -7,30 +7,13 @@ Fixed" with the commit hash) or when new issues are surfaced.
 **This file is the canonical priority list — if you're debugging something
 and find it listed here, the team already knows about it.**
 
-Last updated: 2026-04-28
+Last updated: 2026-05-05
 
 ---
 
 ## Open
 
 ### P1 — Observability gaps (block efficient debugging)
-
-**#1 — Structured log capture committed but not writing files.**
-- Symptom: Daily bundle "Errors & warnings" section shows "_No structured
-  log file found for this date._"
-- Investigation (2026-04-27): original hypotheses ruled out. Env var
-  confirmed true on Render. Writer (`main.py`, `api/run.py`) and reader
-  (`api/server.py`) both use `settings.STRUCTURED_LOG_DIR` (defaults to
-  `/data/snapshots/logs`). Render persistent disk is mounted at `/data` —
-  path is covered. Wiring looks correct in both processes.
-- Most likely remaining cause: stale Render deploy (wiring shipped
-  2026-04-23; Render may not have redeployed since).
-- Added INFO diagnostic at handler install time (commit `422c4eb`). After
-  next redeploy, grep Render logs for `"Structured log handler installed:"`.
-  If the line doesn't appear, the handler isn't being reached; if it
-  appears with the right path, the issue is elsewhere.
-- Files involved: `utils/structured_log_handler.py`, `main.py`,
-  `api/run.py`, `config.py`.
 
 **#2 — Daily bundle data source health shows everything ✗ failed.**
 - Symptom: Bundle "Data source health" section reports every source as
@@ -161,6 +144,10 @@ Last updated: 2026-04-28
 (Move items here when resolved with the commit hash that fixed them.
 Trim entries older than 60 days during routine maintenance.)
 
+- **2026-05-05** — Structured log capture not writing files (issue #1). Root cause: `TimedRotatingFileHandler` keeps the process-start-date as `baseFilename` after midnight rollover; on Render the Background Worker runs continuously so all log entries from April 23 onward accumulated in `2026-04-23.jsonl` while the daily bundle read `{today}.jsonl`. Fixed by replacing `TimedRotatingFileHandler` with a thin `FileHandler` subclass (`JSONLStructuredHandler`) that re-opens to `{ET-date}.jsonl` on each `emit()` call when the calendar date changes. Also: (a) hardened `STRUCTURED_LOG_CAPTURE_ENABLED` env var to treat empty/blank/whitespace as "enabled" — the prior `getenv(..., "true").lower() == "true"` pattern returns `False` on empty string; (b) added `_purge_old_logs()` called at handler install for 30-day retention, replacing the `backupCount` that `TimedRotatingFileHandler` no longer provides. File: `utils/structured_log_handler.py`, `config.py`.
+- **2026-05-05** — Hardened 18 boolean env var defaults in config.py against empty-string silent-disable. The pattern `os.getenv("X", "true").lower() == "true"` returns `False` when the env var is set to an empty string, silently disabling the flag instead of taking the default. Replaced with new `_env_bool()` helper that treats empty/whitespace/unrecognized values as the configured default. Three safety-critical flags affected: `CLOCK_DRIFT_HALT_ENABLED`, `STARTUP_RECONCILE_ENABLED`, `DROP_COPY_RECONCILE_ENABLED`. The 19th flag in this family, `STRUCTURED_LOG_CAPTURE_ENABLED`, was patched in the prior logging-foundation PR and harmonized to `_env_bool()` here. The remaining `== "true"` patterns in config.py are all **default-false** (opt-in) flags — a separate audit, not covered here. File: `config.py`, `tests/test_env_bool_helper.py`.
+- **2026-05-05** — Sentry `LoggingIntegration` not wired; scheduler had no Sentry init at all. The prior setup initialized Sentry only in `api/server.py` (API process only, not the scheduler) and without `LoggingIntegration`, so `logger.warning(...)` calls never reached Sentry from either process. Fixed by creating `utils/sentry_setup.py` with idempotent `init_sentry(process_role=...)` wired with `LoggingIntegration(event_level=WARNING)` and inbound filters for known-benign noise patterns (`news_sentiment returned None`, `vix returned None`, `orats_cores returned None`, temporary SQLite contention filters). Both `main.py` (scheduler) and `api/server.py` now call `init_sentry()`. Events are tagged with `job` and `process_role`. The `ApiLedger.record failed` and `SQLite locked, retrying` filters are temporary — remove them 24h after `b6d169f` has been live with zero recurrence. File: `utils/sentry_setup.py`, `main.py`, `api/server.py`.
+
 - **2026-04-28** — MACRO_EVENT_PROXIMITY fired live for the first time. FOMC scheduled for 2026-04-29 14:00 ET triggered `market_open` early-exit at 10:00 ET; zero entry decisions issued, zero LLM entry-cycle tokens consumed. First production validation of the Tier 3 macro-event blocker. No code change — observation only.
 - **2026-05-05** — DB-lock contention root-caused and architecturally fixed. The scheduler process previously opened three independent SQLite connections (Database, ApiLedger, ORATSCache) that contended for the WAL writer slot during high-rate phases of market_open (56 `ApiLedger.record` failures observed in a 63-second window). Fixed by collapsing to one `sqlite3.Connection` per process via a `get_db()` singleton in `database/db.py`; ApiLedger and ORATSCache now accept injected connections. The API server (`api/server.py`, `api/daily_bundle.py`) and backtesting sweep (`research/backtesting/sweep.py`) were also migrated so no production code calls `sqlite3.connect()` outside `database/db.py`. Cross-process contention (scheduler ↔ API server) is handled by `busy_timeout=30000` + existing `@db_retry`. The 2026-04-27 `@db_retry` wrap on `ApiLedger._insert` (commit `f063a4a`) was symptom-suppression that converted silent drops into noisy retry-then-drop; it remains in place as belt-and-suspenders for cross-process locks. Commit `b6d169f`.
 - **2026-04-27** — `ApiLedger._insert` silent row drops under parallel context builds (superseded band-aid — see 2026-05-05 entry). `_insert` was not retrying on SQLite "database is locked"; wrapped with `@db_retry(max_attempts=5, base_delay=0.05)`. This converted silent drops into noisy retry-then-drop but did not fix the root cause (intra-process multi-connection contention). Commit `f063a4a`.
@@ -170,4 +157,4 @@ Trim entries older than 60 days during routine maintenance.)
 - **2026-04-26** — yfinance migration complete (issue #16 split). All six stages shipped: VIX → FRED VIXCLS, VIX term structure deleted (zero callers), ex-dividend → Alpaca Corporate Actions, fundamentals → Finnhub `/stock/profile2` + `/stock/metric` (decomposed, ETF-aware), earnings yfinance fallback deleted (Finnhub-only), backtester + CAHOLD → Alpaca + FRED. Zero new vendors introduced. One yfinance call site intentionally retained (ex-div defensive fallback) — see #17.
 - **2026-04-25** — IVR fix Part A: source `iv_rank_1y` from `/ivrank` instead of `/summaries`. Wheel was hard-skipping every cycle because `/summaries` does not return `ivRank1y` despite the parser reading `row.get("ivRank1y")`. Fixed in commit `a13cad5`.
 - **2026-04-25** — IVR fix Part B-1: route `atm_iv_m*` from `/cores` instead of `/summaries`. Same class of bug as Part A; `iv_overvalued_label` was always None as a downstream consequence. Fixed in commit `1732069`.
-- **2026-04-23** — Initial 8-prompt fix pack: `trade_journal` NoneType bug, ORATS cache type probe, ORATS cores defensive unpack, bull_put_spread instrumentation, Finnhub tier-aware short-circuit, option chain pre-clamp (committed but ineffective — see #5), structured log capture (committed but not writing — see #1), daily bundle endpoint.
+- **2026-04-23** — Initial 8-prompt fix pack: `trade_journal` NoneType bug, ORATS cache type probe, ORATS cores defensive unpack, bull_put_spread instrumentation, Finnhub tier-aware short-circuit, option chain pre-clamp (committed but ineffective — see #5), structured log capture (wiring committed; root-cause of missing files diagnosed and fixed 2026-05-05), daily bundle endpoint.

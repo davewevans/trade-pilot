@@ -10,17 +10,26 @@ from __future__ import annotations
 import json
 import logging
 import traceback
-from datetime import date, datetime
-from logging.handlers import TimedRotatingFileHandler
+from datetime import date, datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
+
+_ET = ZoneInfo("America/New_York")
+_log = logging.getLogger(__name__)
 
 
-class JSONLStructuredHandler(TimedRotatingFileHandler):
-    """Write log records as one JSON object per line, rotated daily.
+class JSONLStructuredHandler(logging.FileHandler):
+    """Write log records as one JSON object per line to {log_dir}/{YYYY-MM-DD}.jsonl.
+
+    Re-opens to a new date-named file whenever the calendar date (in ET)
+    changes. This replaces a prior TimedRotatingFileHandler-based
+    implementation that suffered from a static baseFilename bug: after
+    midnight rollover, TRFH kept writing to the process-start-date file
+    forever instead of opening today's file.
 
     Each record:
       {
-        "ts": ISO8601 with timezone,
+        "ts": ISO8601 with timezone offset (ET),
         "level": "WARNING" | "ERROR" | "CRITICAL",
         "logger": dotted logger name,
         "message": formatted message,
@@ -40,27 +49,43 @@ class JSONLStructuredHandler(TimedRotatingFileHandler):
     def __init__(
         self,
         log_dir: str | Path,
-        min_level: int = logging.WARNING,
-        backup_count: int = 30,
+        level: int = logging.WARNING,
+        tz: ZoneInfo = _ET,
     ):
-        self._log_dir = Path(log_dir)
+        self._log_dir = Path(log_dir).resolve()
         self._log_dir.mkdir(parents=True, exist_ok=True)
-        filename = str(self._log_dir / f"{date.today().isoformat()}.jsonl")
+        self._tz = tz
+        self._current_date = self._today()
         super().__init__(
-            filename,
-            when="midnight",
-            interval=1,
-            backupCount=backup_count,
-            utc=False,
+            filename=self._filename_for(self._current_date),
+            mode="a",
             encoding="utf-8",
+            delay=False,
         )
-        self.setLevel(min_level)
-        self.suffix = "%Y-%m-%d.jsonl"
+        self.setLevel(level)
+
+    def _today(self) -> date:
+        return datetime.now(self._tz).date()
+
+    def _filename_for(self, d: date) -> str:
+        return str(self._log_dir / f"{d.isoformat()}.jsonl")
 
     def emit(self, record: logging.LogRecord) -> None:
+        # Handler.handle() acquires self.lock before calling emit(),
+        # so the date-change re-open below is thread-safe.
+        today = self._today()
+        if today != self._current_date:
+            self._current_date = today
+            try:
+                self.close()
+            except Exception:
+                pass
+            self.baseFilename = self._filename_for(today)
+            self.stream = self._open()
+
         try:
-            payload = {
-                "ts": datetime.fromtimestamp(record.created).astimezone().isoformat(),
+            payload: dict = {
+                "ts": datetime.fromtimestamp(record.created, tz=self._tz).isoformat(),
                 "level": record.levelname,
                 "logger": record.name,
                 "message": record.getMessage(),
@@ -73,11 +98,7 @@ class JSONLStructuredHandler(TimedRotatingFileHandler):
                 )
             for k, v in record.__dict__.items():
                 if k not in self._STANDARD_ATTRS:
-                    try:
-                        json.dumps(v, default=str)
-                        payload["extra"][k] = v
-                    except (TypeError, ValueError):
-                        payload["extra"][k] = str(v)
+                    payload["extra"][k] = v
             line = json.dumps(payload, default=str) + "\n"
             if self.stream is None:
                 self.stream = self._open()
@@ -87,24 +108,33 @@ class JSONLStructuredHandler(TimedRotatingFileHandler):
             self.handleError(record)
 
 
+def _purge_old_logs(log_dir: Path, retention_days: int) -> None:
+    """Delete *.jsonl files older than retention_days calendar days (ET)."""
+    cutoff = datetime.now(_ET).date() - timedelta(days=retention_days)
+    for path in log_dir.glob("*.jsonl"):
+        try:
+            file_date = date.fromisoformat(path.stem)
+        except ValueError:
+            continue
+        if file_date < cutoff:
+            path.unlink(missing_ok=True)
+
+
 def install_structured_log_handler(
     log_dir: str | Path,
     min_level: int = logging.WARNING,
-    backup_count: int = 30,
+    retention_days: int = 30,
 ) -> JSONLStructuredHandler:
     """Install the handler on the root logger. Idempotent — returns existing handler if already installed."""
-    _diag = logging.getLogger(__name__)
     root = logging.getLogger()
     for h in root.handlers:
         if isinstance(h, JSONLStructuredHandler):
-            _diag.info(
-                "Structured log handler already installed at %s", h._log_dir
-            )
+            _log.info("Structured log handler already installed at %s", h._log_dir)
             return h
-    handler = JSONLStructuredHandler(log_dir, min_level, backup_count)
-    handler.setFormatter(logging.Formatter("%(message)s"))
+    handler = JSONLStructuredHandler(log_dir, level=min_level)
     root.addHandler(handler)
-    _diag.info(
+    _purge_old_logs(Path(log_dir), retention_days)
+    _log.info(
         "Structured log handler installed: dir=%s min_level=%s",
         Path(log_dir).resolve(), logging.getLevelName(min_level),
     )
