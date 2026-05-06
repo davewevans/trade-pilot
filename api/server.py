@@ -503,22 +503,49 @@ _HB_CHECK_STATE_PATH = DATA_DIR / "heartbeat_check_state.json"
 DB_PATH = settings.DATABASE_PATH
 
 
-# Account → strategy_type mapping. Used by the ?account= query param
-# on /api/decisions, /api/decisions/stats, /api/performance.
-# Omit ?account= (or pass an unknown value) for the unfiltered view.
+# Concrete sub-strategies that adaptive_spreads routes to at runtime.
+# Mirrors strategies/definitions/adaptive_spreads.json "sub_strategies".
+_ADAPTIVE_SPREADS_TYPES: list[str] = ["bull_put_spread", "bear_call_spread", "long_call_vertical"]
+
+# Legacy account name → strategy_type mapping (kept for backward compat).
+# paper_N accounts are resolved dynamically via AccountManager (see _strategy_filter).
 _ACCOUNT_STRATEGY_MAP: dict[str, list[str]] = {
     "wheel": ["wheel"],
     "turnover_wheel": ["turnover_wheel"],
     "iron_condor": ["iron_condor"],
-    "spreads": ["bull_put_spread", "bear_call_spread", "long_call_vertical"],
+    "iron_butterfly": ["iron_butterfly"],
+    "calendar_spread": ["calendar_spread"],
+    "spreads": _ADAPTIVE_SPREADS_TYPES,
 }
 
 
 def _strategy_filter(account: str | None) -> list[str] | None:
-    """Resolve ?account=... to a strategy_type list, or None for no filter."""
+    """Resolve ?account=... to a strategy_type list, or None for no filter.
+
+    None   → no account supplied; query covers all strategies.
+    []     → account recognised but no strategies (or unknown account); callers
+             must short-circuit and return zero counts instead of querying.
+    [...]  → filter to these concrete strategy_type values.
+    """
     if not account:
         return None
-    return _ACCOUNT_STRATEGY_MAP.get(account.lower())
+    acct = account.lower()
+    if acct in _ACCOUNT_STRATEGY_MAP:
+        return _ACCOUNT_STRATEGY_MAP[acct]
+    # Resolve paper_N accounts from AccountManager (reads data/account_config.json).
+    try:
+        from data.account_manager import AccountManager
+        cfg = AccountManager().get_account(acct)
+        if cfg is None:
+            logger.warning("_strategy_filter: unknown account %r — returning empty filter", acct)
+            return []
+        strategy = cfg.get("strategy") or ""
+        if strategy == "adaptive_spreads":
+            return _ADAPTIVE_SPREADS_TYPES
+        return [strategy] if strategy else []
+    except Exception:
+        logger.exception("_strategy_filter: failed to load account config for %r", acct)
+        return []
 
 
 # ── helpers ─────────────────────────────────────────────────
@@ -1238,6 +1265,9 @@ def decisions(
     account: str | None = Query(default=None),
     confidence: float | None = Query(default=None),
 ):
+    strategy_types = _strategy_filter(account)
+    if strategy_types is not None and len(strategy_types) == 0:
+        return {"decisions": [], "total": 0}
     conn = _open_db()
     if conn is not None:
         try:
@@ -1247,7 +1277,7 @@ def decisions(
                 offset=offset,
                 underlying=underlying,
                 action=action,
-                strategy_types=_strategy_filter(account),
+                strategy_types=strategy_types,
                 confidence=confidence,
             )
             return {"decisions": rows, "total": total}
@@ -1291,6 +1321,21 @@ def _decisions_stats_from_db(
     strategy_types: list[str] | None = None,
 ) -> dict:
     """Aggregate stats via SQL over the decisions + trades tables."""
+    _zero: dict = {
+        "total_decisions": 0,
+        "skips": 0,
+        "trades": 0,
+        "closes": 0,
+        "rolls": 0,
+        "skip_reasons": {},
+        "win_rate": 0.0,
+        "avg_iv_rank_at_entry": None,
+        "decisions_by_underlying": {},
+    }
+    # Empty list means a recognised account with no matching strategies — return zeros.
+    if strategy_types is not None and len(strategy_types) == 0:
+        return _zero
+
     where = ""
     params: list = []
     if strategy_types:
@@ -1298,9 +1343,12 @@ def _decisions_stats_from_db(
         where = f" WHERE strategy_type IN ({placeholders})"
         params = list(strategy_types)
 
-    total = conn.execute(
+    _count_row = conn.execute(
         f"SELECT COUNT(*) FROM decisions{where}", params,
-    ).fetchone()[0]
+    ).fetchone()
+    if _count_row is None:
+        logger.warning("_decisions_stats_from_db: COUNT(*) returned no rows — defaulting to 0")
+    total = int(_count_row[0]) if _count_row is not None else 0
 
     # Per-action counts. Action vocabulary is uppercased on write.
     action_counts: dict[str, int] = {}
@@ -1308,7 +1356,13 @@ def _decisions_stats_from_db(
         f"SELECT action, COUNT(*) AS n FROM decisions{where} GROUP BY action",
         params,
     ):
-        action_counts[str(row["action"]).upper()] = int(row["n"])
+        try:
+            action_counts[str(row["action"]).upper()] = int(row["n"])
+        except (TypeError, ValueError):
+            logger.warning(
+                "_decisions_stats_from_db: skipping unparseable action_counts row "
+                "(action=%r, n=%r)", row["action"], row["n"],
+            )
 
     skips = action_counts.get("SKIP", 0)
     closes = action_counts.get("CLOSE", 0)
@@ -1461,6 +1515,17 @@ def _performance_from_db(
     the cash-flow accounting the JSONL implementation also did. Rows
     with NULL fill_price are excluded from all P&L calculations.
     """
+    _empty_perf: dict = {
+        "equity_curve": [],
+        "total_pnl": 0.0,
+        "total_pnl_pct": 0.0,
+        "realized_pnl": 0.0,
+        "unrealized_pnl": 0.0,
+        "best_trade": None,
+        "worst_trade": None,
+    }
+    if strategy_types is not None and len(strategy_types) == 0:
+        return _empty_perf
     repo = TradeRepository(conn)
     filled = repo.get_filled(strategy_types=strategy_types)
 
@@ -1599,12 +1664,15 @@ def trades(
     underlying: str | None = Query(default=None),
     limit: int = Query(default=100, ge=1, le=1000),
 ):
+    strategy_types = _strategy_filter(account)
+    if strategy_types is not None and len(strategy_types) == 0:
+        return {"trades": [], "total": 0}
     conn = _open_db()
     if conn is not None:
         try:
             repo = TradeRepository(conn)
             rows = repo.get_filled(
-                strategy_types=_strategy_filter(account),
+                strategy_types=strategy_types,
                 underlying=underlying,
             )
             # Most recent first; attach computed pnl per the same sign
@@ -2244,6 +2312,8 @@ def _compute_fill_quality(
         "recent_fills": [],
     }
 
+    if strategy_types is not None and len(strategy_types) == 0:
+        return _empty
     params: list = []
     extra = ""
     if strategy_types:
@@ -3008,6 +3078,22 @@ def _claude_costs_from_db(
     strategy_types: list[str] | None,
 ) -> dict:
     """Aggregate cost/token stats from the decisions table for the given window."""
+    if strategy_types is not None and len(strategy_types) == 0:
+        return {
+            "window": window,
+            "total_cost_usd": 0.0,
+            "prior_window_cost_usd": 0.0,
+            "decisions_count": 0,
+            "filled_trades_count": 0,
+            "cost_per_filled_trade_usd": None,
+            "cost_by_outcome": {
+                "open":  {"count": 0, "cost_usd": 0.0},
+                "close": {"count": 0, "cost_usd": 0.0},
+                "skip":  {"count": 0, "cost_usd": 0.0},
+            },
+            "cache_hit_rate": None,
+            "by_model_version": {},
+        }
     days = _WINDOW_DAYS.get(window)
 
     # Build time-window predicates
