@@ -72,6 +72,13 @@ class ORATSCache:
                 "WHERE endpoint=? AND cache_key=?",
                 (endpoint, cache_key),
             ).fetchone()
+        except sqlite3.InterfaceError:
+            logger.warning(
+                "ORATSCache.get InterfaceError — param types: endpoint=%s cache_key=%s ttl=%s",
+                type(endpoint).__name__, type(cache_key).__name__, type(ttl_seconds).__name__,
+                exc_info=True,
+            )
+            return None
         except Exception:
             logger.warning("ORATSCache.get failed", exc_info=True)
             return None
@@ -137,6 +144,14 @@ class ORATSCache:
                 (endpoint, cache_key, json.dumps(data, default=str), time.time(), ttl_int),
             )
             self._conn.commit()
+        except sqlite3.InterfaceError:
+            logger.warning(
+                "ORATSCache.set InterfaceError — param types: endpoint=%s cache_key=%s "
+                "data=%s ttl=%s",
+                type(endpoint).__name__, type(cache_key).__name__,
+                type(data).__name__, type(ttl_seconds).__name__,
+                exc_info=True,
+            )
         except Exception:
             logger.warning("ORATSCache.set failed", exc_info=True)
 

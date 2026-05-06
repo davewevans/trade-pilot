@@ -11,8 +11,20 @@ from config import settings
 
 logger = logging.getLogger(__name__)
 
-# Priority order: income strategies before speculative
-# Eligibility is now read from strategy definition JSON files.
+# Priority order: income strategies before speculative.
+# At most ONE strategy from this list is selected per cycle (when IDLE).
+# Eligibility is read from strategy definition JSON files.
+#
+# calendar_spread is last: it runs only when all higher-priority strategies
+# are either OPEN (managing an existing position) or ineligible for the
+# current regime/IV environment.  On a typical BULL/MODERATE day, bull_put_spread
+# is eligible and takes the slot; calendar_spread is excluded because the router
+# picks only the highest-priority candidate.  This is intentional — calendar_spread
+# is the lowest-urgency new-entry strategy and runs opportunistically.
+#
+# There is no trading-path kill switch for calendar_spread (only
+# RESEARCH_SWEEP_CALENDAR_SPREAD_ENABLED exists, for the research sweep).
+# To disable calendar_spread in the trading path, remove it from this list.
 _IDLE_PRIORITY = [
     "iron_condor",
     "bull_put_spread",

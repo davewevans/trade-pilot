@@ -5,10 +5,10 @@ section to CHANGELOG.md. Other modules read this via ``settings.VERSION``
 rather than importing this file directly.
 """
 
-VERSION = "1.15.0"
-VERSION_DATE = "2026-05-05"
+VERSION = "1.15.1"
+VERSION_DATE = "2026-05-06"
 VERSION_NOTES = (
-    "Observability foundation: structured log capture fixed (TimedRotatingFileHandler baseFilename "
-    "bug), Sentry wired to both scheduler and API processes with LoggingIntegration, and 19 "
-    "boolean env vars hardened against silent-disable on empty string via new _env_bool() helper."
+    "Bug-fix patch: paper_N account routing 500s fixed in /api/decisions/stats and six related "
+    "endpoints; ORATS cache InterfaceError given forensic logging; compute_ev_score guarded "
+    "against stale-cache non-dict monies rows; calendar_spread trading-path priority documented."
 )
