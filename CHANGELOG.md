@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.15.1] - 2026-05-06
+
+### Fixed
+- **`/api/decisions/stats` 500 errors for paper_N accounts**: `_strategy_filter()` now resolves `paper_N` accounts via `AccountManager` (reading `data/account_config.json`); `adaptive_spreads` (paper_1) expands to its three concrete sub-strategies; unknown accounts return `[]` with a warning instead of `None`; all downstream helpers (`_decisions_stats_from_db`, `_performance_from_db`, `_compute_fill_quality`, `_claude_costs_from_db`, `/api/decisions`, `/api/trades`) short-circuit on an empty filter to return zero counts rather than querying all records; `iron_butterfly` and `calendar_spread` added to legacy `_ACCOUNT_STRATEGY_MAP`. Sentry events 5b82fc8e, 14678632.
+- **ORATS cache `sqlite3.InterfaceError` forensic logging**: added a specific `InterfaceError` handler in `ORATSCache.get()` and `ORATSCache.set()` that logs parameter types (`endpoint`, `cache_key`, `ttl`) at WARNING level, providing actionable forensic data if the error recurs on Render after the `b6d169f` singleton architecture change. Generic `except Exception` fallback retained. Sentry events 560defd3, 672286dc, 160baaa3.
+- **`compute_ev_score` `AttributeError: 'str' object has no attribute 'get'`**: stale SQLite cache entries from an older code version stored the raw ORATS API envelope dict instead of a normalized list of row dicts; iterating a dict yields its keys (strings), crashing `row.get("expir_date")`. Fixed at source in `context_builder.py`: `results["orats_monies"]` is validated and filtered to dicts-only before assignment to `monies_rows`; a defensive `continue` guard added in the `compute_ev_score` inner loop. Sentry event 73113a69.
+
+### Added
+- **Regression tests**: `tests/test_api_decisions_stats.py` (16 tests covering paper_N routing, adaptive_spreads expansion, unknown-account zero-counts, and legacy accounts) and `tests/test_compute_ev_score.py` (6 tests covering normal EV computation, string-in-monies-rows, all-strings, and degenerate candidates).
+
+### Documentation
+- **`calendar_spread` trading-path priority explained**: comment added to `_IDLE_PRIORITY` in `strategies/strategy_router.py` clarifying that the router picks at most one idle strategy per cycle and calendar_spread — lowest priority — runs only when all higher-priority strategies are OPEN or ineligible; investigation confirmed no wiring bug (Sentry event absent, absence is by design).
+
 ## [1.15.0] - 2026-05-05
 
 ### Fixed
