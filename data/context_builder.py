@@ -245,7 +245,21 @@ class ContextBuilder:
         iv_env = ORATSClient.classify_iv_environment(iv_rank_1y_value)
 
         cores = results.get("orats_cores") or {}
-        monies_rows = results.get("orats_monies") or []
+        _raw_monies = results.get("orats_monies") or []
+        if not isinstance(_raw_monies, list):
+            logger.warning(
+                "build: orats_monies is %s not list — treating as empty (type indicates"
+                " stale cache entry stored raw API envelope)",
+                type(_raw_monies).__name__,
+            )
+            _raw_monies = []
+        elif _raw_monies and not all(isinstance(r, dict) for r in _raw_monies):
+            logger.warning(
+                "build: monies_rows contains non-dict entries: types=%s, sample=%r",
+                [type(r).__name__ for r in _raw_monies[:5]], _raw_monies[:2],
+            )
+            _raw_monies = [r for r in _raw_monies if isinstance(r, dict)]
+        monies_rows: list[dict] = _raw_monies
 
         # ── Premium richness signal from implied vs forecast move ──
         # If implied_move > forecast_move, options are overpriced relative
@@ -2590,6 +2604,10 @@ def compute_ev_score(
         best_row: dict | None = None
         best_diff = float("inf")
         for row in monies_rows:
+            if not isinstance(row, dict):
+                # Defense in depth — upstream guard should prevent this.
+                logger.debug("compute_ev_score: skipping non-dict row (type=%s)", type(row).__name__)
+                continue
             exp_str = row.get("expir_date", "")
             try:
                 from datetime import date as _date
