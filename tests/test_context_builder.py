@@ -1,5 +1,7 @@
 """Unit tests for ContextBuilder core behaviour. No real network calls."""
 
+import logging
+
 from unittest.mock import MagicMock, patch
 
 
@@ -264,3 +266,25 @@ def test_wheel_buying_power_fallback_when_options_bp_none():
     """
     ctx = _build_bp_ctx("wheel", buying_power=50_000, options_buying_power=None)
     assert ctx["account"]["buying_power"] == 50_000.0
+
+
+# ── cores shape defensive normalization (2026-05-07) ────────────────────────
+# Regression for INTC AttributeError on 2026-05-07: a stale list-shaped cache
+# entry under endpoint="cores" caused cores.get(...) to crash at line 281.
+# The boundary fix lives in get_cores; this test pins call-site defense too.
+
+def test_build_does_not_raise_when_cores_returns_list(caplog):
+    """cores returning a list (e.g. stale cache) must not raise AttributeError."""
+    bad_cores: list = [{"atm_iv_m1": 0.25}]  # truthy non-dict
+    with caplog.at_level(logging.WARNING, logger="data.context_builder"):
+        ctx = _build_ctx(_SUMMARY, _IVRANK, bad_cores)
+
+    # Volatility section still produced; cores-derived fields default to None
+    # because the bad value was discarded.
+    assert ctx["volatility"]["atm_iv_m1"] is None
+    assert ctx["volatility"]["atm_iv_m2"] is None
+
+    assert any(
+        "cores returned list instead of dict" in rec.getMessage()
+        for rec in caplog.records
+    ), f"expected defensive-normalization warning; saw: {[r.getMessage() for r in caplog.records]}"

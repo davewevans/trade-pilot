@@ -391,9 +391,18 @@ class ORATSClient:
         cached = _cache.get("cores", key, _CORES_TTL)
         _job_name = os.environ.get("TRADE_PILOT_JOB_NAME")
         if cached is not None:
-            from data.api_ledger import get_ledger
-            get_ledger().record("orats_live", "cores", symbol, True, None, None, _job_name)
-            return cached
+            # Reject stale cache entries from older code versions that wrote
+            # raw API list responses under this endpoint. Treat as miss so we
+            # refetch a properly-shaped dict and overwrite the bad row.
+            if not isinstance(cached, dict):
+                logger.warning(
+                    "ORATS cores cache returned %s for %s — treating as miss and refetching",
+                    type(cached).__name__, key,
+                )
+            else:
+                from data.api_ledger import get_ledger
+                get_ledger().record("orats_live", "cores", symbol, True, None, None, _job_name)
+                return cached
 
         from data.api_ledger import get_ledger
         get_ledger().check_and_reserve("orats_live", "cores", symbol, _job_name)
