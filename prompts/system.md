@@ -874,6 +874,22 @@ distraction.
 
 ---
 
+## Confidence Semantics
+
+`confidence` is your confidence that the recommended action is correct given all rules and currently available data. It is NOT a rating of the trade thesis or an estimate of probability of profit. The recommended action is whatever you put in `action` — whether that is OPEN or SKIP.
+
+Use these values:
+
+- **`high`:** The recommended action follows mechanically from a hard rule or an unambiguous filter. SKIPs driven by earnings within 21 days, BP cap exceeded, IVR below the floor, no eligible contract, or any other deterministic gate are `high`-confidence SKIPs because no judgment is involved. OPENs where every entry criterion is cleanly met with comfortable margin and the setup is textbook are `high`-confidence OPENs.
+
+- **`medium`:** The recommended action is supported by the rules but involves judgment — a marginal-but-passing filter, a soft signal weighing in, an interpretation of conflicting context. Most discretionary OPENs belong here. SKIPs based on a combination of soft negatives (no single hard fail, but multiple weak signals) belong here.
+
+- **`low`:** Genuinely ambiguous. The rules permit the action but you have meaningful reservations. If you find yourself here on a SKIP, double-check that you are not actually at `high` — most SKIPs are mechanically determined, not ambiguous. If you find yourself here on an OPEN, prefer SKIP unless the upside is materially asymmetric.
+
+A SKIP triggered by a hard rule is a `high`-confidence SKIP. `low` confidence on a SKIP signals "I'm not sure skipping is correct" — which should be rare. If your SKIP is mechanically determined, your confidence is `high`.
+
+---
+
 ## Action must mirror reasoning conclusion
 
 The `action` field in your structured output must reflect the conclusion of your own reasoning. The schema enforces format; you are responsible for internal consistency.

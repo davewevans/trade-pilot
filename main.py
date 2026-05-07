@@ -31,7 +31,12 @@ JOB_MODULES = {
 }
 
 # Jobs handled inline (not via a module's run()):
-_INLINE_JOBS = {"score_programmatic", "score_judge", "monthly_evaluation"}
+_INLINE_JOBS = {
+    "score_programmatic",
+    "score_judge",
+    "monthly_evaluation",
+    "orats_cache_cleanup_corrupt",
+}
 
 
 # ── CLI ────────────────────────────────��────────────────────
@@ -625,6 +630,34 @@ def _run_monthly_evaluation(args, settings) -> None:
     _eval_run(month=month)
 
 
+# ── orats_cache_cleanup_corrupt inline job ──────────────────
+
+
+def _run_orats_cache_cleanup_corrupt(args, settings) -> None:
+    """One-shot cleanup of cache rows with NULL fetched_at or NULL data_json.
+
+    Operator-invoked. Use --dry-run to preview without deleting. Separate from
+    the scheduled ``orats_cache_cleanup`` (TTL-based) job; this one removes
+    pre-NOT-NULL legacy rows that the TTL job leaves behind.
+    """
+    from data.orats_cache import ORATSCache
+
+    cache = ORATSCache()
+    dry_run = bool(getattr(args, "dry_run", False))
+    result = cache.cleanup_corrupt(dry_run=dry_run)
+
+    mode = "DRY RUN" if dry_run else "DELETE"
+    logger.info(
+        "orats_cache_cleanup_corrupt (%s): scanned=%d corrupt=%d deleted=%d by_endpoint=%s",
+        mode, result["scanned"], result["corrupt"], result["deleted"], result["by_endpoint"],
+    )
+    print(
+        f"orats_cache_cleanup_corrupt ({mode}): scanned={result['scanned']} "
+        f"corrupt={result['corrupt']} deleted={result['deleted']} "
+        f"by_endpoint={result['by_endpoint']}"
+    )
+
+
 # ── main ────────────────────────────────────────────────────
 
 
@@ -737,6 +770,8 @@ def main() -> None:
                 _run_score_judge(args, settings)
             elif args.job == "monthly_evaluation":
                 _run_monthly_evaluation(args, settings)
+            elif args.job == "orats_cache_cleanup_corrupt":
+                _run_orats_cache_cleanup_corrupt(args, settings)
             else:
                 module = importlib.import_module(JOB_MODULES[args.job])
                 module.run()

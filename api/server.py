@@ -1316,6 +1316,53 @@ def decisions_stats(account: str | None = Query(default=None)):
     return _decisions_stats_from_jsonl()
 
 
+def _stats_helper_diag(
+    conn: sqlite3.Connection, sql: str, params: list,
+) -> dict:
+    """Snapshot of connection state for diagnosing the unreachable-in-theory
+    COUNT(*)-returns-None branch in /api/decisions/stats.
+
+    Captures:
+      * the exact SQL text and bound params that hit the path
+      * PRAGMA database_list — which file paths this connection is bound to
+        (rules out "API server pointed at a different DB than the scheduler")
+      * PRAGMA journal_mode — confirms WAL is actually active (rules out a
+        connection that fell back to default rollback journal mid-flight)
+      * an unfiltered COUNT(*) sanity probe issued through the same conn
+        — if this returns rows but the gated COUNT didn't, the bug is in
+        the gated path, not the connection
+      * row_factory shape — confirms the singleton is returning rows the
+        helper expects
+
+    Best-effort: any sub-query failure is captured under its own key so the
+    diagnostic itself never raises.
+    """
+    out: dict = {"sql": sql, "params": list(params)}
+    try:
+        out["database_list"] = [
+            tuple(r) for r in conn.execute("PRAGMA database_list").fetchall()
+        ]
+    except Exception as e:
+        out["database_list_error"] = repr(e)
+    try:
+        jm = conn.execute("PRAGMA journal_mode").fetchone()
+        out["journal_mode"] = jm[0] if jm else None
+    except Exception as e:
+        out["journal_mode_error"] = repr(e)
+    try:
+        probe = conn.execute("SELECT COUNT(*) FROM decisions").fetchone()
+        out["unfiltered_count_probe"] = probe[0] if probe else None
+        out["unfiltered_count_probe_was_none"] = probe is None
+    except Exception as e:
+        out["unfiltered_count_probe_error"] = repr(e)
+    out["row_factory"] = (
+        getattr(conn, "row_factory", None).__name__
+        if getattr(conn, "row_factory", None) is not None
+        else "default-tuple"
+    )
+    return out
+
+
 def _decisions_stats_from_db(
     conn: sqlite3.Connection,
     strategy_types: list[str] | None = None,
@@ -1343,11 +1390,22 @@ def _decisions_stats_from_db(
         where = f" WHERE strategy_type IN ({placeholders})"
         params = list(strategy_types)
 
-    _count_row = conn.execute(
-        f"SELECT COUNT(*) FROM decisions{where}", params,
-    ).fetchone()
+    _count_sql = f"SELECT COUNT(*) FROM decisions{where}"
+    _count_row = conn.execute(_count_sql, params).fetchone()
+    # Belt-and-suspenders: a COUNT(*) on a real connection cannot return None
+    # — SQLite returns (N,) for any non-empty result set including 0 rows. If
+    # we land here, the connection is in a state we don't expect (corruption,
+    # WAL recovery in flight, schema mismatch, or the singleton has drifted
+    # to a different DB file than the writer process is using). Capture
+    # enough state on the way out that the next firing is debuggable from
+    # logs alone, without needing Render shell access.
     if _count_row is None:
-        logger.warning("_decisions_stats_from_db: COUNT(*) returned no rows — defaulting to 0")
+        _diag = _stats_helper_diag(conn, _count_sql, params)
+        logger.warning(
+            "_decisions_stats_from_db: COUNT(*) returned no rows — "
+            "defaulting to 0. diag=%s",
+            _diag,
+        )
     total = int(_count_row[0]) if _count_row is not None else 0
 
     # Per-action counts. Action vocabulary is uppercased on write.

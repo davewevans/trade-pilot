@@ -239,3 +239,160 @@ def test_set_handles_datetime_in_data(tmp_path):
     assert got is not None
     # datetime was stringified, which is acceptable for cache purposes
     assert "2026-04-23" in str(got)
+
+
+# ── Atomicity + defensive read regressions (2026-05-07) ─────────────────────
+
+
+def test_set_then_get_round_trips(cache):
+    """Basic write→read round trip on the production schema."""
+    data = {"iv_rank_1y": 38.5, "ticker": "AAPL"}
+    cache.set("cores", "AAPL", data, 3600)
+    assert cache.get("cores", "AAPL", 3600) == data
+
+
+def _nullable_cache(tmp_path, name="legacy.db"):
+    """Build a cache backed by a table without NOT NULL on fetched_at/data_json.
+
+    Mirrors the legacy schema state where corrupt rows can exist.
+    """
+    db_path = tmp_path / name
+    conn = sqlite3.connect(str(db_path))
+    conn.execute(
+        """CREATE TABLE orats_cache (
+            endpoint    TEXT NOT NULL,
+            cache_key   TEXT NOT NULL,
+            data_json   TEXT,
+            fetched_at  REAL,
+            ttl_seconds REAL NOT NULL,
+            PRIMARY KEY (endpoint, cache_key)
+        )"""
+    )
+    conn.commit()
+    return ORATSCache(conn=conn), conn
+
+
+def test_partial_row_treated_as_miss(tmp_path, caplog):
+    """A row with NULL fetched_at must be treated as miss, never raise unpack errors.
+
+    Regression for 2026-05-07 ValueError at orats_cache.py:89 ('expected 2, got 0').
+    """
+    import logging
+
+    cache, conn = _nullable_cache(tmp_path)
+    conn.execute(
+        "INSERT INTO orats_cache (endpoint, cache_key, data_json, fetched_at, ttl_seconds) "
+        "VALUES (?, ?, ?, ?, ?)",
+        ("cores", "INTC", '{"atm_iv_m1": 0.25}', None, 3600),
+    )
+    conn.commit()
+
+    with caplog.at_level(logging.WARNING, logger="data.orats_cache"):
+        result = cache.get("cores", "INTC", 3600)
+
+    assert result is None
+    assert any("treating as miss" in rec.getMessage() for rec in caplog.records)
+
+
+def test_partial_row_with_null_data_json_treated_as_miss(tmp_path, caplog):
+    """Symmetric to NULL fetched_at: NULL data_json must also be treated as miss."""
+    import logging
+
+    cache, conn = _nullable_cache(tmp_path, name="legacy_dj.db")
+    conn.execute(
+        "INSERT INTO orats_cache (endpoint, cache_key, data_json, fetched_at, ttl_seconds) "
+        "VALUES (?, ?, ?, ?, ?)",
+        ("cores", "AAPL", None, time.time(), 3600),
+    )
+    conn.commit()
+
+    with caplog.at_level(logging.WARNING, logger="data.orats_cache"):
+        result = cache.get("cores", "AAPL", 3600)
+
+    assert result is None
+    assert any("treating as miss" in rec.getMessage() for rec in caplog.records)
+
+
+def test_concurrent_writes_atomic(cache):
+    """Two writers racing on the same key must not leave a partially-written row.
+
+    Each writer uses INSERT OR REPLACE inside an explicit transaction, so the
+    final row reflects exactly one of the two payloads (last-writer-wins) and
+    the row's data_json + fetched_at are always coherent.
+    """
+    import sqlite3 as _sqlite3
+    import threading
+
+    # The fixture connection is single-threaded; spin up thread-local
+    # connections that hit the same db file.
+    db_path = cache._conn.execute("PRAGMA database_list").fetchone()[2]
+
+    payload_a = {"writer": "A", "value": 1}
+    payload_b = {"writer": "B", "value": 2}
+    barrier = threading.Barrier(2)
+
+    def _write(payload):
+        c = _sqlite3.connect(db_path)
+        try:
+            local = ORATSCache(conn=c)
+            barrier.wait()
+            for _ in range(50):
+                local.set("cores", "RACE", payload, 3600)
+        finally:
+            c.close()
+
+    t1 = threading.Thread(target=_write, args=(payload_a,))
+    t2 = threading.Thread(target=_write, args=(payload_b,))
+    t1.start(); t2.start()
+    t1.join(); t2.join()
+
+    row = cache._conn.execute(
+        "SELECT data_json, fetched_at FROM orats_cache "
+        "WHERE endpoint='cores' AND cache_key='RACE'"
+    ).fetchone()
+    assert row is not None
+    data_json, fetched_at = row
+    # Atomicity check: both columns populated, data_json parses, identifies one writer
+    assert fetched_at is not None
+    assert data_json is not None
+    parsed = json.loads(data_json)
+    assert parsed["writer"] in ("A", "B")
+    assert parsed["value"] in (1, 2)
+
+
+def test_cleanup_corrupt_removes_nulls(tmp_path):
+    """cleanup_corrupt deletes rows with NULL fetched_at or NULL data_json and reports counts."""
+    cache, conn = _nullable_cache(tmp_path, name="cleanup.db")
+
+    # 1 healthy, 2 corrupt (one NULL fetched_at, one NULL data_json)
+    conn.execute(
+        "INSERT INTO orats_cache VALUES (?, ?, ?, ?, ?)",
+        ("cores", "OK", '{"x": 1}', time.time(), 3600),
+    )
+    conn.execute(
+        "INSERT INTO orats_cache VALUES (?, ?, ?, ?, ?)",
+        ("cores", "BAD_FETCHED_AT", '{"x": 2}', None, 3600),
+    )
+    conn.execute(
+        "INSERT INTO orats_cache VALUES (?, ?, ?, ?, ?)",
+        ("ivrank", "BAD_DATA", None, time.time(), 3600),
+    )
+    conn.commit()
+
+    # Dry run: counts but no deletion.
+    dry = cache.cleanup_corrupt(dry_run=True)
+    assert dry["scanned"] == 3
+    assert dry["corrupt"] == 2
+    assert dry["deleted"] == 0
+    remaining = conn.execute("SELECT COUNT(*) FROM orats_cache").fetchone()[0]
+    assert remaining == 3
+
+    # Real run: corrupt rows gone, healthy row preserved.
+    real = cache.cleanup_corrupt()
+    assert real["corrupt"] == 2
+    assert real["deleted"] == 2
+    assert real["by_endpoint"] == {"cores": 1, "ivrank": 1}
+    surviving = conn.execute(
+        "SELECT cache_key FROM orats_cache"
+    ).fetchall()
+    assert surviving == [("OK",)]

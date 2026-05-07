@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.15.2] - 2026-05-07
+
+### Fixed
+- **`market_open` dispatch loop hardening + cores shape mismatch**: stale ORATS cache entries from a pre-April-2026 parser version stored raw API list responses under `endpoint="cores"`; on cache hit `cores.get(...)` raised `AttributeError` for the affected symbol. Fixed at the boundary in `ORATSClient.get_cores()` (cache hits now type-validated as dict; non-dict treated as miss and refetched) plus defensive normalization at the call site in `data/context_builder.py`. Verified the wheel and turnover_wheel dispatch loops already had per-symbol try/except so INTC's 2026-05-07 crash did not halt subsequent symbols.
+- **ORATSCache atomic writes and defensive reads**: write path wrapped in explicit transaction (`with self._conn:`) so `data_json` and `fetched_at` commit together; read path's bare `data_json, fetched_at = row` replaced with a length-guarded unpack so corrupt/short rows are treated as a clean miss instead of raising `ValueError`. NULL-column check extended to `data_json` symmetrically.
+- **`/api/decisions/stats` zero-count diagnostic upgrade**: when the unreachable-in-theory `COUNT(*) returned no rows` warning fires next, it now also logs `PRAGMA database_list`, `PRAGMA journal_mode`, an unfiltered count probe, and the bound SQL/params — distinguishing transient SQLite state from DATABASE_PATH divergence between the API and scheduler processes without needing Render shell access.
+
+### Added
+- **`orats_cache_cleanup_corrupt` CLI**: `python main.py --job=orats_cache_cleanup_corrupt [--dry-run]` scans `orats_cache` for rows with NULL `fetched_at` or NULL `data_json` (legacy rows from before the schema's NOT NULL constraints) and removes them. Operator-invoked only; not auto-run.
+- **Regression tests**: `tests/test_market_open.py` (3 tests pinning per-symbol dispatch resilience), 5 new tests in `tests/test_orats_cache.py` (round-trip, partial rows, concurrent atomic writes, corrupt-row cleanup), 1 new test in `tests/test_context_builder.py` (defensive normalization), 3 new tests in `tests/test_api_decisions_stats.py` (e2e per-account routing through TestClient + diagnostic helper unit test).
+
+### Changed
+- **`prompts/system.md` confidence semantics pinned**: new "Confidence Semantics" section defines `confidence` as confidence in the recommended *action* (OPEN or SKIP), not a trade-thesis rating. Hard-rule SKIPs are `high`-confidence; ambiguous calls are `low`. Locks the rubric ahead of `SELF_REVIEW_ENABLED` activation. Operator action: 2026-05-07 is the calibration boundary in the next monthly evaluation archive — judge `confidence_calibration` scores will likely improve as Claude stops returning `low` on mechanical SKIPs.
+
+### Chore
+- **Untracked `data/heartbeat.json`** (added to `.gitignore` and removed from index). The file is runtime telemetry written by the scheduler on every job; commits like `fix(heartbeat): update timestamp` will no longer appear in source control.
+
 ## [1.15.1] - 2026-05-06
 
 ### Fixed
