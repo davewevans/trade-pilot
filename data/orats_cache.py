@@ -86,12 +86,26 @@ class ORATSCache:
         if row is None:
             return None
 
-        data_json, fetched_at = row
-
-        if fetched_at is None:
+        # Guarded unpack: a corrupt or partial row must be treated as a clean
+        # miss, not raise ValueError to the caller. The bare `data_json,
+        # fetched_at = row` previously produced "not enough values to unpack"
+        # when row arrived shorter than expected (observed 2026-05-07).
+        if len(row) < 2:
             logger.warning(
-                "ORATSCache.get found NULL fetched_at for endpoint=%s cache_key=%s — treating as miss",
+                "ORATSCache.get got short row (len=%d) for endpoint=%s cache_key=%s — treating as miss",
+                len(row), endpoint, cache_key,
+            )
+            return None
+
+        data_json, fetched_at = row[0], row[1]
+
+        if fetched_at is None or data_json is None:
+            logger.warning(
+                "ORATSCache.get found NULL column(s) for endpoint=%s cache_key=%s "
+                "(fetched_at=%s data_json=%s) — treating as miss",
                 endpoint, cache_key,
+                "NULL" if fetched_at is None else "ok",
+                "NULL" if data_json is None else "ok",
             )
             return None
 
@@ -137,13 +151,16 @@ class ORATSCache:
         ttl_int = int(ttl_seconds) if ttl_seconds is not None else 0
 
         try:
-            self._conn.execute(
-                """INSERT OR REPLACE INTO orats_cache
-                   (endpoint, cache_key, data_json, fetched_at, ttl_seconds)
-                   VALUES (?, ?, ?, ?, ?)""",
-                (endpoint, cache_key, json.dumps(data, default=str), time.time(), ttl_int),
-            )
-            self._conn.commit()
+            # Atomic write: single INSERT OR REPLACE inside an explicit
+            # transaction so data_json and fetched_at are committed together,
+            # never observable in a half-written state by a concurrent reader.
+            with self._conn:
+                self._conn.execute(
+                    """INSERT OR REPLACE INTO orats_cache
+                       (endpoint, cache_key, data_json, fetched_at, ttl_seconds)
+                       VALUES (?, ?, ?, ?, ?)""",
+                    (endpoint, cache_key, json.dumps(data, default=str), time.time(), ttl_int),
+                )
         except sqlite3.InterfaceError:
             logger.warning(
                 "ORATSCache.set InterfaceError — param types: endpoint=%s cache_key=%s "
@@ -170,6 +187,56 @@ class ORATSCache:
         except Exception:
             logger.warning("ORATSCache.clear_expired failed", exc_info=True)
             return 0
+
+    def cleanup_corrupt(self, dry_run: bool = False) -> dict:
+        """Scan for rows with NULL fetched_at or NULL data_json and remove them.
+
+        These rows pre-date the current schema's NOT NULL constraints (the
+        original table was created without them, and CREATE TABLE IF NOT
+        EXISTS does not migrate columns). They cause "treating as miss"
+        warnings on every read of the affected key.
+
+        Operator-invoked only — not auto-run on startup or by the existing
+        TTL-based ``clear_expired`` job.
+
+        Returns:
+            ``{"scanned": int, "corrupt": int, "deleted": int, "by_endpoint": dict}``
+            When ``dry_run`` is True, ``deleted`` is 0 and no rows are removed.
+        """
+        if self._conn is None:
+            logger.warning("ORATSCache.cleanup_corrupt: no connection — nothing to scan")
+            return {"scanned": 0, "corrupt": 0, "deleted": 0, "by_endpoint": {}}
+
+        try:
+            scanned = self._conn.execute(
+                "SELECT COUNT(*) FROM orats_cache"
+            ).fetchone()[0]
+            corrupt_rows = self._conn.execute(
+                "SELECT endpoint, cache_key FROM orats_cache "
+                "WHERE fetched_at IS NULL OR data_json IS NULL"
+            ).fetchall()
+            by_endpoint: dict[str, int] = {}
+            for ep, _ in corrupt_rows:
+                by_endpoint[ep] = by_endpoint.get(ep, 0) + 1
+
+            deleted = 0
+            if not dry_run and corrupt_rows:
+                with self._conn:
+                    cur = self._conn.execute(
+                        "DELETE FROM orats_cache "
+                        "WHERE fetched_at IS NULL OR data_json IS NULL"
+                    )
+                    deleted = cur.rowcount
+
+            return {
+                "scanned": scanned,
+                "corrupt": len(corrupt_rows),
+                "deleted": deleted,
+                "by_endpoint": by_endpoint,
+            }
+        except Exception:
+            logger.warning("ORATSCache.cleanup_corrupt failed", exc_info=True)
+            return {"scanned": 0, "corrupt": 0, "deleted": 0, "by_endpoint": {}}
 
     def stats(self) -> dict:
         """Return cache statistics: total entries, expired entries, size by endpoint."""
