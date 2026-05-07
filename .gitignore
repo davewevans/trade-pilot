@@ -441,3 +441,6 @@ FodyWeavers.xsd
 data/trade_pilot.db
 data/trade_pilot.db-shm
 data/trade_pilot.db-wal
+
+# Runtime telemetry
+data/heartbeat.json
