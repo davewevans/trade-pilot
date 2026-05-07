@@ -214,3 +214,169 @@ def test_stats_from_db_unknown_account_via_filter(mem_conn):
     assert result["total_decisions"] == 0
     assert result["skips"] == 0
     assert result["trades"] == 0
+
+
+# ── End-to-end: GET /api/decisions/stats?account=paper_N ────────────────────
+# Per-account routing through the FastAPI test client. Pins the full
+# auth → handler → _strategy_filter → _decisions_stats_from_db chain.
+
+
+@pytest.fixture
+def e2e_db(tmp_path):
+    """A file-backed SQLite DB usable across threads (TestClient runs the
+    handler on a worker). Yields ``(conn, insert_fn)``.
+
+    Production uses ``check_same_thread=False`` on the singleton (db.py:537);
+    we mirror that here.
+    """
+    db_path = tmp_path / "stats_e2e.db"
+    conn = sqlite3.connect(str(db_path), check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    conn.executescript("""
+        CREATE TABLE decisions (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp       TEXT NOT NULL,
+            strategy_type   TEXT NOT NULL,
+            underlying      TEXT NOT NULL,
+            cycle_id        TEXT,
+            wheel_state     TEXT,
+            action          TEXT NOT NULL,
+            reasoning       TEXT,
+            confidence      REAL,
+            alpaca_order_id TEXT,
+            prompt_version  TEXT,
+            context_json    TEXT
+        );
+        CREATE TABLE trades (
+            id               INTEGER PRIMARY KEY AUTOINCREMENT,
+            cycle_id         TEXT NOT NULL,
+            decision_id      INTEGER,
+            alpaca_order_id  TEXT NOT NULL UNIQUE,
+            underlying       TEXT NOT NULL,
+            strategy_type    TEXT NOT NULL,
+            trade_type       TEXT NOT NULL,
+            symbol           TEXT NOT NULL,
+            fill_status      TEXT,
+            fill_price       REAL,
+            limit_price      REAL,
+            filled_at        TEXT,
+            submitted_at     TEXT,
+            contracts        INTEGER NOT NULL DEFAULT 1
+        );
+    """)
+    conn.commit()
+
+    def insert(strategy_type: str, underlying: str, action: str, reasoning: str = ""):
+        conn.execute(
+            "INSERT INTO decisions (timestamp, strategy_type, underlying, action, reasoning) "
+            "VALUES (datetime('now'), ?, ?, ?, ?)",
+            (strategy_type, underlying, action, reasoning),
+        )
+        conn.commit()
+
+    yield conn, insert
+    conn.close()
+
+
+def _e2e_client_with_conn(conn):
+    """Build a TestClient + patches that route the helper at the live conn.
+
+    Yields the active client. The caller is responsible for stopping the
+    patches via the returned ``stop`` callable.
+
+    In production ``_open_db`` returns a ``_ConnectionProxy`` whose ``close()``
+    is a no-op (the underlying connection is the process-wide singleton). The
+    handler calls ``conn.close()`` in a ``finally`` block. If we hand it the
+    raw connection it gets closed after the first request and the second one
+    fails. Wrap test connections in the same proxy to mirror production.
+    """
+    from fastapi.testclient import TestClient
+    from api import server as srv
+
+    proxy = srv._ConnectionProxy(conn)
+    open_patch = patch.object(srv, "_open_db", return_value=proxy)
+    auth_patch = patch.object(srv, "_is_authenticated", return_value=True)
+    open_patch.start()
+    auth_patch.start()
+    client = TestClient(srv.app, raise_server_exceptions=True)
+
+    def stop():
+        auth_patch.stop()
+        open_patch.stop()
+
+    return client, stop
+
+
+def test_e2e_stats_per_account_routes_to_correct_strategy(e2e_db):
+    """Insert 3 decisions across 2 paper_N accounts; per-account stats returns
+    the strategy-correct subset, and the no-account view returns the full set.
+
+    Pins what the dashboard's per-AccountCard render relies on: paper_2 sees
+    its wheel decisions, paper_3 sees its iron_condor decisions, neither
+    crosses over.
+    """
+    conn, insert = e2e_db
+    # paper_2 → wheel; paper_3 → iron_condor (per _FAKE_ACCOUNT_CONFIG above)
+    insert("wheel", "AAPL", "SELL_PUT")
+    insert("wheel", "MSFT", "SKIP", "IV too low")
+    insert("iron_condor", "SPY", "OPEN")
+
+    client, stop = _e2e_client_with_conn(conn)
+    try:
+        # paper_2 — wheel only
+        r = client.get("/api/decisions/stats?account=paper_2")
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["total_decisions"] == 2
+        assert body["skips"] == 1
+        assert body["trades"] == 1
+
+        # paper_3 — iron_condor only
+        r = client.get("/api/decisions/stats?account=paper_3")
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["total_decisions"] == 1
+        assert body["skips"] == 0
+        assert body["trades"] == 1
+
+        # No account — all rows
+        r = client.get("/api/decisions/stats")
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["total_decisions"] == 3
+    finally:
+        stop()
+
+
+def test_stats_helper_diag_captures_pragma_state(mem_conn):
+    """The diagnostic snapshot used when COUNT(*) returns None (theoretically
+    unreachable) must capture enough state to distinguish hypotheses without
+    needing a Render shell next time."""
+    from api.server import _stats_helper_diag
+    diag = _stats_helper_diag(
+        mem_conn, "SELECT COUNT(*) FROM decisions", [],
+    )
+    assert diag["sql"] == "SELECT COUNT(*) FROM decisions"
+    assert diag["params"] == []
+    assert "database_list" in diag
+    assert "journal_mode" in diag
+    # Unfiltered probe must succeed even on an empty table
+    assert diag["unfiltered_count_probe"] == 0
+    assert diag["unfiltered_count_probe_was_none"] is False
+    assert diag["row_factory"] == "Row"
+
+
+def test_e2e_stats_unknown_account_returns_zeros(e2e_db):
+    """An unknown account must not 500 — returns the zero-shape body."""
+    conn, insert = e2e_db
+    insert("wheel", "AAPL", "SELL_PUT")
+    client, stop = _e2e_client_with_conn(conn)
+    try:
+        r = client.get("/api/decisions/stats?account=does_not_exist")
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["total_decisions"] == 0
+        assert body["skips"] == 0
+        assert body["trades"] == 0
+    finally:
+        stop()
