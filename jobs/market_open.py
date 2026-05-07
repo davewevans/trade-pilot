@@ -1230,7 +1230,6 @@ def run() -> None:
                     best_score = float("-inf")
                     best_symbol = None
                     best_ctx = None
-                    last_skip_reason = None
                     if strategy_name == "iron_condor":
                         symbols = settings.IRON_CONDOR_WATCHLIST or settings.WATCHLIST
                     elif strategy_name == "iron_butterfly":
@@ -1299,7 +1298,6 @@ def run() -> None:
                             best_ctx = candidate_ctx
                             _precheck_accepted.append(sym)
                         elif skip_reason is not None:
-                            last_skip_reason = skip_reason
                             _short_reason = skip_reason[:60] if skip_reason else "unknown"
                             _precheck_rejected[_short_reason] = _precheck_rejected.get(_short_reason, 0) + 1
                             _cat = _categorize_deep_reject(skip_reason)
@@ -1341,13 +1339,18 @@ def run() -> None:
                             "iron_butterfly": "IRON_BUTTERFLY_WATCHLIST",
                             "calendar_spread": "CALENDAR_SPREAD_WATCHLIST",
                         }.get(strategy_name, "SPREAD_WATCHLIST")
-                        reason = (
-                            f"No qualifying candidates across {wl_name} "
-                            f"(last skip: {last_skip_reason})"
-                            if last_skip_reason
-                            else f"No qualifying candidates across {wl_name}"
+                        reason = _build_no_candidates_reason(
+                            wl_name=wl_name,
+                            watchlist_size=len(list(symbols)),
+                            screen_survivors=len(_screen_survivors),
+                            screen_rejections=_screen_rejections,
+                            precheck_rejected=_precheck_rejected,
                         )
                         logger.info("%s: %s", strategy_name, reason)
+                        # Cycle-level rollup row — no specific underlying. The
+                        # underlying column is NULL on this kind of decision so
+                        # per-symbol queries (e.g. WHERE underlying='AAPL') do
+                        # not see it. Per-symbol skip detail lives in `reasoning`.
                         decision = {
                             "action": "SKIP",
                             "reasoning": reason,
@@ -1410,10 +1413,10 @@ def run() -> None:
                 # (PENDING_CLOSE → CLOSED). Here we only record the
                 # decision so the cycle exists by the time the fill row
                 # tries to attach.
-                spread_underlying = (
-                    decision.get("underlying")
-                    or (settings.WATCHLIST[0] if settings.WATCHLIST else strategy_name)
-                )
+                # underlying may be None on cycle-level rollup rows (e.g. the
+                # no-qualifying-candidates SKIP). Per-symbol decisions still
+                # carry the ticker via decision["underlying"] set above.
+                spread_underlying = decision.get("underlying")
 
                 if recorder is not None:
                     _spread_skip_gate = None
@@ -1527,6 +1530,54 @@ _GUARDRAIL_MAP = {
     "long_call_vertical": "validate_long_call_vertical_entry",
     "calendar_spread": "validate_calendar_spread_entry",
 }
+
+
+def _build_no_candidates_reason(
+    *,
+    wl_name: str,
+    watchlist_size: int,
+    screen_survivors: int,
+    screen_rejections: list[dict],
+    precheck_rejected: dict[str, int],
+) -> str:
+    """Build the rollup reasoning string for a no-qualifying-candidates SKIP.
+
+    Aggregates per-symbol skip reasons across the screen and deep-eval passes
+    instead of leaking the last-processed symbol's reason. Reports a residual
+    count when accounted-for rejections do not sum cleanly to the watchlist
+    size — symbols can drop out for reasons we did not capture (data fetch
+    failure, exception in pre-check) and the operator should see that.
+    """
+    screen_count_by_reason: dict[str, int] = {}
+    for r in screen_rejections:
+        reason = r.get("reason", "unknown")
+        screen_count_by_reason[reason] = screen_count_by_reason.get(reason, 0) + 1
+    screen_total = sum(screen_count_by_reason.values())
+    deep_total = sum(precheck_rejected.values())
+
+    def _fmt(counts: dict[str, int], top_n: int = 3) -> str:
+        if not counts:
+            return "none"
+        ordered = sorted(counts.items(), key=lambda kv: kv[1], reverse=True)[:top_n]
+        return ", ".join(f"{count} {reason}" for reason, count in ordered)
+
+    parts = [f"No qualifying candidates across {wl_name} ({watchlist_size} symbols)."]
+    parts.append(
+        f"Pre-screen rejections ({screen_total}/{watchlist_size}): "
+        f"{_fmt(screen_count_by_reason)}."
+    )
+    parts.append(
+        f"Deep-eval rejections ({deep_total}/{screen_survivors} survivors): "
+        f"{_fmt(precheck_rejected)}."
+    )
+    accounted = screen_total + deep_total
+    residual = watchlist_size - accounted
+    if residual > 0:
+        parts.append(
+            f"Unaccounted: {residual} (likely data-fetch failures or exceptions; "
+            f"check warnings)."
+        )
+    return " ".join(parts)
 
 
 def _categorize_deep_reject(skip_reason: str) -> str:
