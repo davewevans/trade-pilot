@@ -86,7 +86,10 @@ _SCHEMA_STATEMENTS: tuple[str, ...] = (
         id              INTEGER PRIMARY KEY AUTOINCREMENT,
         timestamp       TEXT NOT NULL,
         strategy_type   TEXT NOT NULL,
-        underlying      TEXT NOT NULL,
+        -- underlying is NULL for cycle-level rollup rows (e.g. spread strategies
+        -- that scan a watchlist and emit one summary decision when no candidate
+        -- qualifies). Per-symbol decisions still carry the ticker.
+        underlying      TEXT,
         cycle_id        TEXT,
         wheel_state     TEXT,
         action          TEXT NOT NULL,
@@ -575,6 +578,86 @@ class Database:
                 logger.warning("Migration failed (%s): %s", stmt, e)
         if applied:
             logger.info("Migrations applied: %d", applied)
+
+        # Conditional non-additive migrations (NOT NULL → NULL, column drops,
+        # etc.) live here. SQLite cannot ALTER an existing column's nullability,
+        # so each one is its own table-rebuild dance, gated by a PRAGMA check
+        # to keep it idempotent.
+        self._migrate_decisions_underlying_nullable()
+
+    def _migrate_decisions_underlying_nullable(self) -> None:
+        """Make decisions.underlying nullable (rollup rows write NULL).
+
+        Rebuilds the decisions table with underlying NULL allowed only when
+        the existing column is still NOT NULL. Idempotent: a no-op once the
+        rebuild has run, or on fresh installs that already match the schema.
+        """
+        try:
+            cols = self._conn.execute("PRAGMA table_info(decisions)").fetchall()
+        except sqlite3.OperationalError:
+            return  # table doesn't exist yet (init_schema will create it nullable)
+
+        ul = next((c for c in cols if c["name"] == "underlying"), None)
+        if ul is None or not ul["notnull"]:
+            return  # already nullable
+
+        logger.info("Migrating decisions.underlying NOT NULL → NULL (table rebuild)")
+        try:
+            self._conn.executescript(
+                """
+                BEGIN;
+                CREATE TABLE decisions_new (
+                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp       TEXT NOT NULL,
+                    strategy_type   TEXT NOT NULL,
+                    underlying      TEXT,
+                    cycle_id        TEXT,
+                    wheel_state     TEXT,
+                    action          TEXT NOT NULL,
+                    reasoning       TEXT,
+                    confidence      REAL,
+                    alpaca_order_id TEXT,
+                    prompt_version  TEXT,
+                    context_json    TEXT,
+                    research_metadata_json TEXT,
+                    skip_gate       TEXT,
+                    skip_reason_code TEXT,
+                    model_version   TEXT,
+                    input_tokens    INTEGER,
+                    output_tokens   INTEGER,
+                    cache_read_tokens INTEGER,
+                    cache_creation_tokens INTEGER,
+                    estimated_cost_usd REAL,
+                    job_run_id      TEXT,
+                    pre_check_verdict TEXT
+                );
+                INSERT INTO decisions_new
+                    SELECT id, timestamp, strategy_type, underlying, cycle_id,
+                           wheel_state, action, reasoning, confidence,
+                           alpaca_order_id, prompt_version, context_json,
+                           research_metadata_json, skip_gate, skip_reason_code,
+                           model_version, input_tokens, output_tokens,
+                           cache_read_tokens, cache_creation_tokens,
+                           estimated_cost_usd, job_run_id, pre_check_verdict
+                    FROM decisions;
+                DROP TABLE decisions;
+                ALTER TABLE decisions_new RENAME TO decisions;
+                CREATE INDEX IF NOT EXISTS idx_decisions_underlying_ts
+                    ON decisions(underlying, timestamp);
+                CREATE INDEX IF NOT EXISTS idx_decisions_job_run
+                    ON decisions(job_run_id) WHERE job_run_id IS NOT NULL;
+                CREATE INDEX IF NOT EXISTS idx_decisions_pcv
+                    ON decisions(pre_check_verdict, timestamp);
+                COMMIT;
+                """
+            )
+            logger.info("decisions.underlying migration complete")
+        except sqlite3.Error:
+            logger.exception("decisions.underlying migration failed — rolling back")
+            try:
+                self._conn.execute("ROLLBACK")
+            except sqlite3.Error:
+                pass
 
     def get_connection(self) -> sqlite3.Connection:
         """Return the underlying sqlite3.Connection for repository injection."""

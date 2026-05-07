@@ -100,7 +100,7 @@ class TradeRecorder:
         self,
         *,
         strategy_type: str,
-        underlying: str,
+        underlying: str | None,
         action: str,
         wheel_state: str | None = None,
         reasoning: str | None = None,
