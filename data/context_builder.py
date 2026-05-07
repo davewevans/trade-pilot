@@ -244,7 +244,14 @@ class ContextBuilder:
         from data.orats_client import ORATSClient
         iv_env = ORATSClient.classify_iv_environment(iv_rank_1y_value)
 
-        cores = results.get("orats_cores") or {}
+        _raw_cores = results.get("orats_cores")
+        if _raw_cores is not None and not isinstance(_raw_cores, dict):
+            logger.warning(
+                "cores returned %s instead of dict for %s; defaulting to empty dict",
+                type(_raw_cores).__name__, symbol,
+            )
+            _raw_cores = None
+        cores = _raw_cores or {}
         _raw_monies = results.get("orats_monies") or []
         if not isinstance(_raw_monies, list):
             logger.warning(
