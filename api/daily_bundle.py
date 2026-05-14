@@ -11,10 +11,12 @@ All reads are read-only. No side effects.
 from __future__ import annotations
 
 import json
+import sqlite3
 from collections import Counter, defaultdict
+from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 
 def build_daily_bundle(
@@ -55,12 +57,23 @@ def build_daily_bundle(
 # ── helpers ──────────────────────────────────────────────────
 
 
-def _db_conn(db_path: str) -> "sqlite3.Connection":
-    from database.db import get_db
-    import sqlite3
-    conn = get_db().get_connection()
+@contextmanager
+def _db_conn(db_path: str) -> Iterator[sqlite3.Connection]:
+    """Yield a fresh per-call sqlite3.Connection, closed on exit.
+
+    daily_bundle is reached through a sync API endpoint, so it runs in
+    FastAPI's threadpool. A shared connection across those threads raises
+    InterfaceError under concurrent cursor use — each call gets its own
+    connection instead. Reads only; WAL persists at the file level.
+    """
+    conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
-    return conn
+    conn.execute("PRAGMA busy_timeout=30000")
+    conn.execute("PRAGMA foreign_keys=ON")
+    try:
+        yield conn
+    finally:
+        conn.close()
 
 
 def _read_json(path: Path) -> Any:

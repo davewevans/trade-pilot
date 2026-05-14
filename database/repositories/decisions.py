@@ -45,6 +45,12 @@ class DecisionRepository:
         if research_json is None and decision.get("research_metadata") is not None:
             research_json = json.dumps(decision["research_metadata"], default=str)
 
+        # Defensive: coerce alpaca_order_id to str — sqlite3 has no UUID
+        # adapter, and alpaca-py returns order ids as uuid.UUID.
+        alpaca_order_id = decision.get("alpaca_order_id")
+        if alpaca_order_id is not None:
+            alpaca_order_id = str(alpaca_order_id)
+
         cur = self._conn.execute(
             """
             INSERT INTO decisions (
@@ -66,7 +72,7 @@ class DecisionRepository:
                 decision["action"],
                 decision.get("reasoning"),
                 decision.get("confidence"),
-                decision.get("alpaca_order_id"),
+                alpaca_order_id,
                 decision.get("prompt_version"),
                 ctx_json,
                 research_json,

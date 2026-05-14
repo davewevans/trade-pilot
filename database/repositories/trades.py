@@ -48,6 +48,11 @@ class TradeRepository:
         ``contracts`` defaults to 1 and ``fill_status`` to 'pending'
         if omitted.
         """
+        # Defensive: coerce alpaca_order_id to str — sqlite3 has no UUID
+        # adapter, and alpaca-py returns order ids as uuid.UUID.
+        alpaca_order_id = trade["alpaca_order_id"]
+        if alpaca_order_id is not None:
+            alpaca_order_id = str(alpaca_order_id)
         cur = self._conn.execute(
             """
             INSERT INTO trades (
@@ -61,7 +66,7 @@ class TradeRepository:
             (
                 trade["cycle_id"],
                 trade.get("decision_id"),
-                trade["alpaca_order_id"],
+                alpaca_order_id,
                 trade["underlying"],
                 trade["strategy_type"],
                 trade["trade_type"],
