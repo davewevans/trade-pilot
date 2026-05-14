@@ -180,6 +180,10 @@ class AlpacaBroker(BaseBroker):
 
         order = self.client.submit_order(request)
         data = order.model_dump()
+        # alpaca-py returns order id as uuid.UUID; coerce to str at the
+        # boundary so downstream SQLite/JSONL persistence never sees a UUID.
+        if data.get("id") is not None:
+            data["id"] = str(data["id"])
         logger.info(
             "Order submitted id=%s symbol=%s side=%s qty=%s status=%s",
             data.get("id"),
@@ -326,6 +330,10 @@ class AlpacaBroker(BaseBroker):
 
         order = self.client.submit_order(request)
         data = order.model_dump()
+        # alpaca-py returns order id as uuid.UUID; coerce to str at the
+        # boundary so downstream SQLite/JSONL persistence never sees a UUID.
+        if data.get("id") is not None:
+            data["id"] = str(data["id"])
 
         leg_summary = ", ".join(
             f"{l['side']} {l['symbol']}" for l in legs

@@ -234,6 +234,11 @@ class TradeRecorder:
                 "iv_rank_at_entry": iv_rank_at_entry,
             })
         except Exception:
+            # TODO(manual-recon): the UUID-binding bug orphaned trade
+            # c0702675-3b5d-4b37-9190-7cdce7499a16 (VZ wheel CSP,
+            # 2026-05-14). Per the persistence contract, reconcilers do
+            # not synthesize history — operator must restore this row
+            # manually. No auto-heal.
             logger.warning(
                 "Failed to record trade in DB (order=%s symbol=%s)",
                 alpaca_order_id, symbol, exc_info=True,

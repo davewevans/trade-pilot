@@ -24,6 +24,10 @@ class ShadowExecutionRepository:
 
     def insert_submission(self, *, parent_row: dict, legs: list[dict]) -> int:
         """Insert one shadow_executions row and N leg rows atomically. Returns the new id."""
+        # Defensive: coerce alpaca_order_id to str — sqlite3 has no UUID
+        # adapter, and alpaca-py returns order ids as uuid.UUID.
+        if parent_row.get("alpaca_order_id") is not None:
+            parent_row["alpaca_order_id"] = str(parent_row["alpaca_order_id"])
         cur = self._conn.cursor()
         cur.execute(
             """
