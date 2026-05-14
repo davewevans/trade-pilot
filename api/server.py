@@ -283,45 +283,32 @@ def _trade_pnl(trade: dict) -> float | None:
         return None
 
 
-class _ConnectionProxy:
-    """Thin proxy around sqlite3.Connection that makes close() a no-op.
-
-    API handlers call conn.close() in finally blocks. Closing the
-    process-wide singleton would break all subsequent requests, so this
-    proxy swallows those calls while delegating everything else.
-    """
-
-    def __init__(self, conn: sqlite3.Connection) -> None:
-        self.__dict__["_conn"] = conn
-
-    def close(self) -> None:
-        pass  # singleton is managed by get_db(), not the handler
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self.__dict__["_conn"], name)
-
-    def __setattr__(self, name: str, value: Any) -> None:
-        if name == "_conn":
-            self.__dict__["_conn"] = value
-        else:
-            setattr(self.__dict__["_conn"], name, value)
-
-    def __enter__(self) -> sqlite3.Connection:
-        return self.__dict__["_conn"].__enter__()
-
-    def __exit__(self, *args: Any) -> Any:
-        return self.__dict__["_conn"].__exit__(*args)
-
-
 def _open_db() -> sqlite3.Connection | None:
-    """Return the process-wide DB connection wrapped in a no-close proxy.
+    """Return a fresh per-request sqlite3.Connection (read path).
 
-    Returns None if the singleton cannot be initialised (logs the error).
-    Handlers that receive None fall back to JSONL where available.
+    A single shared connection cannot be used safely across FastAPI's
+    threadpool: concurrent lazy-cursor iteration corrupts statement state
+    and raises ``InterfaceError: bad parameter or other API misuse``. Each
+    request gets its own connection instead; the handler's
+    ``finally: conn.close()`` then does a real close.
+
+    ``get_db()`` is still called so schema-init-once happens and the DB
+    path is resolved from a single source. WAL is persistent at the file
+    level, so concurrent readers remain safe and performant.
+
+    Returns None if the connection cannot be opened (logged); handlers
+    that receive None fall back to JSONL where available.
     """
     try:
         from database.db import get_db
-        return _ConnectionProxy(get_db().get_connection())
+        path = get_db().path
+        conn = sqlite3.connect(str(path))  # default check_same_thread=True
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA busy_timeout=30000")
+        conn.execute("PRAGMA foreign_keys=ON")
+        # Match the writer's autocommit model (database/db.py).
+        conn.isolation_level = None
+        return conn
     except Exception:
         logger.exception("Failed to get database connection")
         return None
