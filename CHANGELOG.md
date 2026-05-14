@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.15.3] - 2026-05-14
+
+### Fixed
+- **alpaca-py UUID order IDs orphaning new trades**: alpaca-py 0.43.2 returns `uuid.UUID` for order ids; SQLite has no UUID adapter and `json.dumps` cannot serialize one, so `TradeRepository.insert` and `ShadowExecutionRepository.insert_submission` raised `sqlite3.ProgrammingError` and every new trade was orphaned from the `trades`/`shadow_executions` tables. Coerced to `str` at the broker boundary (`AlpacaBroker.place_order`/`place_mleg_order`) with defensive `str()` also in `trades.insert`, `shadow_execution.insert_submission`, and `decisions.insert`. The boundary fix also repairs `trade_journal`'s `update()` lookup, which compared a str-on-disk `order_id` against a UUID and silently missed. The VZ trade `c0702675-3b5d-4b37-9190-7cdce7499a16` from 2026-05-14 remains an orphan by design — operator-manual reconciliation per the persistence contract. Sentry events 7478653118, 7478653066.
+- **Alpaca option NTA activity type codes returning HTTP 422**: `jobs/post_market.py` polled `OEXP`/`OASGN`/`OEXC`; the correct Alpaca codes per the alpaca-py `ActivityType` enum and the live API contract are `OPEXP`/`OPASN`/`OPEXC`. All three previously returned 422, so post_market's same-day journal status updates for expiry/assignment/exercise were silently no-op. Position state and wheel-state correction were unaffected — `pre_market.py` already used the correct codes and catches NTAs the next morning. Operator note: `assignment_rate` in `portfolio_patterns.json` (Claude's context) and the weekly report's assignment count were under-counting and will now be accurate. Sentry event 7461569454.
+- **`/api/decisions/stats` `InterfaceError` under concurrent dashboard loads**: `_open_db()` returned a process-wide singleton `sqlite3.Connection` (wrapped in `_ConnectionProxy`) shared across FastAPI's threadpool. Concurrent lazy `for row in conn.execute(...)` iteration released the GIL between steps, letting other threads' `.execute()` calls corrupt the open cursor's statement state — raising `InterfaceError: bad parameter or other API misuse`. `_open_db()` now returns a fresh per-request connection (default `check_same_thread=True`); `_ConnectionProxy` deleted. `api/daily_bundle.py`'s `_db_conn()` had the same shared-singleton pattern (reached through a sync endpoint) and was converted to a per-call contextmanager. Also resolves the related "COUNT(*) returned no rows — defaulting to 0" warning from the same root cause. Sentry events 7465748118, 7465783250, 7466323729.
+
+### Added
+- **Regression tests**: `tests/database/test_uuid_order_id_coercion.py` (9 tests covering UUID coercion at the broker boundary and in all three repositories); 2 new tests in `tests/test_api_decisions_stats.py` (per-request connection isolation + a concurrency reproducer that fails on the shared-connection model and passes on the fix).
+
 ## [1.15.2] - 2026-05-07
 
 ### Fixed
