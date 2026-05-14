@@ -26,7 +26,10 @@ def run() -> None:
     report_lines: list[str] = []
 
     # ── Poll for non-trade activities ───────────────────────
-    for activity_type in ("OEXP", "OASGN", "OEXC"):
+    # Alpaca option NTA codes per the alpaca-py ActivityType enum and the
+    # live API contract: OPEXP=expiry, OPASN=assignment, OPEXC=exercise.
+    # See https://docs.alpaca.markets/docs/account-activities
+    for activity_type in ("OPEXP", "OPASN", "OPEXC"):
         try:
             activities = broker.get_account_activities([activity_type])
         except Exception:
@@ -62,7 +65,7 @@ def run() -> None:
             if digits_start and len(symbol) > digits_start + 6:
                 option_type = symbol[digits_start + 6].upper()
 
-            if activity_type == "OASGN":
+            if activity_type == "OPASN":
                 msg = f"ASSIGNMENT: Bought {qty} shares of {underlying} @ ${price}"
                 logger.info(msg)
                 report_lines.append(msg)
@@ -76,7 +79,7 @@ def run() -> None:
                     "closed_at": datetime.now().isoformat(timespec="seconds"),
                 })
 
-            elif activity_type == "OEXP":
+            elif activity_type == "OPEXP":
                 msg = f"EXPIRY: {symbol} expired worthless — full premium kept"
                 logger.info(msg)
                 report_lines.append(msg)
@@ -90,7 +93,7 @@ def run() -> None:
                     "closed_at": datetime.now().isoformat(timespec="seconds"),
                 })
 
-            elif activity_type == "OEXC":
+            elif activity_type == "OPEXC":
                 msg = f"EXERCISE: {symbol} exercised (qty={qty}, price=${price})"
                 logger.info(msg)
                 report_lines.append(msg)
