@@ -38,6 +38,10 @@ class TradeJournal:
                 "bull_put_spread", "bear_call_spread",
                 "long_call_vertical"
             skip_reason: if action is skip, the reason string
+            account_id: executing account label, e.g. "paper_2".
+                Optional, additive — added in the cross-account context
+                isolation fix. Pre-fix entries have no account_id and are
+                excluded from strict-equality account_id queries.
         """
         record = {
             "timestamp": datetime.now().isoformat(timespec="seconds"),
@@ -66,13 +70,33 @@ class TradeJournal:
                     logger.warning("Skipping malformed journal line %d", lineno)
         return entries
 
-    def get_recent(self, symbol: str, n: int = 5) -> list[dict]:
+    @staticmethod
+    def _account_match(entry: dict, account_id: str | None) -> bool:
+        """Strict-equality account filter for journal reads.
+
+        account_id=None → bot-wide (matches every entry, used by portfolio
+        patterns and legacy callers).
+        account_id="paper_N" → matches only entries whose ``account_id``
+        field equals that string. Pre-fix entries (no account_id key) do
+        NOT match; otherwise the cross-account leak would persist until
+        the journal is rotated.
+        """
+        if account_id is None:
+            return True
+        return entry.get("account_id") == account_id
+
+    def get_recent(
+        self, symbol: str, n: int = 5, account_id: str | None = None,
+    ) -> list[dict]:
         """Return the last *n* entries for *symbol*, newest first."""
         entries = self._read_all()
         matching = [
             e for e in entries
-            if (e.get("underlying") or "").upper() == symbol.upper()
-            or (e.get("symbol") or "").upper() == symbol.upper()
+            if (
+                (e.get("underlying") or "").upper() == symbol.upper()
+                or (e.get("symbol") or "").upper() == symbol.upper()
+            )
+            and self._account_match(e, account_id)
         ]
         return list(reversed(matching[-n:]))
 
@@ -168,11 +192,16 @@ class TradeJournal:
             logger.debug("bulk_update_mae: updated %d journal entries", updated)
         return updated
 
-    def get_symbol_stats(self, symbol: str, days: int = 30) -> dict:
+    def get_symbol_stats(
+        self, symbol: str, days: int = 30, account_id: str | None = None,
+    ) -> dict:
         """Return aggregate performance stats for a symbol over the past N days.
 
         Used to give Claude feedback on its own recent decision quality.
         Returns a dict suitable for inclusion in the Claude context.
+
+        account_id (optional): when provided, restricts the lookback to
+        entries written for that account. See _account_match for semantics.
         """
         from datetime import date, timedelta
         cutoff = (date.today() - timedelta(days=days)).isoformat()
@@ -183,6 +212,7 @@ class TradeJournal:
             if (
                 (e.get("underlying") or "").upper() == symbol.upper()
                 and e.get("timestamp", "") >= cutoff
+                and self._account_match(e, account_id)
             )
         ]
 
@@ -231,9 +261,11 @@ class TradeJournal:
             "total_pnl": round(total_pnl, 2),
         }
 
-    def format_stats_for_prompt(self, symbol: str, days: int = 30) -> str:
+    def format_stats_for_prompt(
+        self, symbol: str, days: int = 30, account_id: str | None = None,
+    ) -> str:
         """Format symbol performance stats as a string for Claude's context."""
-        stats = self.get_symbol_stats(symbol, days)
+        stats = self.get_symbol_stats(symbol, days, account_id=account_id)
 
         if stats["total_decisions"] == 0:
             return ""
@@ -255,7 +287,9 @@ class TradeJournal:
         body = "\n".join(lines)
         return f"<performance_stats>\n{body}\n</performance_stats>"
 
-    def get_recent_skips(self, symbol: str, days: int = 30) -> list[dict]:
+    def get_recent_skips(
+        self, symbol: str, days: int = 30, account_id: str | None = None,
+    ) -> list[dict]:
         """Return recent skip entries for a symbol within the past N days."""
         from datetime import date, timedelta
         cutoff = (date.today() - timedelta(days=days)).isoformat()
@@ -273,10 +307,13 @@ class TradeJournal:
                     e.get("action") in ("skip", "hold")
                     or e.get("status") == "skipped"
                 )
+                and self._account_match(e, account_id)
             )
         ]
 
-    def format_skip_history_for_prompt(self, symbol: str, days: int = 30) -> str:
+    def format_skip_history_for_prompt(
+        self, symbol: str, days: int = 30, account_id: str | None = None,
+    ) -> str:
         """Format recent skip history as a string for Claude's context.
 
         Aggregates primarily by skip_code (machine-readable) with the most
@@ -286,7 +323,7 @@ class TradeJournal:
         Helps Claude recognise persistent conditions — e.g. 12 consecutive
         LOW_IVR skips signals the IV threshold may be mis-tuned.
         """
-        skips = self.get_recent_skips(symbol, days)
+        skips = self.get_recent_skips(symbol, days, account_id=account_id)
         if not skips:
             return ""
 
@@ -390,7 +427,9 @@ class TradeJournal:
             "most_active_symbols": dict(symbol_counts.most_common(5)),
         }
 
-    def get_recent_rejections(self, symbol: str, days: int = 30) -> list[dict]:
+    def get_recent_rejections(
+        self, symbol: str, days: int = 30, account_id: str | None = None,
+    ) -> list[dict]:
         """Return recent guardrail-rejection entries for *symbol* within N days.
 
         Guardrail rejections are written with ``status == "rejected"``
@@ -407,11 +446,14 @@ class TradeJournal:
                 (e.get("underlying") or "").upper() == symbol.upper()
                 and e.get("timestamp", "") >= cutoff
                 and e.get("status") == "rejected"
+                and self._account_match(e, account_id)
             )
         ]
         return list(reversed(matching))
 
-    def format_rejections_for_prompt(self, symbol: str, days: int = 30) -> str:
+    def format_rejections_for_prompt(
+        self, symbol: str, days: int = 30, account_id: str | None = None,
+    ) -> str:
         """Format recent guardrail rejections as an XML-wrapped block for Claude.
 
         Returns empty string when there are no recent rejections.
@@ -422,7 +464,7 @@ class TradeJournal:
               2026-04-03: proposed sell_call → STRIKE_BELOW_COST_BASIS: strike below cost basis
             </guardrail_rejections>
         """
-        rejections = self.get_recent_rejections(symbol, days)
+        rejections = self.get_recent_rejections(symbol, days, account_id=account_id)
         if not rejections:
             return ""
 
@@ -445,7 +487,9 @@ class TradeJournal:
         body = "\n".join(lines)
         return f"<guardrail_rejections>\n{body}\n</guardrail_rejections>"
 
-    def get_recent_by_days(self, symbol: str, days: int = 30) -> list[dict]:
+    def get_recent_by_days(
+        self, symbol: str, days: int = 30, account_id: str | None = None,
+    ) -> list[dict]:
         """Return all trade entries for a symbol within the past N days.
 
         Unlike get_recent() which is count-bounded, this is time-bounded.
@@ -466,16 +510,19 @@ class TradeJournal:
                 and e.get("timestamp", "") >= cutoff
                 and e.get("action") not in ("skip", "hold")
                 and e.get("status") != "skipped"
+                and self._account_match(e, account_id)
             )
         ]
 
-    def format_for_prompt(self, symbol: str, days: int = 30) -> str:
+    def format_for_prompt(
+        self, symbol: str, days: int = 30, account_id: str | None = None,
+    ) -> str:
         """Format recent trade history as a string for Claude's context.
 
         Uses a time-bounded window (default: last 30 days) rather than
         a fixed count. Returns an empty string if no trades exist.
         """
-        recent = self.get_recent_by_days(symbol, days)
+        recent = self.get_recent_by_days(symbol, days, account_id=account_id)
         if not recent:
             return ""
 
