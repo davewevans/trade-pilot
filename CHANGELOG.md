@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.15.4] - 2026-05-19
+
+### Fixed
+- **Cross-account context contamination in `ContextBuilder`**: a single shared `ContextBuilder` bound to the default broker (paper_1) was reused across every strategy in `jobs/market_open.py`, so `account` / `positions` / `open_orders` / `portfolio_exposure` for Standard Wheel (paper_2) and Turnover Wheel (paper_6) all reflected paper_1. Separately, the bot-wide `journal.jsonl` reads filtered by symbol only, leaking `recent_trades` / `skip_history` / `performance_stats` / `guardrail_rejections` across accounts. Surfaced 2026-05-19 when Turnover Wheel skipped BAC at 90% confidence citing Standard Wheel's just-placed BAC short put as its own "existing order." Fix: `jobs/market_open.py` constructs one `ContextBuilder` per strategy with its own broker and `account_id` (paper_N); same in `jobs/position_check.py` (Standard-Wheel-only, paper_2) and `jobs/pre_market.py` (cosmetic — `.build()` never called). `TradeJournal.append` accepts an optional `account_id` field; all read helpers (`get_recent_by_days`, `get_recent_skips`, `get_recent_rejections`, `get_symbol_stats`, all four `format_*_for_prompt`) accept an optional `account_id` filter with strict-equality semantics. Pre-fix entries have no `account_id` key and are excluded from explicit account_id queries (otherwise the leak would persist until journal rotation). `compute_portfolio_greeks(account_id)` now reads `portfolio_paper_N.json` when called with an account_id. `ContextBuilder.build(..., account_id=...)` threads the value through all four journal calls and the Greeks read. Append-only journal contract preserved — no historical entries mutated. Out of scope and filed as a separate follow-up: Standard Wheel **orders** still land on paper_1 via `execute_decision(broker, ...)` at `market_open.py:702` (bypasses `wheel_broker = make_broker("wheel")` / paper_2); this PR fixes the context-read surface only.
+
+### Added
+- **`tests/test_context_builder_account_isolation.py`** (4 tests): open_orders isolation across two brokers, recent_trades strict-equality filter, pre-fix-entry exclusion from explicit account_id queries, skip_history + rejections account scoping. Pre-fix three of four fail at the API surface; post-fix all four pass. A semantic-failure refactor (one test that fails on `_account_match()` regressions rather than the kwarg surface) is queued as a small follow-up.
+- **`scripts/reproduce_bac_leak.py`**: standalone repro that sets up the exact 2026-05-19 BAC scenario (paper_2 has BAC short put + journal entry; paper_6 builds context for BAC) and prints side-by-side contexts with a self-check. Used in the PR description to verify the fix on real-shape inputs without hitting Alpaca.
+
+### Documentation
+- **`CLAUDE.md`** (new, repo root): project-knowledge surface for future Claude Code sessions. Single principle for now — `ContextBuilder` must be constructed per-strategy with the executing broker and `account_id`, never shared across accounts in a single process. Repetition over factory abstractions; `account_id` uses the `paper_N` label, not the strategy name.
+
 ## [1.15.3] - 2026-05-14
 
 ### Fixed
