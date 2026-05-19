@@ -99,7 +99,20 @@ def run() -> None:
     guardrails = Guardrails(broker=broker)
     strategy = WheelStrategy(broker)
     journal = TradeJournal(path=settings.JOURNAL_PATH)
-    ctx_builder = ContextBuilder(broker=broker, journal=journal)
+    # position_check is Standard-Wheel-only by design — the loop below
+    # iterates only `broker.get_positions()` against the wheel account
+    # (paper_2) and runs WheelStrategy.get_current_state() to drive the
+    # roll/close/hold ask. There is NO turnover_wheel branch in this job.
+    # Turnover Wheel position management runs once daily inside
+    # jobs/market_open.py's TW loop (around market_open.py:780, which calls
+    # advisor.ask_turnover_wheel() for SHORT_PUT / SHORT_CALL / LONG_STOCK
+    # states). If TW ever needs a midday management cycle equivalent to
+    # this 10am/12pm/2pm cadence, it must build its own ContextBuilder
+    # with broker=turnover_wheel_broker and account_id="paper_6" — do NOT
+    # extend this one to handle both wheels with paper_2 hardcoded.
+    ctx_builder = ContextBuilder(
+        broker=broker, journal=journal, account_id="paper_2",
+    )
 
     # Dual-write recorder for SQLite (failures logged, never block job).
     from database.db import Database

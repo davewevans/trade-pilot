@@ -39,7 +39,18 @@ def run() -> None:
 
     broker = get_broker()
     journal = TradeJournal(path=settings.JOURNAL_PATH)
-    ctx_builder = ContextBuilder(broker=broker, journal=journal)
+    # NOTE: pre_market does NOT call ctx_builder.build() anywhere in this
+    # job — it only fetches market-wide signals (VIX, F&G, RFR) and
+    # per-symbol earnings/news directly via the market_data module. This
+    # ContextBuilder is constructed only because the surrounding scaffold
+    # imports it; account_id is therefore cosmetic. If a future change
+    # wires .build() into pre_market and that build needs account-specific
+    # fields (positions, open_orders, recent_trades), DO NOT keep this
+    # hardcoded — switch to per-account construction matching the
+    # executing broker, the same pattern market_open.py uses.
+    ctx_builder = ContextBuilder(
+        broker=broker, journal=journal, account_id="paper_1",
+    )
     sw = StateWriter()
 
     # ── Check for overnight option events ──────────────────

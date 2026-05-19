@@ -171,7 +171,12 @@ def run() -> None:
     # advisor is created after DB init below so it can receive api_usage_repo.
     guardrails = Guardrails(broker=broker)
     journal = TradeJournal(path=settings.JOURNAL_PATH)
-    ctx_builder = ContextBuilder(broker=broker, journal=journal)
+    # NOTE: ContextBuilder is constructed per-strategy below (see the
+    # "Per-strategy ContextBuilders" block) so each strategy's context
+    # reflects ITS broker's account/positions/open_orders, not paper_1's.
+    # Sharing one builder across strategies leaks the default broker's
+    # state into every strategy's context — see the cross-account context
+    # contamination fix.
     tracker = SpreadTracker()
     router = StrategyRouter()
 
@@ -296,6 +301,71 @@ def run() -> None:
         spread_strategies["calendar_spread"] = CalendarSpreadStrategy(
             broker=paper5_broker, state_writer=sw, spread_tracker=tracker, recorder=recorder,
         )
+
+    # ── Per-strategy account_id labels ──────────────────────────────────────
+    # Used as the account_id field in journal entries and ContextBuilder
+    # construction. Matches AccountManager / portfolio_paper_N.json. Kept
+    # as explicit constants (no factory) so each strategy's account is
+    # easy to audit.
+    WHEEL_ACCOUNT_ID = "paper_2"
+    TURNOVER_WHEEL_ACCOUNT_ID = "paper_6"
+    IRON_CONDOR_ACCOUNT_ID = "paper_3"
+    SPREADS_ACCOUNT_ID = "paper_1"   # bull_put / bear_call / long_call_vertical
+    IRON_BUTTERFLY_ACCOUNT_ID = "paper_4"
+    CALENDAR_SPREAD_ACCOUNT_ID = "paper_5"
+    # Mapping for the spread-router loop where strategy_name varies.
+    SPREAD_ACCOUNT_IDS: dict[str, str] = {
+        "iron_condor": IRON_CONDOR_ACCOUNT_ID,
+        "bull_put_spread": SPREADS_ACCOUNT_ID,
+        "bear_call_spread": SPREADS_ACCOUNT_ID,
+        "long_call_vertical": SPREADS_ACCOUNT_ID,
+        "iron_butterfly": IRON_BUTTERFLY_ACCOUNT_ID,
+        "calendar_spread": CALENDAR_SPREAD_ACCOUNT_ID,
+    }
+
+    # ── Per-strategy ContextBuilders ────────────────────────────────────────
+    # Each strategy uses its own ContextBuilder so the account/positions/
+    # open_orders fetched via self.broker are the executing strategy's, and
+    # the journal-derived fields (recent_trades, skip_history, etc.) are
+    # filtered to that strategy's account. Explicit construction over a
+    # factory — easier to audit which broker and account_id each strategy
+    # uses.
+    wheel_ctx_builder = ContextBuilder(
+        broker=wheel_broker, journal=journal, account_id=WHEEL_ACCOUNT_ID,
+    )
+    turnover_wheel_ctx_builder = ContextBuilder(
+        broker=turnover_wheel_broker, journal=journal,
+        account_id=TURNOVER_WHEEL_ACCOUNT_ID,
+    )
+    # iron_condor lives on paper_3.
+    ic_ctx_builder = ContextBuilder(
+        broker=ic_broker, journal=journal, account_id=IRON_CONDOR_ACCOUNT_ID,
+    )
+    # bull_put / bear_call / long_call_vertical share paper_1.
+    spreads_ctx_builder = ContextBuilder(
+        broker=default_broker, journal=journal, account_id=SPREADS_ACCOUNT_ID,
+    )
+    # Mapping from spread strategy_name to its ContextBuilder. Used in the
+    # spread router section. iron_butterfly and calendar_spread are added
+    # below only when their respective accounts are active (mirrors the
+    # spread_strategies dict population above).
+    spread_ctx_builders: dict[str, ContextBuilder] = {
+        "iron_condor": ic_ctx_builder,
+        "bull_put_spread": spreads_ctx_builder,
+        "bear_call_spread": spreads_ctx_builder,
+        "long_call_vertical": spreads_ctx_builder,
+    }
+    if "iron_butterfly" in spread_strategies:
+        spread_ctx_builders["iron_butterfly"] = ContextBuilder(
+            broker=paper4_broker, journal=journal,
+            account_id=IRON_BUTTERFLY_ACCOUNT_ID,
+        )
+    if "calendar_spread" in spread_strategies:
+        spread_ctx_builders["calendar_spread"] = ContextBuilder(
+            broker=paper5_broker, journal=journal,
+            account_id=CALENDAR_SPREAD_ACCOUNT_ID,
+        )
+
     # Reconcile any PENDING_OPEN / PENDING_CLOSE spreads from a previous
     # session before we make new decisions. Without this, management logic
     # could act on phantom positions (orders that never filled or were
@@ -368,7 +438,7 @@ def run() -> None:
             _wheel_pcv = "OPEN" if state.value == "IDLE" else "MANAGE"
             logger.info("%s wheel state: %s", symbol, state.value)
 
-            context = ctx_builder.build(symbol, state.value)
+            context = wheel_ctx_builder.build(symbol, state.value)
             logger.info(ContextBuilder.summarize_for_log(context))
 
             try:
@@ -394,6 +464,7 @@ def run() -> None:
                     "reasoning": _liq_skip.get("reasoning", ""),
                     "confidence": None,
                     "status": "skipped",
+                    "account_id": WHEEL_ACCOUNT_ID,
                     "strategy_type": "wheel_csp" if state.value == "IDLE" else "wheel_cc",
                     "iv_rank": context.get("iv_rank"),
                 })
@@ -434,6 +505,7 @@ def run() -> None:
                         "reasoning": _ac_reason,
                         "confidence": None,
                         "status": "skipped",
+                        "account_id": WHEEL_ACCOUNT_ID,
                         "strategy_type": "wheel_csp",
                         "iv_rank": context.get("iv_rank"),
                     })
@@ -475,6 +547,7 @@ def run() -> None:
                         "reasoning": _su_reason,
                         "confidence": None,
                         "status": "skipped",
+                        "account_id": WHEEL_ACCOUNT_ID,
                         "strategy_type": "wheel_csp",
                         "iv_rank": context.get("iv_rank"),
                     })
@@ -530,6 +603,7 @@ def run() -> None:
                     "reasoning": decision.get("reasoning", ""),
                     "confidence": decision.get("confidence"),
                     "status": "skipped",
+                    "account_id": WHEEL_ACCOUNT_ID,
                     "strategy_type": "wheel_csp" if state.value == "IDLE" else "wheel_cc",
                     "iv_rank": context.get("iv_rank"),
                     "iv_environment": context.get("iv_environment"),
@@ -603,6 +677,7 @@ def run() -> None:
                     "rejection_reason": rejection,
                     "skip_reason": rejection,  # kept for backward compat
                     "skip_code": _G.classify_rejection(rejection),
+                    "account_id": WHEEL_ACCOUNT_ID,
                     "strategy_type": "wheel_csp" if state.value == "IDLE" else "wheel_cc",
                     "iv_rank": context.get("iv_rank"),
                     "iv_environment": context.get("iv_environment"),
@@ -672,6 +747,7 @@ def run() -> None:
                         "wheel_state": state.value, "action": "skip",
                         "reasoning": cb_skip_reason, "status": "skipped",
                         "skip_reason": cb_skip_reason,
+                        "account_id": WHEEL_ACCOUNT_ID,
                         "strategy_type": "wheel_csp" if state.value == "IDLE" else "wheel_cc",
                         "confidence": decision.get("confidence"),
                     })
@@ -740,6 +816,7 @@ def run() -> None:
                 )
 
             journal.append({
+                "account_id": WHEEL_ACCOUNT_ID,
                 "symbol": decision.get("symbol"), "underlying": symbol,
                 "wheel_state": state.value, "action": decision.get("action"),
                 "contract_symbol": decision.get("symbol"), "qty": decision.get("qty"),
@@ -777,7 +854,9 @@ def run() -> None:
                 _tw_pcv = "OPEN" if tw_state.value == "IDLE" else "MANAGE"
                 logger.info("%s turnover wheel state: %s", symbol, tw_state.value)
 
-                context = ctx_builder.build(symbol, tw_state.value, strategy_name="turnover_wheel")
+                context = turnover_wheel_ctx_builder.build(
+                    symbol, tw_state.value, strategy_name="turnover_wheel",
+                )
                 logger.info(ContextBuilder.summarize_for_log(context))
 
                 try:
@@ -801,7 +880,8 @@ def run() -> None:
                         "reasoning": _tw_liq_skip.get("reasoning", ""),
                         "confidence": None,
                         "status": "skipped",
-                        "strategy_type": "turnover_wheel_csp" if tw_state.value == "IDLE" else "turnover_wheel_cc",
+                        "account_id": TURNOVER_WHEEL_ACCOUNT_ID,
+                    "strategy_type": "turnover_wheel_csp" if tw_state.value == "IDLE" else "turnover_wheel_cc",
                         "iv_rank": context.get("iv_rank"),
                     })
                     if recorder is not None:
@@ -841,6 +921,7 @@ def run() -> None:
                             "reasoning": _ac_reason,
                             "confidence": None,
                             "status": "skipped",
+                            "account_id": TURNOVER_WHEEL_ACCOUNT_ID,
                             "strategy_type": "turnover_wheel_csp",
                             "iv_rank": context.get("iv_rank"),
                         })
@@ -882,6 +963,7 @@ def run() -> None:
                             "reasoning": _su_reason_tw,
                             "confidence": None,
                             "status": "skipped",
+                            "account_id": TURNOVER_WHEEL_ACCOUNT_ID,
                             "strategy_type": "turnover_wheel_csp",
                             "iv_rank": context.get("iv_rank"),
                         })
@@ -934,7 +1016,8 @@ def run() -> None:
                         "reasoning": decision.get("reasoning", ""),
                         "confidence": decision.get("confidence"),
                         "status": "skipped",
-                        "strategy_type": "turnover_wheel_csp" if tw_state.value == "IDLE" else "turnover_wheel_cc",
+                        "account_id": TURNOVER_WHEEL_ACCOUNT_ID,
+                    "strategy_type": "turnover_wheel_csp" if tw_state.value == "IDLE" else "turnover_wheel_cc",
                         "iv_rank": context.get("iv_rank"),
                         "iv_environment": context.get("iv_environment"),
                         "vix": (context.get("macro") or {}).get("vix"),
@@ -1005,7 +1088,8 @@ def run() -> None:
                         "rejection_reason": rejection,
                         "skip_reason": rejection,
                         "skip_code": _G.classify_rejection(rejection),
-                        "strategy_type": "turnover_wheel_csp" if tw_state.value == "IDLE" else "turnover_wheel_cc",
+                        "account_id": TURNOVER_WHEEL_ACCOUNT_ID,
+                    "strategy_type": "turnover_wheel_csp" if tw_state.value == "IDLE" else "turnover_wheel_cc",
                         "iv_rank": context.get("iv_rank"),
                         "iv_environment": context.get("iv_environment"),
                         "vix": (context.get("macro") or {}).get("vix"),
@@ -1071,6 +1155,7 @@ def run() -> None:
                             "wheel_state": tw_state.value, "action": "skip",
                             "reasoning": cb_skip_reason, "status": "skipped",
                             "skip_reason": cb_skip_reason,
+                            "account_id": TURNOVER_WHEEL_ACCOUNT_ID,
                             "strategy_type": "turnover_wheel_csp" if tw_state.value == "IDLE" else "turnover_wheel_cc",
                             "confidence": decision.get("confidence"),
                         })
@@ -1143,6 +1228,7 @@ def run() -> None:
                     "reasoning": decision.get("reasoning"), "order_id": order_id,
                     "status": "submitted" if result else decision.get("action"),
                     "fill_status": "pending" if result else None,
+                    "account_id": TURNOVER_WHEEL_ACCOUNT_ID,
                     "strategy_type": "turnover_wheel_csp" if tw_state.value == "IDLE" else "turnover_wheel_cc",
                     "iv_rank": context.get("iv_rank"),
                     "iv_environment": context.get("iv_environment"),
@@ -1164,11 +1250,14 @@ def run() -> None:
         turnover_wheel_strategy.save_state()
 
     # ── Spread strategies (router-driven) ───────────────────
-    # Build context once for routing (use first watchlist symbol)
+    # Build context once for routing (use first watchlist symbol). The
+    # router only needs market-wide signals (regime, IV environment); the
+    # account-specific fields in this shared_context are not used for
+    # routing decisions, so picking spreads_ctx_builder (paper_1) is fine.
     shared_context = None
     if settings.WATCHLIST:
         try:
-            shared_context = ctx_builder.build(settings.WATCHLIST[0], "IDLE")
+            shared_context = spreads_ctx_builder.build(settings.WATCHLIST[0], "IDLE")
         except Exception:
             logger.exception("Failed to build shared context for spread routing")
 
@@ -1212,7 +1301,9 @@ def run() -> None:
                             settings.WATCHLIST[0] if settings.WATCHLIST else ""
                         )
                     try:
-                        spread_ctx = ctx_builder.build(mgmt_underlying, "IDLE")
+                        spread_ctx = spread_ctx_builders[strategy_name].build(
+                            mgmt_underlying, "IDLE",
+                        )
                     except Exception:
                         logger.exception(
                             "Failed to build context for %s management (%s)",
@@ -1276,7 +1367,9 @@ def run() -> None:
                     _deep_rejections: dict[str, int] = {}
                     for sym in _screen_survivors:
                         try:
-                            candidate_ctx = ctx_builder.build(sym, "IDLE")
+                            candidate_ctx = spread_ctx_builders[strategy_name].build(
+                                sym, "IDLE",
+                            )
                         except Exception:
                             logger.warning(
                                 "Failed to build context for %s/%s — skipping",
@@ -1462,6 +1555,7 @@ def run() -> None:
                 # in skip_history and the journal aggregates are accurate.
                 if action == "SKIP":
                     journal.append({
+                        "account_id": SPREAD_ACCOUNT_IDS[strategy_name],
                         "symbol": None,
                         "underlying": spread_underlying,
                         "action": "skip",
@@ -1500,6 +1594,7 @@ def run() -> None:
                             spread_ctx, account, tracker, settings, report_lines,
                             journal=journal,
                             cb_status=cb_status.status,
+                            account_id=SPREAD_ACCOUNT_IDS[strategy_name],
                         )
                         # Re-poll order status immediately so a same-cycle fast
                         # fill flips PENDING_OPEN → OPEN before the next loop.
@@ -1606,6 +1701,7 @@ def _handle_spread_open(
     name, strat, decision, guardrails, context, account, tracker, settings, report_lines,
     journal=None,
     cb_status: str | None = None,
+    account_id: str | None = None,
 ):
     """Validate and execute a spread OPEN decision."""
     validator_name = _GUARDRAIL_MAP.get(name)
@@ -1635,6 +1731,7 @@ def _handle_spread_open(
             from strategies.guardrails import Guardrails as _G
             underlying = decision.get("underlying", "")
             journal.append({
+                "account_id": account_id,
                 "underlying": underlying,
                 "action": "skip", "status": "rejected",
                 "action_proposed": decision.get("action"),

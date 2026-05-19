@@ -150,21 +150,41 @@ class ContextBuilder:
         journal: TradeJournal | None = None,
         account_id: str | None = None,
     ):
+        # IMPORTANT: in a multi-account process, do NOT share one ContextBuilder
+        # across strategies — broker is held on the instance and is account-bound,
+        # so a shared builder leaks the wrong account's account/positions/orders
+        # into every strategy's context. Each strategy must construct its own
+        # ContextBuilder with the executing strategy's broker and account_id.
         self.broker = broker
         self.data_client = data_client
         self.journal = journal or TradeJournal()
         self._regime_filter = RegimeStabilityFilter()
-        # account_id scopes portfolio_exposure to this account's snapshot file.
-        # Pass e.g. "wheel" or "spreads" from the job; None = main portfolio.json.
+        # account_id scopes the journal-derived fields (recent_trades,
+        # performance_stats, skip_history, guardrail_rejections) and the
+        # portfolio_exposure snapshot to this account. Pass a paper_N label
+        # matching AccountManager / portfolio_paper_N.json. Build-time
+        # account_id (see build() below) takes precedence over this default.
         self._account_id = account_id
 
-    def build(self, symbol: str, wheel_state: str, strategy_name: str = "wheel") -> dict:
+    def build(
+        self,
+        symbol: str,
+        wheel_state: str,
+        strategy_name: str = "wheel",
+        account_id: str | None = None,
+    ) -> dict:
         """Assemble the full context for Claude's decision-making.
 
         Fetches all data sources in parallel where possible.
         Any individual failure is logged and included as None.
+
+        account_id (optional): scopes journal reads and portfolio_exposure
+        to the executing account. When None, falls back to the value passed
+        at constructor time. When that is also None, journal reads are
+        bot-wide and portfolio_exposure reads the default portfolio.json.
         """
         t0 = time.monotonic()
+        effective_account_id = account_id if account_id is not None else self._account_id
 
         context: dict = {
             "timestamp": datetime.now().isoformat(timespec="seconds"),
@@ -552,15 +572,23 @@ class ContextBuilder:
         )
 
         # ── Trade journal ───────────────────────────────────
+        # All four journal reads scope to effective_account_id so that
+        # Standard Wheel (paper_2) and Turnover Wheel (paper_6) do not see
+        # each other's recent_trades / skips / rejections / stats, even
+        # though they share one bot-wide journal file.
         try:
-            journal_text = self.journal.format_for_prompt(symbol)
+            journal_text = self.journal.format_for_prompt(
+                symbol, account_id=effective_account_id,
+            )
             context["recent_trades"] = journal_text or None
         except Exception:
             logger.warning("Failed to fetch trade journal for %s", symbol, exc_info=True)
 
         # Performance stats for Claude's self-awareness
         try:
-            stats_str = self.journal.format_stats_for_prompt(symbol, days=30)
+            stats_str = self.journal.format_stats_for_prompt(
+                symbol, days=30, account_id=effective_account_id,
+            )
             context["performance_stats"] = stats_str if stats_str else None
         except Exception:
             logger.warning("Failed to build performance stats for %s", symbol, exc_info=True)
@@ -568,7 +596,9 @@ class ContextBuilder:
 
         # Skip history for Claude's pattern awareness
         try:
-            skip_history = self.journal.format_skip_history_for_prompt(symbol, days=30)
+            skip_history = self.journal.format_skip_history_for_prompt(
+                symbol, days=30, account_id=effective_account_id,
+            )
             context["skip_history"] = skip_history if skip_history else None
         except Exception:
             logger.warning("Failed to build skip history for %s", symbol, exc_info=True)
@@ -578,16 +608,19 @@ class ContextBuilder:
         # was blocked so Claude can notice when its mental model diverges from
         # the enforced rules and re-read criteria.
         try:
-            rejections = self.journal.format_rejections_for_prompt(symbol, days=30)
+            rejections = self.journal.format_rejections_for_prompt(
+                symbol, days=30, account_id=effective_account_id,
+            )
             context["guardrail_rejections"] = rejections if rejections else None
         except Exception:
             logger.warning("Failed to build rejections for %s", symbol, exc_info=True)
             context["guardrail_rejections"] = None
 
         # Portfolio-level Greek exposure (from most recent portfolio_refresh snapshot)
-        # account_id scopes to this account; None falls back to main portfolio.json.
+        # account_id scopes to this account's portfolio_paper_N.json;
+        # None falls back to main portfolio.json.
         try:
-            context["portfolio_exposure"] = compute_portfolio_greeks(self._account_id)
+            context["portfolio_exposure"] = compute_portfolio_greeks(effective_account_id)
         except Exception:
             logger.warning("Failed to compute portfolio Greeks", exc_info=True)
             context["portfolio_exposure"] = None
