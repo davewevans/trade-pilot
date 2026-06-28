@@ -822,6 +822,33 @@ SCHEDULE: list[dict] = [
             "are logged and never crash the scheduler."
         ),
     },
+    {
+        "job": "publish_exposure",
+        "type": "weekday",
+        "time": "10:15",
+        "tz": "America/New_York",
+        "label": "Publish exposure snapshot (AM)",
+        "description": (
+            "Builds the consolidated cross-account exposure snapshot (per-account "
+            "positions with sectors + the book-level family view) and commits it to "
+            "the reports repo for Hermes's advisory cross-account risk monitor. Runs "
+            "after the entry cycle settles. Flag-gated on HERMES_PUBLISH_ENABLED; a "
+            "no-op when off. Publishing failures are logged and never crash the scheduler."
+        ),
+    },
+    {
+        "job": "publish_exposure",
+        "type": "weekday",
+        "time": "16:15",
+        "tz": "America/New_York",
+        "label": "Publish exposure snapshot (PM)",
+        "description": (
+            "After-close run of the cross-account exposure snapshot publish. Captures "
+            "end-of-day positions so Hermes's risk monitor reads the settled book. "
+            "Flag-gated on HERMES_PUBLISH_ENABLED; a no-op when off; failures are "
+            "logged and never crash the scheduler."
+        ),
+    },
     # ── Interval job (weekdays only, checked every 5 minutes) ───────────────
     {
         "job": "portfolio_refresh",
