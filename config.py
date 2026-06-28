@@ -314,6 +314,18 @@ class Settings:
         self.JUDGE_MODEL: str = os.getenv("JUDGE_MODEL", "claude-opus-4-7")
         self.JUDGE_RATE_LIMIT_MS: int = int(os.getenv("JUDGE_RATE_LIMIT_MS", "200"))
 
+        # ── Hermes report publishing ───────────────────────────
+        # When true, the publish_reports job commits the daily evaluation
+        # bundle to the private reports repo (GITHUB_REPORTS_REPO) that the
+        # Hermes self-improvement agent reads. Off by default; flipped in
+        # Render after this and the bundle-enrichment change are deployed.
+        # Publishing is data exhaust — failures log and never crash the job.
+        self.HERMES_PUBLISH_ENABLED: bool = (
+            os.getenv("HERMES_PUBLISH_ENABLED", "false").lower() == "true"
+        )
+        self.GITHUB_REPORTS_REPO: str = os.getenv("GITHUB_REPORTS_REPO", "")
+        self.GITHUB_REPORTS_TOKEN: str = os.getenv("GITHUB_REPORTS_TOKEN", "")
+
         # ── Self-review extension ──────────────────────────────
         # Master kill switch for the self-review phase of monthly_evaluation.
         # When false (default), the pipeline runs unchanged — no Opus call,
@@ -794,6 +806,20 @@ SCHEDULE: list[dict] = [
         "label": "Post-market cleanup",
         "description": (
             "Post-market cleanup: snapshot archival, NTA event processing, fill quality logging."
+        ),
+    },
+    {
+        "job": "publish_reports",
+        "type": "weekday",
+        "time": "16:45",
+        "tz": "America/New_York",
+        "label": "Publish daily report",
+        "description": (
+            "Builds today's daily evaluation bundle and commits it to the private "
+            "reports repo that the Hermes self-improvement agent reads. Runs 15 minutes "
+            "after post-market so the day's EOD writes have settled. Flag-gated on "
+            "HERMES_PUBLISH_ENABLED; a no-op when the flag is off. Publishing failures "
+            "are logged and never crash the scheduler."
         ),
     },
     # ── Interval job (weekdays only, checked every 5 minutes) ───────────────
