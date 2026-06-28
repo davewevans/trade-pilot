@@ -169,6 +169,13 @@ def run() -> None:
 
     # ── Shared dependencies ─────────────────────────────────
     # advisor is created after DB init below so it can receive api_usage_repo.
+    # This `guardrails` is the spreads/default-account instance (broker = the
+    # default broker = paper_1 = SPREADS_ACCOUNT_ID) and is used by the spread
+    # router. The wheels get their OWN guardrails (wheel_guardrails /
+    # turnover_wheel_guardrails) constructed alongside their ContextBuilders
+    # below, so the covered-call equity-ownership fallback in
+    # Guardrails._check_sell_call reads the same account each wheel executes
+    # against, not the default broker.
     guardrails = Guardrails(broker=broker)
     journal = TradeJournal(path=settings.JOURNAL_PATH)
     # NOTE: ContextBuilder is constructed per-strategy below (see the
@@ -365,6 +372,17 @@ def run() -> None:
             broker=paper5_broker, journal=journal,
             account_id=CALENDAR_SPREAD_ACCOUNT_ID,
         )
+
+    # ── Per-wheel Guardrails ────────────────────────────────────────────────
+    # Each wheel needs its own Guardrails holding the SAME broker it executes
+    # against, because Guardrails._check_sell_call (covered-call entry) falls
+    # back to broker.get_equity_positions() to verify share ownership when the
+    # passed positions list is options-only. Sharing the default-broker
+    # `guardrails` would validate share ownership against paper_1 while the
+    # wheel executes on paper_2 (or paper_6 for turnover). Explicit per-wheel
+    # construction (no factory) so the broker→account wiring stays greppable.
+    wheel_guardrails = Guardrails(broker=wheel_broker)
+    turnover_wheel_guardrails = Guardrails(broker=turnover_wheel_broker)
 
     # Reconcile any PENDING_OPEN / PENDING_CLOSE spreads from a previous
     # session before we make new decisions. Without this, management logic
@@ -637,9 +655,9 @@ def run() -> None:
                 )
                 continue
 
-            acct = context.get("account") or broker.get_account()
+            acct = context.get("account") or wheel_broker.get_account()
             pos = context.get("positions") or []
-            is_valid, rejection = guardrails.validate(decision, acct, pos, context)
+            is_valid, rejection = wheel_guardrails.validate(decision, acct, pos, context)
 
             if not is_valid:
                 logger.warning("%s GUARDRAIL REJECTED: %s", symbol, rejection)
@@ -775,7 +793,11 @@ def run() -> None:
                     report_lines.append(f"**{symbol}** -- SKIPPED ({cb_skip_reason})")
                     continue
 
-            result = execute_decision(broker, decision)
+            # Execute through wheel_broker (paper_2) — the SAME broker used to
+            # build wheel_ctx_builder. Using the default `broker` (paper_1) here
+            # routed Standard Wheel orders into the spreads account while Claude
+            # evaluated against paper_2.
+            result = execute_decision(wheel_broker, decision)
             order_id = result.get("id") if result else None
             if result:
                 logger.info("%s order executed: %s", symbol, order_id)
@@ -1052,7 +1074,7 @@ def run() -> None:
 
                 acct = context.get("account") or turnover_wheel_broker.get_account()
                 pos = context.get("positions") or []
-                is_valid, rejection = guardrails.validate(decision, acct, pos, context)
+                is_valid, rejection = turnover_wheel_guardrails.validate(decision, acct, pos, context)
 
                 if not is_valid:
                     logger.warning("%s [TW] GUARDRAIL REJECTED: %s", symbol, rejection)

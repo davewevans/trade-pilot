@@ -18,11 +18,13 @@ Scope:
 
 Architecture note (wheel routing):
   In market_open.run(), wheel ORDERS are placed via
-  execute_decision(default_broker, decision) — the DEFAULT broker (Paper 1),
-  not wheel_broker (Paper 2). The wheel_broker is used exclusively by
-  WheelStrategy for position/account reads. Test A covers execute_decision
-  routing; the credential-isolation guarantee for the wheel account is covered
-  by Test D.
+  execute_decision(wheel_broker, decision) — the wheel's own broker (Paper 2),
+  the SAME broker used to build wheel_ctx_builder, so evaluation and execution
+  hit the same account. (Before the 2026-06-28 fix this used the default broker
+  / Paper 1, misrouting wheel orders into the spreads account.) Test A covers
+  generic execute_decision routing; the wheel-specific evaluation==execution
+  guarantee is enforced in tests/test_wheel_execute_account_routing.py, and the
+  credential-isolation guarantee for the wheel account by Test D below.
 """
 
 import json
