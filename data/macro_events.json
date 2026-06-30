@@ -1,6 +1,6 @@
 {
   "_comment": "Populated manually by operator. FOMC dates from fed published schedule (8/year). CPI dates from BLS schedule (monthly). NFP is generated programmatically — do not add NFP here.",
-  "_last_updated": "2026-04-19",
+  "_last_updated": "2026-06-30",
   "events": [
     {"type": "FOMC", "date": "2026-04-29", "time_et": "14:00", "description": "FOMC rate decision"},
     {"type": "FOMC", "date": "2026-06-17", "time_et": "14:00", "description": "FOMC rate decision (SEP)"},
@@ -16,6 +16,7 @@
     {"type": "FOMC", "date": "2027-09-15", "time_et": "14:00", "description": "FOMC rate decision (SEP)"},
     {"type": "FOMC", "date": "2027-10-27", "time_et": "14:00", "description": "FOMC rate decision"},
     {"type": "FOMC", "date": "2027-12-08", "time_et": "14:00", "description": "FOMC rate decision (SEP)"},
+    {"type": "FOMC", "date": "2028-01-26", "time_et": "14:00", "description": "FOMC rate decision"},
     {"type": "CPI", "date": "2026-05-12", "time_et": "08:30", "description": "April 2026 CPI release"},
     {"type": "CPI", "date": "2026-06-10", "time_et": "08:30", "description": "May 2026 CPI release"},
     {"type": "CPI", "date": "2026-07-14", "time_et": "08:30", "description": "June 2026 CPI release"},
