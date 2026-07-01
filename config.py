@@ -319,6 +319,10 @@ class Settings:
         # so the model can be changed without a code deploy (Render env var).
         self.ADVISOR_MODEL: str = os.getenv("ADVISOR_MODEL", "claude-sonnet-5")
 
+        # Data source for the /api/claude-costs panel. token_usage is the populated
+        # table; "decisions" is the legacy (empty) source, kept as a fallback.
+        self.CLAUDE_COSTS_SOURCE: str = os.getenv("CLAUDE_COSTS_SOURCE", "token_usage")
+
         # ── Hermes report publishing ───────────────────────────
         # When true, the publish_reports job commits the daily evaluation
         # bundle to the private reports repo (GITHUB_REPORTS_REPO) that the
