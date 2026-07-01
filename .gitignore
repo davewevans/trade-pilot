@@ -15,10 +15,15 @@ data/*.db-shm
 data/*.db-wal
 
 # local DB snapshots pulled from Render for debugging (repo root)
-tp_snap.db
+tp_snap*.db
+tp_snap*.db-shm
+tp_snap*.db-wal
 *.db-snap
-tp_snap.db-shm
-tp_snap.db-wal
+
+# weekly-eval inputs (dated DB snapshots + exported Hermes issues) — local only.
+# Keep the folder (.gitkeep) but never commit its contents.
+eval-inbox/*
+!eval-inbox/.gitkeep
 
 # frontend build artifacts (Vite outputs into api/static/)
 node_modules/
