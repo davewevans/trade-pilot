@@ -36,6 +36,17 @@ $LocalSnap = Join-Path $Inbox $SnapName
 
 New-Item -ItemType Directory -Force -Path $Inbox | Out-Null
 
+# Load the personal-account PAT from .env so gh uses it regardless of the global gh
+# login (which stays on the business account). Scoped to THIS process only. Empty/
+# missing token -> falls back to whatever gh is globally logged into.
+$envFile = Join-Path $Repo '.env'
+if (Test-Path $envFile) {
+    $line = Get-Content $envFile |
+        Where-Object { $_ -match '^\s*GITHUB_TRADEPILOT_TOKEN\s*=\s*\S' } |
+        Select-Object -First 1
+    if ($line) { $env:GH_TOKEN = ($line -replace '^\s*GITHUB_TRADEPILOT_TOKEN\s*=\s*', '').Trim() }
+}
+
 # 1) Snapshot on the instance, copy down, clean up the remote temp file.
 #    Native ssh/scp failures do NOT throw in PowerShell, so check $LASTEXITCODE.
 #    Render SSH cold-connects can time out, so retry. Delete any stale same-day
