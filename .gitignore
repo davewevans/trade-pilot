@@ -455,3 +455,6 @@ data/trade_pilot.db-wal
 
 # Runtime telemetry
 data/heartbeat.json
+
+# Tickets
+tickets/
