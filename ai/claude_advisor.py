@@ -391,7 +391,7 @@ class ClaudeAdvisor:
             _t0 = time.monotonic()
             create_kwargs: dict = dict(
                 model=self.model,
-                max_tokens=16000 if thinking else 2048,
+                max_tokens=16000 if thinking else settings.ADVISOR_MAX_TOKENS,
                 system=[
                     {
                         "type": "text",
@@ -486,7 +486,7 @@ class ClaudeAdvisor:
             _t0 = time.monotonic()
             create_kwargs: dict = dict(
                 model=self.model,
-                max_tokens=16000 if thinking else 2048,
+                max_tokens=16000 if thinking else settings.ADVISOR_MAX_TOKENS,
                 system=[
                     {
                         "type": "text",
@@ -585,7 +585,7 @@ class ClaudeAdvisor:
             _t0 = time.monotonic()
             create_kwargs: dict = dict(
                 model=self.model,
-                max_tokens=16000 if thinking else 2048,
+                max_tokens=16000 if thinking else settings.ADVISOR_MAX_TOKENS,
                 system=[
                     {
                         "type": "text",

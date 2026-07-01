@@ -14,6 +14,12 @@ data/*.db
 data/*.db-shm
 data/*.db-wal
 
+# local DB snapshots pulled from Render for debugging (repo root)
+tp_snap.db
+*.db-snap
+tp_snap.db-shm
+tp_snap.db-wal
+
 # frontend build artifacts (Vite outputs into api/static/)
 node_modules/
 frontend/dist/

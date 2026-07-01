@@ -126,6 +126,29 @@ def test_ask_passes_output_config_with_correct_schema():
     assert result["action"] == "sell_put"
 
 
+def test_ask_passes_advisor_max_tokens_when_thinking_off(monkeypatch):
+    """Non-thinking calls must use the configurable ADVISOR_MAX_TOKENS cap, not a hardcoded 2048."""
+    from ai.claude_advisor import settings as advisor_settings
+    monkeypatch.setattr(advisor_settings, "ADVISOR_MAX_TOKENS", 4096)
+
+    advisor = _make_advisor()
+    assert advisor.thinking_mode == "off"
+    decision = {
+        "action": "sell_put", "symbol": "AAPL250516P00200000",
+        "qty": 1, "order_type": "limit", "limit_price": -1.25,
+        "reasoning": {"macro": "ok", "fundamental": "ok", "technical": "ok",
+                      "volatility": "ok", "selection": "ok", "risk": "ok"},
+        "confidence": "high", "skip_reason": None,
+    }
+    advisor.client.messages.create.return_value = _make_response(decision)
+    advisor._inject_strategy_params = lambda t, s: t
+
+    advisor.ask({}, WheelState.IDLE)
+
+    call_kwargs = advisor.client.messages.create.call_args.kwargs
+    assert call_kwargs["max_tokens"] == 4096
+
+
 def test_ask_returns_safe_skip_on_refusal():
     advisor = _make_advisor()
     advisor.client.messages.create.return_value = _make_response({}, stop_reason="refusal")

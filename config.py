@@ -319,6 +319,11 @@ class Settings:
         # so the model can be changed without a code deploy (Render env var).
         self.ADVISOR_MODEL: str = os.getenv("ADVISOR_MODEL", "claude-sonnet-5")
 
+        # Max output tokens for non-thinking advisor calls. 2048 was tuned for
+        # claude-sonnet-4-6 (max observed 1790); sonnet-5 overruns it and truncates
+        # (stop_reason=max_tokens -> forced SKIP). Env-overridable for tuning without deploy.
+        self.ADVISOR_MAX_TOKENS: int = int(os.getenv("ADVISOR_MAX_TOKENS", "4096"))
+
         # Data source for the /api/claude-costs panel. token_usage is the populated
         # table; "decisions" is the legacy (empty) source, kept as a fallback.
         self.CLAUDE_COSTS_SOURCE: str = os.getenv("CLAUDE_COSTS_SOURCE", "token_usage")
