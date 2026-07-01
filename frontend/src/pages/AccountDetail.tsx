@@ -22,14 +22,6 @@ import { StatCard } from '../components/shared/StatCard'
 import { PortfolioGreeksCard } from './Dashboard'
 import type { CircuitBreaker, EquityHistory, NtaEvent, NtaEventsResponse, Position, Trade } from '../types'
 
-// Maps the URL account slug to the strategy_type tag that
-// StateWriter.write_portfolio_snapshot stamps on each position. Keep in
-// sync with `_tag_strategy_type` in data/state_writer.py.
-const ACCOUNT_TO_POSITION_TAG: Record<string, string> = {
-  wheel: 'wheel',
-  spreads: 'spread',
-  iron_condor: 'iron_condor',
-}
 
 const fmtMoney = (n: number | null | undefined) =>
   n == null ? '—' : `$${n.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
@@ -242,10 +234,11 @@ export function AccountDetail() {
 
   if (loading && !portfolio) return <LoadingSpinner />
 
-  const positionTag = ACCOUNT_TO_POSITION_TAG[account]
-  const positions = (portfolio?.positions ?? []).filter(
-    (p) => p.strategy_type === positionTag,
-  )
+  // Positions are already scoped to this account by the backend
+  // (/api/portfolio?account=paper_N reads portfolio_paper_N.json), so no
+  // client-side strategy_type filter is needed. The old filter dropped every
+  // position for paper_N accounts (unknown slug → undefined tag → no match).
+  const positions = portfolio?.positions ?? []
 
   // Collect unique underlying symbols from positions + recent trades for the IV picker.
   const accountSymbols = Array.from(new Set([
