@@ -314,6 +314,11 @@ class Settings:
         self.JUDGE_MODEL: str = os.getenv("JUDGE_MODEL", "claude-opus-4-7")
         self.JUDGE_RATE_LIMIT_MS: int = int(os.getenv("JUDGE_RATE_LIMIT_MS", "200"))
 
+        # ── Trading advisor model ──────────────────────────────
+        # Model used by ClaudeAdvisor for live trade decisions. Env-overridable
+        # so the model can be changed without a code deploy (Render env var).
+        self.ADVISOR_MODEL: str = os.getenv("ADVISOR_MODEL", "claude-sonnet-5")
+
         # ── Hermes report publishing ───────────────────────────
         # When true, the publish_reports job commits the daily evaluation
         # bundle to the private reports repo (GITHUB_REPORTS_REPO) that the
@@ -962,6 +967,16 @@ CLAUDE_PRICING: dict[str, dict[str, float]] = {
         # 1-hour ephemeral cache write (the TTL used by claude_advisor.py)
         "cache_write_per_mtok": 6.00,
     },
+    # TODO(david): claude-sonnet-5 is now the default ADVISOR_MODEL. Fill in the
+    # verified per-million-token rates below and uncomment. Until this entry
+    # exists, _build_usage_dict logs a warning and stores cost=None (no crash) —
+    # trade decisions run fine on Sonnet 5, but cost tracking stays blank.
+    # "claude-sonnet-5": {
+    #     "input_per_mtok": 0.00,
+    #     "output_per_mtok": 0.00,
+    #     "cache_read_per_mtok": 0.00,
+    #     "cache_write_per_mtok": 0.00,
+    # },
 }
 
 
