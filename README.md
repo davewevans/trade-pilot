@@ -91,7 +91,7 @@ trade-pilot/
 | | |
 |---|---|
 | Language | Python 3.14 |
-| AI | Anthropic Claude (`claude-sonnet-4-6` default) |
+| AI | Anthropic Claude (`claude-sonnet-5` default) |
 | Broker | Alpaca (paper trading, `alpaca-py`) |
 | Scheduler | `schedule` library — ET timezone throughout |
 | API server | FastAPI + Uvicorn |

@@ -372,7 +372,7 @@ const SOURCES: Source[] = [
           string explaining the decision.
         </Section>
         <Section heading="Model">
-          <code className="font-mono text-sm">claude-sonnet-4-6</code> (Anthropic)
+          <code className="font-mono text-sm">claude-sonnet-5</code> (Anthropic)
         </Section>
       </>
     ),

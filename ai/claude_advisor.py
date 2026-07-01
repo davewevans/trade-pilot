@@ -132,7 +132,7 @@ class ClaudeAdvisor:
 
     def __init__(self, api_usage_repo=None, thinking_mode: str | None = None):
         self.client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
-        self.model = "claude-sonnet-4-6"
+        self.model = settings.ADVISOR_MODEL
         self._last_usage: dict | None = None
         self._api_usage_repo = api_usage_repo
 
