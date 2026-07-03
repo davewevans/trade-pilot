@@ -99,6 +99,78 @@ class TestPortfolioSnapshot:
         assert len(data["positions"]) == 1
 
 
+class TestInstrumentTypeAndEquityDelta:
+    """Regression coverage for the blank Type pill / equity delta bug.
+
+    Audit finding: an equity (stock) position row rendered a blank Type pill
+    and "—" for Delta, even though compute_portfolio_greeks correctly
+    aggregated Net Delta for the same shares. write_portfolio_snapshot must
+    emit an "instrument_type" for every row and, for equity rows with no
+    broker-supplied delta, a signed-share-count delta using the SAME sign
+    convention as compute_portfolio_greeks (long -> +qty, short -> -qty).
+    """
+
+    def test_equity_position_gets_stock_type_and_signed_delta(self, writer, snap_dir):
+        writer.write_portfolio_snapshot(
+            account_data={"portfolio_value": 100000, "buying_power": 50000},
+            positions=[
+                {
+                    "symbol": "VZ",
+                    "underlying": "VZ",
+                    "side": "short",
+                    "qty": 100,
+                    "delta": None,
+                    "avg_entry_price": "40.00",
+                    "current_price": "41.00",
+                    "unrealized_pl": "-100.00",
+                },
+            ],
+            wheel_states={},
+        )
+
+        data = json.loads((snap_dir / "portfolio.json").read_text(encoding="utf-8"))
+        row = data["positions"][0]
+        assert row["instrument_type"] == "stock"
+        # Matches compute_portfolio_greeks's sign convention: short -> -qty.
+        assert row["delta"] == -100
+
+    def test_option_leg_keeps_explicit_delta_and_gets_put_call_type(self, writer, snap_dir):
+        writer.write_portfolio_snapshot(
+            account_data={"portfolio_value": 100000, "buying_power": 50000},
+            positions=[
+                {
+                    "symbol": "SPY250502P00540000",
+                    "underlying": "SPY",
+                    "strike_price": "540.00",
+                    "expiration_date": "2025-05-02",
+                    "dte": 21,
+                    "side": "short",
+                    "qty": -1,
+                    "delta": "-0.25",
+                    "theta": "-0.04",
+                },
+                {
+                    "symbol": "AAPL251219C00150000",
+                    "underlying": "AAPL",
+                    "strike_price": "150.00",
+                    "expiration_date": "2025-12-19",
+                    "dte": 30,
+                    "side": "long",
+                    "qty": 1,
+                    "delta": "0.55",
+                },
+            ],
+            wheel_states={},
+        )
+
+        data = json.loads((snap_dir / "portfolio.json").read_text(encoding="utf-8"))
+        put_row, call_row = data["positions"]
+        assert put_row["instrument_type"] == "put"
+        assert put_row["delta"] == -0.25
+        assert call_row["instrument_type"] == "call"
+        assert call_row["delta"] == 0.55
+
+
 # ── write_context_snapshot ──────────────────────────────────
 
 

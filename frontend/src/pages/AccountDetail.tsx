@@ -75,13 +75,26 @@ function WheelPipeline({ states }: { states: Record<string, string> }) {
   )
 }
 
+// instrument_type is additive/optional: older snapshots (written before this
+// field existed) won't have it. Fall back to the strategy_type badge that
+// rendered here previously so old snapshots still display sensibly.
+const INSTRUMENT_TYPE_LABELS: Record<string, string> = {
+  stock: 'Stock',
+  call: 'Call',
+  put: 'Put',
+}
+
 function PositionRow({ p }: { p: Position }) {
   const pl = Number(p.unrealized_pnl ?? 0)
   const upl = p.unrealized_pnl
+  const isStock = p.instrument_type === 'stock'
+  const typeLabel = p.instrument_type
+    ? (INSTRUMENT_TYPE_LABELS[p.instrument_type] ?? p.instrument_type)
+    : p.strategy_type
   return (
     <tr>
       <td className="font-mono text-xs">{p.symbol}</td>
-      <td><Badge variant="neutral">{p.strategy_type}</Badge></td>
+      <td><Badge variant="neutral">{typeLabel}</Badge></td>
       <td className="font-mono tabular">{p.strike ?? '—'}</td>
       <td className="font-mono text-xs">{p.expiration ?? '—'}</td>
       <td className="font-mono tabular">{p.dte ?? '—'}</td>
@@ -97,7 +110,7 @@ function PositionRow({ p }: { p: Position }) {
         {p.delta != null ? p.delta.toFixed(2) : '—'}
       </td>
       <td className="font-mono tabular text-xs">
-        {p.theta != null ? p.theta.toFixed(2) : '—'}
+        {isStock ? (0).toFixed(2) : p.theta != null ? p.theta.toFixed(2) : '—'}
       </td>
       <td className="font-mono tabular text-xs">
         {p.dte != null ? p.dte : '—'}
