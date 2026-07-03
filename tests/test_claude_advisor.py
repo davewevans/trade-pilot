@@ -445,3 +445,56 @@ def test_log_schema_failure_never_raises_on_disk_error(tmp_path):
 def test_schema_invalid_in_skip_code_all():
     from strategies.skip_codes import SkipCode
     assert SkipCode.SCHEMA_INVALID in SkipCode.ALL
+
+
+# ── _build_user_content tests (CACHE_INSTRUCTIONS_BLOCK) ──────────────────────
+
+def test_build_user_content_flag_off_matches_old_inline_string(monkeypatch):
+    """With the flag off, _build_user_content must be byte-identical to the
+    old inline single-string construction."""
+    from ai.claude_advisor import settings as advisor_settings
+    monkeypatch.setattr(advisor_settings, "CACHE_INSTRUCTIONS_BLOCK", False)
+
+    advisor = _make_advisor()
+    instructions = "do the thing"
+    context_json = '{"foo": "bar"}'
+
+    result = advisor._build_user_content(instructions, context_json)
+
+    expected = (
+        f"<instructions>\n{instructions}\n</instructions>\n\n"
+        f"<market_context>\n{context_json}\n</market_context>\n\n"
+        f"Make your trading decision now."
+    )
+    assert result == expected
+    assert isinstance(result, str)
+
+
+def test_build_user_content_flag_on_returns_cached_prefix_block(monkeypatch):
+    """With the flag on, instructions become a separate cached content block."""
+    from ai.claude_advisor import settings as advisor_settings
+    monkeypatch.setattr(advisor_settings, "CACHE_INSTRUCTIONS_BLOCK", True)
+
+    advisor = _make_advisor()
+    instructions = "do the thing"
+    context_json = '{"foo": "bar"}'
+
+    result = advisor._build_user_content(instructions, context_json)
+
+    assert isinstance(result, list)
+    assert len(result) == 2
+    assert result[0]["cache_control"] == {"type": "ephemeral"}
+    assert "cache_control" not in result[1]
+    assert instructions in result[0]["text"]
+    assert context_json in result[1]["text"]
+
+
+# ── config.get_pricing("claude-sonnet-5") ─────────────────────────────────────
+
+def test_get_pricing_claude_sonnet_5_has_expected_keys():
+    import config
+    pricing = config.get_pricing("claude-sonnet-5")
+    assert set(pricing.keys()) == {
+        "input_per_mtok", "output_per_mtok",
+        "cache_read_per_mtok", "cache_write_per_mtok",
+    }

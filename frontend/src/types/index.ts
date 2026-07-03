@@ -8,6 +8,8 @@ export interface Position {
   symbol: string
   underlying: string
   strategy_type: string
+  // Additive/optional: absent on snapshots written before this field existed.
+  instrument_type?: 'stock' | 'call' | 'put' | string | null
   strike: number
   expiration: string
   dte: number
@@ -46,6 +48,9 @@ export interface Portfolio {
   positions: Position[]
   wheel_states: Record<string, string>
   timestamp: string
+  // When the option snapshot enrichment (delta/theta/vega/gamma) last ran.
+  // null if the snapshot was written without enrichment.
+  greeks_fetched_at?: string | null
 }
 
 export interface DecisionReasoning {

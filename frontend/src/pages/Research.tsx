@@ -19,6 +19,41 @@ interface LiqScore {
   composite_score: number | null
 }
 
+// ── Last sweep status badge ──────────────────────────────────────────────────
+
+function LastSweepBadge({ lastRun }: { lastRun: ResearchLastRunResponse }) {
+  const { status, last_run_at, detail } = lastRun
+
+  if (status === 'aborted') {
+    return (
+      <span
+        className="text-xs px-2 py-0.5 rounded"
+        style={{ backgroundColor: 'var(--red)', color: 'white' }}
+        title={detail ?? undefined}
+      >
+        Last sweep: aborted — ORATS budget
+      </span>
+    )
+  }
+
+  if (status === 'ok' && last_run_at) {
+    const diffMs = Date.now() - new Date(last_run_at).getTime()
+    const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24))
+    const when = diffDays <= 0 ? 'today' : `${diffDays}d ago`
+    return (
+      <span className="text-xs" style={{ color: 'var(--text-muted)' }} title={last_run_at}>
+        Last sweep: {when}
+      </span>
+    )
+  }
+
+  return (
+    <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
+      Last sweep run: never
+    </span>
+  )
+}
+
 // ── Tab config ────────────────────────────────────────────────────────────────
 
 type Tab = 'liquidity' | 'winrate' | 'combined' | 'scorecard'
@@ -138,6 +173,7 @@ export function Research() {
         </div>
         {lastRun && (
           <div className="flex gap-4 text-xs shrink-0">
+            <LastSweepBadge lastRun={lastRun} />
             <StalenessBadge last_updated={lastRun.most_recent_scores} label="scan" />
           </div>
         )}

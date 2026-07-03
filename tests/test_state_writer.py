@@ -70,7 +70,11 @@ class TestPortfolioSnapshot:
         assert "timestamp" in data
         assert data["account"]["total_equity"] == 125000.0
         assert data["account"]["buying_power"] == 50000.0
-        assert data["account"]["buying_power_used_pct"] == 60.0
+        # Deployment is now capital-at-work / equity, not 1 - bp/equity.
+        # This position has no market_value, so it falls back to
+        # abs(current_price * qty) = abs(2.10 * -1) = 2.10, which rounds
+        # to ~0% of the $125k equity.
+        assert data["account"]["buying_power_used_pct"] == 0.0
         assert len(data["positions"]) == 1
         assert data["positions"][0]["strike"] == 540.0
         assert data["positions"][0]["delta"] == -0.25
@@ -78,6 +82,30 @@ class TestPortfolioSnapshot:
         assert "today_pnl" in data["account"]
         assert "today_pnl_pct" in data["account"]
         assert "last_equity" in data["account"]
+
+    def test_margin_account_deployment_is_non_negative(self, writer, snap_dir):
+        """Regression: on a margin account, buying power (~4x) can exceed
+        equity. The old `(1 - buying_power/equity)*100` formula produced a
+        nonsensical negative percentage (e.g. -295%) in that case. The new
+        formula is capital-at-work (position market_value) over equity.
+        """
+        writer.write_portfolio_snapshot(
+            account_data={
+                "portfolio_value": 100000,
+                "buying_power": 400000,
+            },
+            positions=[
+                {
+                    "symbol": "SPY250502P00540000",
+                    "underlying": "SPY",
+                    "market_value": 25000,
+                    "qty": -1,
+                },
+            ],
+            wheel_states={},
+        )
+        data = json.loads((snap_dir / "portfolio.json").read_text(encoding="utf-8"))
+        assert data["account"]["buying_power_used_pct"] == 25.0
 
     def test_handles_zero_equity(self, writer, snap_dir):
         writer.write_portfolio_snapshot(
@@ -97,6 +125,78 @@ class TestPortfolioSnapshot:
         data = json.loads((snap_dir / "portfolio.json").read_text(encoding="utf-8"))
         assert data["account"]["total_equity"] == 0
         assert len(data["positions"]) == 1
+
+
+class TestInstrumentTypeAndEquityDelta:
+    """Regression coverage for the blank Type pill / equity delta bug.
+
+    Audit finding: an equity (stock) position row rendered a blank Type pill
+    and "—" for Delta, even though compute_portfolio_greeks correctly
+    aggregated Net Delta for the same shares. write_portfolio_snapshot must
+    emit an "instrument_type" for every row and, for equity rows with no
+    broker-supplied delta, a signed-share-count delta using the SAME sign
+    convention as compute_portfolio_greeks (long -> +qty, short -> -qty).
+    """
+
+    def test_equity_position_gets_stock_type_and_signed_delta(self, writer, snap_dir):
+        writer.write_portfolio_snapshot(
+            account_data={"portfolio_value": 100000, "buying_power": 50000},
+            positions=[
+                {
+                    "symbol": "VZ",
+                    "underlying": "VZ",
+                    "side": "short",
+                    "qty": 100,
+                    "delta": None,
+                    "avg_entry_price": "40.00",
+                    "current_price": "41.00",
+                    "unrealized_pl": "-100.00",
+                },
+            ],
+            wheel_states={},
+        )
+
+        data = json.loads((snap_dir / "portfolio.json").read_text(encoding="utf-8"))
+        row = data["positions"][0]
+        assert row["instrument_type"] == "stock"
+        # Matches compute_portfolio_greeks's sign convention: short -> -qty.
+        assert row["delta"] == -100
+
+    def test_option_leg_keeps_explicit_delta_and_gets_put_call_type(self, writer, snap_dir):
+        writer.write_portfolio_snapshot(
+            account_data={"portfolio_value": 100000, "buying_power": 50000},
+            positions=[
+                {
+                    "symbol": "SPY250502P00540000",
+                    "underlying": "SPY",
+                    "strike_price": "540.00",
+                    "expiration_date": "2025-05-02",
+                    "dte": 21,
+                    "side": "short",
+                    "qty": -1,
+                    "delta": "-0.25",
+                    "theta": "-0.04",
+                },
+                {
+                    "symbol": "AAPL251219C00150000",
+                    "underlying": "AAPL",
+                    "strike_price": "150.00",
+                    "expiration_date": "2025-12-19",
+                    "dte": 30,
+                    "side": "long",
+                    "qty": 1,
+                    "delta": "0.55",
+                },
+            ],
+            wheel_states={},
+        )
+
+        data = json.loads((snap_dir / "portfolio.json").read_text(encoding="utf-8"))
+        put_row, call_row = data["positions"]
+        assert put_row["instrument_type"] == "put"
+        assert put_row["delta"] == -0.25
+        assert call_row["instrument_type"] == "call"
+        assert call_row["delta"] == 0.55
 
 
 # ── write_context_snapshot ──────────────────────────────────

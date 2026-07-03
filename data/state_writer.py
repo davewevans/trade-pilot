@@ -12,6 +12,8 @@ import tempfile
 from datetime import datetime
 from pathlib import Path
 
+from utils.occ import parse_occ
+
 logger = logging.getLogger(__name__)
 
 
@@ -52,6 +54,31 @@ def _tag_strategy_type(
     if root in wheel_symbols:
         return "wheel"
     return "unknown"
+
+
+def _classify_instrument_type(p: dict) -> str:
+    """Classify a position row as ``"call"``, ``"put"``, or ``"stock"``.
+
+    Real broker positions (Alpaca's raw ``Position.model_dump()``) carry no
+    ``strike_price`` / ``expiration_date`` / ``option_type`` fields at all —
+    the OCC-formatted ``symbol`` (e.g. ``"SPY250502P00540000"``) is the only
+    reliable option-vs-equity signal available in production. Hand-built
+    position dicts (tests, scripts) may instead supply an explicit
+    ``option_type`` and/or ``strike_price``/``expiration_date`` alongside
+    the OCC symbol. Check both signals; anything that doesn't look like an
+    option is a stock leg. Never returns an empty string.
+    """
+    option_type = str(p.get("option_type") or "").strip().lower()
+    if option_type in ("call", "c"):
+        return "call"
+    if option_type in ("put", "p"):
+        return "put"
+
+    parsed = parse_occ(p.get("symbol") or "")
+    if parsed is not None:
+        return "call" if parsed["option_type"] == "C" else "put"
+
+    return "stock"
 
 
 def get_snapshot_dir() -> Path:
@@ -125,10 +152,26 @@ class StateWriter:
         try:
             equity = self._safe_float(account_data.get("portfolio_value"), 0)
             buying_power = self._safe_float(account_data.get("buying_power"), 0)
+
+            # "% deployed" should measure capital put to work, not
+            # 1 - buying_power/equity (that formula assumes a cash account;
+            # on a margin account buying power (~4x) exceeds equity and
+            # produces a nonsensical negative percentage, e.g. -295%).
+            # Sum each position's market value (falling back to
+            # current_price * qty when market_value isn't populated) and
+            # divide by equity for a non-negative "% of equity deployed."
+            deployed_capital = 0.0
+            for p in positions:
+                market_value = self._safe_float(p.get("market_value"))
+                if market_value is None:
+                    current_value = self._safe_float(
+                        p.get("current_price", p.get("market_value"))
+                    )
+                    qty = self._safe_float(p.get("qty"), 0.0) or 0.0
+                    market_value = (current_value or 0.0) * qty
+                deployed_capital += abs(market_value)
             bp_used_pct = (
-                round((1 - buying_power / equity) * 100, 2)
-                if equity
-                else 0.0
+                round((deployed_capital / equity) * 100, 2) if equity else 0.0
             )
 
             wheel_set = (
@@ -153,9 +196,29 @@ class StateWriter:
                 side = str(p.get("side") or "long").lower()
                 if side not in ("long", "short"):
                     side = "long"
+
+                # instrument_type: "call" / "put" / "stock" — never blank.
+                # Drives the dashboard's Type pill (see AccountDetail.tsx).
+                instrument_type = _classify_instrument_type(p)
+
+                # Equity legs come back from the broker with delta=None
+                # (Alpaca doesn't compute stock Greeks). Fill in a signed
+                # share-count delta using the SAME convention as
+                # compute_portfolio_greeks (data/context_builder.py): the
+                # row and the Portfolio-Greeks aggregate must never
+                # disagree. Option legs keep whatever delta the broker/ORATS
+                # enrichment already provided.
+                raw_delta = p.get("delta")
+                if instrument_type == "stock" and raw_delta is None:
+                    qty_val = self._safe_float(p.get("qty"), 0.0)
+                    delta = qty_val if side == "long" else -qty_val
+                else:
+                    delta = self._safe_float(raw_delta)
+
                 pos_list.append({
                     "underlying": p.get("underlying", p.get("root_symbol", "")),
                     "strategy_type": strategy_type,
+                    "instrument_type": instrument_type,
                     "symbol": symbol,
                     "strike": self._safe_float(p.get("strike_price")),
                     "expiration": p.get("expiration_date"),
@@ -165,7 +228,7 @@ class StateWriter:
                     "entry_credit": self._safe_float(p.get("avg_entry_price")),
                     "current_value": self._safe_float(p.get("current_price", p.get("market_value"))),
                     "unrealized_pnl": self._safe_float(p.get("unrealized_pl")),
-                    "delta": self._safe_float(p.get("delta")),
+                    "delta": delta,
                     "theta": self._safe_float(p.get("theta")),
                     "vega": self._safe_float(p.get("vega")),
                     "gamma": self._safe_float(p.get("gamma")),

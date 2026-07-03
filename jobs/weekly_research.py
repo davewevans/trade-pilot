@@ -16,11 +16,32 @@ import logging
 import os
 import sys
 from datetime import datetime, timezone
-from pathlib import Path
 
 from config import settings
 
 logger = logging.getLogger(__name__)
+
+
+def _write_run_status(status: str, *, reason: str | None = None,
+                       detail: str | None = None, scan_stats: dict | None = None) -> None:
+    """Persist run status to research_last_run.json on every exit path.
+
+    status: "ok" | "aborted" | "error". reason is a short machine tag
+    (e.g. "orats_budget"); detail is the human line already logged.
+    """
+    path = settings.DATA_DIR / "research_last_run.json"
+    payload = {
+        "last_run_at": datetime.now(timezone.utc).isoformat(),
+        "status": status,
+        "abort_reason": reason,
+        "detail": detail,
+    }
+    if scan_stats is not None:
+        payload["last_scan_stats"] = scan_stats
+    try:
+        path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+    except Exception:
+        logger.warning("Could not write research_last_run.json", exc_info=True)
 
 
 def _run_preflight_check(sweep, ledger) -> None:
@@ -56,6 +77,11 @@ def _run_preflight_check(sweep, ledger) -> None:
     )
 
     if warm_estimate > month_remaining:
+        detail = (
+            f"Pre-flight ABORT: warm_estimate={warm_estimate} exceeds "
+            f"month_remaining={month_remaining}. The sweep would exhaust the "
+            "ORATS monthly budget."
+        )
         logger.error(
             "Pre-flight ABORT: warm_estimate=%d exceeds month_remaining=%d. "
             "The sweep would exhaust the ORATS monthly budget.",
@@ -72,14 +98,21 @@ def _run_preflight_check(sweep, ledger) -> None:
             )
         except Exception:
             pass
+        _write_run_status("aborted", reason="orats_budget", detail=detail)
         sys.exit(3)
 
     if warm_estimate > month_remaining * 0.8 and settings.ORATS_ALLOW_BUDGET_HEAVY != 1:
+        detail = (
+            f"Pre-flight ABORT: warm_estimate={warm_estimate} > 80% of "
+            f"month_remaining={month_remaining}. Set ORATS_ALLOW_BUDGET_HEAVY=1 "
+            "to proceed anyway."
+        )
         logger.error(
             "Pre-flight ABORT: warm_estimate=%d > 80%% of month_remaining=%d. "
             "Set ORATS_ALLOW_BUDGET_HEAVY=1 to proceed anyway.",
             warm_estimate, month_remaining,
         )
+        _write_run_status("aborted", reason="orats_budget", detail=detail)
         sys.exit(3)
 
 
@@ -320,13 +353,10 @@ def run() -> None:
         "outcome_summary": outcome_summary,
     }
 
-    summary_path: Path = settings.DATA_DIR / "research_last_run.json"
-    try:
-        summary_path.write_text(
-            json.dumps(summary, indent=2, default=str), encoding="utf-8"
-        )
-        logger.info("Research run summary saved to %s", summary_path)
-    except Exception:
-        logger.warning("Could not write research_last_run.json", exc_info=True)
+    _write_run_status("ok", scan_stats=summary)
+    logger.info(
+        "Research run summary saved to %s",
+        settings.DATA_DIR / "research_last_run.json",
+    )
 
     logger.info("=== WEEKLY RESEARCH JOB COMPLETE ===")

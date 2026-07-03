@@ -165,6 +165,28 @@ class ClaudeAdvisor:
             return None
         return {"type": "adaptive", "display": "omitted"}
 
+    def _build_user_content(self, instructions: str, context_json: str):
+        """Return the user 'content' payload.
+
+        Flag off: preserves the exact current single-string behaviour.
+        Flag on: instructions become a cached prefix block (5m TTL); context stays uncached
+        after the breakpoint. 5m < the 1h system TTL, satisfying the longer-TTL-first rule.
+        """
+        tail = (
+            f"<market_context>\n{context_json}\n</market_context>\n\n"
+            f"Make your trading decision now."
+        )
+        if not settings.CACHE_INSTRUCTIONS_BLOCK:
+            return f"<instructions>\n{instructions}\n</instructions>\n\n{tail}"
+        return [
+            {
+                "type": "text",
+                "text": f"<instructions>\n{instructions}\n</instructions>",
+                "cache_control": {"type": "ephemeral"},   # 5-minute; refreshes free within a burst
+            },
+            {"type": "text", "text": tail},
+        ]
+
     def _build_usage_dict(self, usage) -> dict | None:
         """Build the structured usage dict stored in self._last_usage.
 
@@ -375,11 +397,6 @@ class ClaudeAdvisor:
         phase_str = phase.value if hasattr(phase, "value") else str(phase)
         prompt_text = self._inject_strategy_params(self.phase_prompts[phase], "wheel")
         context_json = json.dumps(context, indent=2, default=str)
-        user_content = (
-            f"<instructions>\n{prompt_text}\n</instructions>\n\n"
-            f"<market_context>\n{context_json}\n</market_context>\n\n"
-            f"Make your trading decision now."
-        )
 
         logger.info("Asking Claude for advice (state=%s)", phase_str)
 
@@ -399,7 +416,7 @@ class ClaudeAdvisor:
                         "cache_control": {"type": "ephemeral", "ttl": "1h"},
                     }
                 ],
-                messages=[{"role": "user", "content": user_content}],
+                messages=[{"role": "user", "content": self._build_user_content(prompt_text, context_json)}],
                 output_config=output_config,
             )
             if thinking is not None:
@@ -470,11 +487,6 @@ class ClaudeAdvisor:
             self.turnover_wheel_phase_prompts[phase], "turnover_wheel"
         )
         context_json = json.dumps(context, indent=2, default=str)
-        user_content = (
-            f"<instructions>\n{prompt_text}\n</instructions>\n\n"
-            f"<market_context>\n{context_json}\n</market_context>\n\n"
-            f"Make your trading decision now."
-        )
 
         logger.info("Asking Claude for turnover wheel advice (state=%s)", phase_str)
 
@@ -494,7 +506,7 @@ class ClaudeAdvisor:
                         "cache_control": {"type": "ephemeral", "ttl": "1h"},
                     }
                 ],
-                messages=[{"role": "user", "content": user_content}],
+                messages=[{"role": "user", "content": self._build_user_content(prompt_text, context_json)}],
                 output_config=output_config,
             )
             if thinking is not None:
@@ -570,11 +582,6 @@ class ClaudeAdvisor:
 
         prompt = self._inject_strategy_params(prompt, strategy_type)
         context_json = json.dumps(context, indent=2, default=str)
-        user_content = (
-            f"<instructions>\n{prompt}\n</instructions>\n\n"
-            f"<market_context>\n{context_json}\n</market_context>\n\n"
-            f"Make your trading decision now."
-        )
 
         logger.info(
             "Asking Claude for spread advice (strategy=%s phase=%s)",
@@ -593,7 +600,7 @@ class ClaudeAdvisor:
                         "cache_control": {"type": "ephemeral", "ttl": "1h"},
                     }
                 ],
-                messages=[{"role": "user", "content": user_content}],
+                messages=[{"role": "user", "content": self._build_user_content(prompt, context_json)}],
                 output_config=output_config,
             )
             if thinking is not None:

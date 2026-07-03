@@ -86,6 +86,12 @@ class Settings:
         # Do NOT enable in production until the A/B harness (Story 3) shows
         # clear decision improvement — thinking tokens are billed at output rates.
         self.THINKING_MODE: str = os.getenv("THINKING_MODE", "off")
+        # When True, the per-phase instructions block is sent as a separate
+        # cached content block (5m ephemeral TTL) ahead of the (uncached)
+        # market-context block, instead of one inline string. Default off —
+        # no behavioral change until explicitly enabled. See ai/claude_advisor.py
+        # ClaudeAdvisor._build_user_content.
+        self.CACHE_INSTRUCTIONS_BLOCK: bool = os.getenv("CACHE_INSTRUCTIONS_BLOCK", "false").lower() == "true"
 
         self.FRED_API_KEY: str = self._require("FRED_API_KEY")
         self.USE_FRED_FOR_VIX: bool = _env_bool("USE_FRED_FOR_VIX")
@@ -976,16 +982,15 @@ CLAUDE_PRICING: dict[str, dict[str, float]] = {
         # 1-hour ephemeral cache write (the TTL used by claude_advisor.py)
         "cache_write_per_mtok": 6.00,
     },
-    # TODO(david): claude-sonnet-5 is now the default ADVISOR_MODEL. Fill in the
-    # verified per-million-token rates below and uncomment. Until this entry
-    # exists, _build_usage_dict logs a warning and stores cost=None (no crash) —
-    # trade decisions run fine on Sonnet 5, but cost tracking stays blank.
-    # "claude-sonnet-5": {
-    #     "input_per_mtok": 0.00,
-    #     "output_per_mtok": 0.00,
-    #     "cache_read_per_mtok": 0.00,
-    #     "cache_write_per_mtok": 0.00,
-    # },
+    "claude-sonnet-5": {
+        # Introductory pricing through 2026-08-31. Standard pricing from 2026-09-01 is
+        # input 3.00 / output 15.00 / cache_read 0.30 / cache_write(1h) 6.00 — update this
+        # entry on/after that date. Source: Anthropic prompt-caching pricing table.
+        "input_per_mtok": 2.00,
+        "output_per_mtok": 10.00,
+        "cache_read_per_mtok": 0.20,
+        "cache_write_per_mtok": 4.00,   # 1-hour ephemeral write = 2x base input
+    },
 }
 
 

@@ -18,6 +18,7 @@ import { Badge } from '../components/shared/Badge'
 import { EmptyState } from '../components/shared/EmptyState'
 import { IVHistoryChart } from '../components/shared/IVHistoryChart'
 import { LoadingSpinner } from '../components/shared/LoadingSpinner'
+import { StalenessBadge } from '../components/shared/StalenessBadge'
 import { StatCard } from '../components/shared/StatCard'
 import { PortfolioGreeksCard } from './Dashboard'
 import type { CircuitBreaker, EquityHistory, NtaEvent, NtaEventsResponse, Position, Trade } from '../types'
@@ -75,13 +76,26 @@ function WheelPipeline({ states }: { states: Record<string, string> }) {
   )
 }
 
+// instrument_type is additive/optional: older snapshots (written before this
+// field existed) won't have it. Fall back to the strategy_type badge that
+// rendered here previously so old snapshots still display sensibly.
+const INSTRUMENT_TYPE_LABELS: Record<string, string> = {
+  stock: 'Stock',
+  call: 'Call',
+  put: 'Put',
+}
+
 function PositionRow({ p }: { p: Position }) {
   const pl = Number(p.unrealized_pnl ?? 0)
   const upl = p.unrealized_pnl
+  const isStock = p.instrument_type === 'stock'
+  const typeLabel = p.instrument_type
+    ? (INSTRUMENT_TYPE_LABELS[p.instrument_type] ?? p.instrument_type)
+    : p.strategy_type
   return (
     <tr>
       <td className="font-mono text-xs">{p.symbol}</td>
-      <td><Badge variant="neutral">{p.strategy_type}</Badge></td>
+      <td><Badge variant="neutral">{typeLabel}</Badge></td>
       <td className="font-mono tabular">{p.strike ?? '—'}</td>
       <td className="font-mono text-xs">{p.expiration ?? '—'}</td>
       <td className="font-mono tabular">{p.dte ?? '—'}</td>
@@ -97,7 +111,7 @@ function PositionRow({ p }: { p: Position }) {
         {p.delta != null ? p.delta.toFixed(2) : '—'}
       </td>
       <td className="font-mono tabular text-xs">
-        {p.theta != null ? p.theta.toFixed(2) : '—'}
+        {isStock ? (0).toFixed(2) : p.theta != null ? p.theta.toFixed(2) : '—'}
       </td>
       <td className="font-mono tabular text-xs">
         {p.dte != null ? p.dte : '—'}
@@ -261,6 +275,7 @@ export function AccountDetail() {
   const todayPnlVal = portfolio?.account?.today_pnl
   const todayPnlPct = portfolio?.account?.today_pnl_pct
   const bpUsedPct = portfolio?.account?.buying_power_used_pct
+  const greeksFetchedAt = portfolio?.greeks_fetched_at ?? null
   const todayColor =
     todayPnlVal == null || todayPnlVal === 0 ? 'var(--text-muted)'
       : todayPnlVal > 0 ? 'var(--green)' : 'var(--red)'
@@ -446,7 +461,16 @@ export function AccountDetail() {
         </div>
       </section>
 
-      <PortfolioGreeksCard account={account} />
+      <PortfolioGreeksCard
+        account={account}
+        badge={
+          greeksFetchedAt == null ? (
+            <span className="text-xs" style={{ color: 'var(--text-muted)' }}>not enriched</span>
+          ) : (
+            <StalenessBadge last_updated={greeksFetchedAt} label="enriched" />
+          )
+        }
+      />
 
       <section>
         <h3 className="section-heading">Equity curve (last 90 days)</h3>
