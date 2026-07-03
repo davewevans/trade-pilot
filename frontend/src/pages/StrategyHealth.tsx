@@ -274,6 +274,9 @@ export function StrategyHealth() {
         <FillRealismSection data={fillRealism} loading={fillRealismLoading} />
       )}
 
+      {/* ── Per-strategy summary strip ────────────────────────────────────── */}
+      <StrategySummaryStrip rows={rows} currentWeek={currentWeek} allStrategies={allStrategies} />
+
       {/* ── Warning banner (always visible, not dismissible) ─────────────── */}
       <div
         className="rounded-lg p-4 text-sm leading-relaxed"
@@ -591,6 +594,90 @@ function FillRealismSection({
         <p className="text-xs mt-2" style={{ color: 'var(--text-muted)' }}>
           Gate threshold: sample ≥ {data.gate_sample} · realism ≥ {data.gate_pct}% · green ≥{' '}
           {data.gate_pct}% · yellow ≥ {data.gate_pct - 20}% · red &lt; {data.gate_pct - 20}%
+        </p>
+      )}
+    </div>
+  )
+}
+
+// ── Per-strategy summary strip ─────────────────────────────────────────────────
+// A compact, glanceable view over the SAME week's FunnelRow data the grid
+// renders — one tile per strategy with any activity this week, plus a single
+// collapsed line for strategies with none. Purely a second view: no new
+// fetch, no change to the grid, week selector, or data source.
+
+function topSkipReasonLabel(r: FunnelRow): string {
+  if (r.top_claude_skip_reason) return r.top_claude_skip_reason
+  if (r.skip_pre_check > 0) return 'pre-check'
+  return '—'
+}
+
+function StrategySummaryTile({ row }: { row: FunnelRow }) {
+  const total = row.decisions_total
+  const skipCount = row.skip_pre_check + row.skip_claude
+  const skipPct = total > 0 ? (skipCount / total) * 100 : 0
+  const reason = topSkipReasonLabel(row)
+
+  return (
+    <div
+      className="rounded-md p-3 text-xs"
+      style={{ backgroundColor: 'var(--bg-card)', border: '1px solid var(--border)', minWidth: 170 }}
+    >
+      <div
+        className="font-semibold mb-1 truncate"
+        style={{ color: 'var(--text-primary)' }}
+        title={row.strategy_type}
+      >
+        {row.strategy_type}
+      </div>
+      <div className="mb-0.5" style={{ color: 'var(--text-secondary)' }}>
+        {total} decision{total !== 1 ? 's' : ''} · {skipPct.toFixed(0)}% skip
+      </div>
+      <div className="mb-0.5 truncate" style={{ color: 'var(--text-muted)' }} title={reason}>
+        Top skip: {reason}
+      </div>
+      <div style={{ color: 'var(--text-muted)' }}>
+        {row.trades_submitted} open · {row.trades_filled} filled
+      </div>
+    </div>
+  )
+}
+
+function StrategySummaryStrip({
+  rows,
+  currentWeek,
+  allStrategies,
+}: {
+  rows: FunnelRow[]
+  currentWeek: string | undefined
+  allStrategies: string[]
+}) {
+  if (!currentWeek) return null
+
+  const weekRows = rows.filter((r) => r.iso_week === currentWeek)
+  const activeRows = weekRows.filter((r) => r.decisions_total > 0)
+  const rowStrategies = new Set(weekRows.map((r) => r.strategy_type))
+  const idleWithZeroRow = weekRows.filter((r) => r.decisions_total === 0).length
+  const idleMissingRow = allStrategies.filter((s) => !rowStrategies.has(s)).length
+  const idleCount = idleWithZeroRow + idleMissingRow
+
+  if (activeRows.length === 0 && idleCount === 0) return null
+
+  return (
+    <div>
+      <h2 className="text-sm font-semibold mb-2" style={{ color: 'var(--text-primary)' }}>
+        This week at a glance
+      </h2>
+      {activeRows.length > 0 && (
+        <div className="flex flex-wrap gap-2">
+          {activeRows.map((r) => (
+            <StrategySummaryTile key={r.strategy_type} row={r} />
+          ))}
+        </div>
+      )}
+      {idleCount > 0 && (
+        <p className="text-xs mt-2" style={{ color: 'var(--text-muted)' }}>
+          {idleCount} idle strateg{idleCount !== 1 ? 'ies' : 'y'} (no activity this week)
         </p>
       )}
     </div>
