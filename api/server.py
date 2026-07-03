@@ -3045,6 +3045,9 @@ async def research_last_run():
 
     last_run_at = file_data.get("last_run_at")
     last_scan_stats = file_data.get("last_scan_stats")
+    status = file_data.get("status")
+    abort_reason = file_data.get("abort_reason")
+    detail = file_data.get("detail")
 
     most_recent_scores = None
     most_recent_backtest_stats = None
@@ -3080,6 +3083,9 @@ async def research_last_run():
     return {
         "last_run_at": last_run_at,
         "last_scan_stats": last_scan_stats,
+        "status": status,
+        "abort_reason": abort_reason,
+        "detail": detail,
         "most_recent_scores": most_recent_scores,
         "most_recent_backtest_stats": most_recent_backtest_stats,
         "most_recent_recommendation": most_recent_recommendation,

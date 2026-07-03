@@ -183,6 +183,9 @@ export interface ScorecardResponse {
 export interface ResearchLastRunResponse {
   last_run_at: string | null;
   last_scan_stats: Record<string, unknown> | null;
+  status?: string | null;
+  abort_reason?: string | null;
+  detail?: string | null;
   most_recent_scores: string | null;
   most_recent_backtest_stats: string | null;
   most_recent_recommendation: string | null;
