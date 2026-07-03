@@ -70,7 +70,11 @@ class TestPortfolioSnapshot:
         assert "timestamp" in data
         assert data["account"]["total_equity"] == 125000.0
         assert data["account"]["buying_power"] == 50000.0
-        assert data["account"]["buying_power_used_pct"] == 60.0
+        # Deployment is now capital-at-work / equity, not 1 - bp/equity.
+        # This position has no market_value, so it falls back to
+        # abs(current_price * qty) = abs(2.10 * -1) = 2.10, which rounds
+        # to ~0% of the $125k equity.
+        assert data["account"]["buying_power_used_pct"] == 0.0
         assert len(data["positions"]) == 1
         assert data["positions"][0]["strike"] == 540.0
         assert data["positions"][0]["delta"] == -0.25
@@ -78,6 +82,30 @@ class TestPortfolioSnapshot:
         assert "today_pnl" in data["account"]
         assert "today_pnl_pct" in data["account"]
         assert "last_equity" in data["account"]
+
+    def test_margin_account_deployment_is_non_negative(self, writer, snap_dir):
+        """Regression: on a margin account, buying power (~4x) can exceed
+        equity. The old `(1 - buying_power/equity)*100` formula produced a
+        nonsensical negative percentage (e.g. -295%) in that case. The new
+        formula is capital-at-work (position market_value) over equity.
+        """
+        writer.write_portfolio_snapshot(
+            account_data={
+                "portfolio_value": 100000,
+                "buying_power": 400000,
+            },
+            positions=[
+                {
+                    "symbol": "SPY250502P00540000",
+                    "underlying": "SPY",
+                    "market_value": 25000,
+                    "qty": -1,
+                },
+            ],
+            wheel_states={},
+        )
+        data = json.loads((snap_dir / "portfolio.json").read_text(encoding="utf-8"))
+        assert data["account"]["buying_power_used_pct"] == 25.0
 
     def test_handles_zero_equity(self, writer, snap_dir):
         writer.write_portfolio_snapshot(

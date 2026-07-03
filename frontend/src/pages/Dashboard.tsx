@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -1116,7 +1116,7 @@ function PortfolioGreeksCardContent({ data }: { data: PortfolioGreeks }) {
   )
 }
 
-export function PortfolioGreeksCard({ account }: { account?: string }) {
+export function PortfolioGreeksCard({ account, badge }: { account?: string; badge?: ReactNode }) {
   const [data, setData] = useState<PortfolioGreeks | null>(null)
   const [loading, setLoading] = useState(true)
 
@@ -1139,8 +1139,11 @@ export function PortfolioGreeksCard({ account }: { account?: string }) {
       className="rounded p-4"
       style={{ backgroundColor: 'var(--bg-card)', border: '1px solid var(--border)' }}
     >
-      <div className="text-sm font-semibold mb-3" style={{ color: 'var(--text-secondary)' }}>
-        Portfolio Greeks{account ? ` — ${account}` : ''}
+      <div className="flex items-center gap-2 mb-3">
+        <div className="text-sm font-semibold" style={{ color: 'var(--text-secondary)' }}>
+          Portfolio Greeks{account ? ` — ${account}` : ''}
+        </div>
+        {badge}
       </div>
       {loading ? (
         <div className="text-xs" style={{ color: 'var(--text-muted)' }}>Loading…</div>
