@@ -8,6 +8,8 @@ export interface Position {
   symbol: string
   underlying: string
   strategy_type: string
+  // Additive/optional: absent on snapshots written before this field existed.
+  instrument_type?: 'stock' | 'call' | 'put' | string | null
   strike: number
   expiration: string
   dte: number
