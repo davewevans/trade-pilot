@@ -1,5 +1,6 @@
 """Tests for the weekly_research pre-flight budget check and BacktestSweep.estimate_cost."""
 
+import json
 import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -76,6 +77,39 @@ def test_preflight_aborts_when_estimate_exceeds_remaining(tmp_path, monkeypatch)
         _run_preflight_check(sweep, ledger)
 
     assert exc_info.value.code == 3
+
+
+# ---------------------------------------------------------------------------
+# case 2b: preflight abort writes research_last_run.json with status="aborted"
+# ---------------------------------------------------------------------------
+
+
+def test_preflight_abort_writes_run_status(tmp_path, monkeypatch):
+    from config import settings
+    monkeypatch.setattr(settings, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(settings, "ORATS_HISTORICAL_MONTHLY_CAP", 100)
+    monkeypatch.setattr(settings, "ORATS_HISTORICAL_DAILY_CAP", 99999)
+    monkeypatch.setattr(settings, "ORATS_HISTORICAL_MINUTE_CAP", 99999)
+    monkeypatch.setattr(settings, "ORATS_ALLOW_BUDGET_HEAVY", 0)
+
+    ledger = make_ledger(tmp_path)
+    # Use up 90 of the 100-call budget
+    for _ in range(90):
+        ledger.record("orats_historical", "hist/summaries", "AAPL", False, 200, 50, None)
+
+    # warm_estimate=50 > month_remaining=10
+    sweep = make_sweep_with_estimate(cold=50, warm=50)
+
+    with pytest.raises(SystemExit) as exc_info:
+        _run_preflight_check(sweep, ledger)
+
+    assert exc_info.value.code == 3
+
+    status_path = tmp_path / "research_last_run.json"
+    assert status_path.exists()
+    data = json.loads(status_path.read_text(encoding="utf-8"))
+    assert data["status"] == "aborted"
+    assert data["abort_reason"] == "orats_budget"
 
 
 # ---------------------------------------------------------------------------
