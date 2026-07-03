@@ -40,12 +40,14 @@ function AccountCard({
   strategyName,
   cbStatus,
   snapshot,
+  pendingCount,
 }: {
   account: string
   label: string
   strategyName: string | null
   cbStatus: string | null
   snapshot: Portfolio | null
+  pendingCount?: number
 }) {
   const accent = ACCOUNT_ACCENT[account] ?? 'var(--accent)'
   const { stats } = useAccount(account)
@@ -78,6 +80,18 @@ function AccountCard({
           <h3 className="text-base font-semibold">{label}</h3>
           {cbStatus && <Badge variant="circuit">{cbStatus}</Badge>}
         </div>
+        {!!pendingCount && pendingCount > 0 && (
+          <span
+            className="text-xs px-2 py-0.5 rounded font-medium"
+            style={{
+              backgroundColor: 'color-mix(in srgb, var(--yellow, #eab308) 20%, transparent)',
+              color: 'var(--yellow, #eab308)',
+              border: '1px solid var(--yellow, #eab308)',
+            }}
+          >
+            {pendingCount} pending fill{pendingCount !== 1 ? 's' : ''}
+          </span>
+        )}
       </div>
       {strategyName && (
         <div className="text-sm mb-2" style={{ color: 'var(--text-muted)' }}>
@@ -1193,23 +1207,23 @@ export function Dashboard() {
   const regime = context?.confirmed_market_regime
   const cbStatus = cb?.status ?? null
 
+  // Pending-fill attribution ------------------------------------------------
+  // /api/pending-count returns a single bot-wide total: the underlying
+  // `trades` table has no account_id column (only strategy_type), and this
+  // endpoint doesn't group by that either. So there's no reliable way to
+  // know *which* account a given pending trade belongs to using data already
+  // on this page. Conservative, non-fabricating compromise: when exactly one
+  // account is active, any pending trade must belong to it, so we attribute
+  // the full count there. With zero or 2+ active accounts we can't
+  // disambiguate, so no card shows a count — safer than guessing wrong.
+  const activeAccounts = accountList.filter((a) => a.status === 'active')
+  const solePendingOwner = activeAccounts.length === 1 ? activeAccounts[0].account_id : null
+
   return (
     <div className="space-y-6">
       <div>
         <div className="flex items-center gap-3">
           <h2 className="section-heading">Accounts</h2>
-          {pendingCount > 0 && (
-            <span
-              className="text-xs px-2 py-0.5 rounded font-medium"
-              style={{
-                backgroundColor: 'color-mix(in srgb, var(--yellow, #eab308) 20%, transparent)',
-                color: 'var(--yellow, #eab308)',
-                border: '1px solid var(--yellow, #eab308)',
-              }}
-            >
-              {pendingCount} order{pendingCount !== 1 ? 's' : ''} pending fill
-            </span>
-          )}
         </div>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           {accountList.map((a) => (
@@ -1220,6 +1234,7 @@ export function Dashboard() {
               strategyName={a.strategy_display_name}
               cbStatus={cbStatus}
               snapshot={portfolios[a.account_id] ?? null}
+              pendingCount={a.account_id === solePendingOwner ? pendingCount : 0}
             />
           ))}
         </div>
