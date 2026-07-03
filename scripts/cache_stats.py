@@ -5,12 +5,10 @@ Usage:
     python scripts/cache_stats.py            # last 7 days
     python scripts/cache_stats.py --days 14  # last 14 days
 
-Pricing (claude-sonnet-4-6, verified 2025-04):
-  https://platform.claude.com/docs/en/about-claude/pricing
-  Input:       $3.00 / MTok
-  Cache write: $3.75 / MTok
-  Cache read:  $0.30 / MTok
-  Output:      $15.00 / MTok
+Pricing is sourced from config.CLAUDE_PRICING for the currently configured
+settings.ADVISOR_MODEL, so this report always reflects the live pricing
+table instead of a hardcoded snapshot. If the model isn't in CLAUDE_PRICING,
+falls back to the claude-sonnet-4-6 rates and prints a warning.
 """
 
 import argparse
@@ -20,14 +18,25 @@ from pathlib import Path
 # Allow running from the project root without installing the package.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from config import settings  # noqa: E402 — must come after sys.path insert
+import config as _config  # noqa: E402 — must come after sys.path insert
+from config import settings  # noqa: E402
 from database.db import Database  # noqa: E402
 
 # ── Pricing (per million tokens) ─────────────────────────────────────────────
-_PRICE_INPUT_PER_M      = 3.00
-_PRICE_CACHE_WRITE_PER_M = 3.75
-_PRICE_CACHE_READ_PER_M  = 0.30
-_PRICE_OUTPUT_PER_M      = 15.00
+_FALLBACK_MODEL = "claude-sonnet-4-6"
+try:
+    _pricing = _config.get_pricing(settings.ADVISOR_MODEL)
+except KeyError:
+    print(
+        f"WARNING: no CLAUDE_PRICING entry for model {settings.ADVISOR_MODEL!r} — "
+        f"falling back to {_FALLBACK_MODEL!r} rates. Report cost figures may be wrong."
+    )
+    _pricing = _config.get_pricing(_FALLBACK_MODEL)
+
+_PRICE_INPUT_PER_M       = _pricing["input_per_mtok"]
+_PRICE_CACHE_WRITE_PER_M = _pricing["cache_write_per_mtok"]
+_PRICE_CACHE_READ_PER_M  = _pricing["cache_read_per_mtok"]
+_PRICE_OUTPUT_PER_M      = _pricing["output_per_mtok"]
 
 
 def _cost(input_tok: int, cache_read: int, cache_write: int, output_tok: int) -> float:
