@@ -152,10 +152,26 @@ class StateWriter:
         try:
             equity = self._safe_float(account_data.get("portfolio_value"), 0)
             buying_power = self._safe_float(account_data.get("buying_power"), 0)
+
+            # "% deployed" should measure capital put to work, not
+            # 1 - buying_power/equity (that formula assumes a cash account;
+            # on a margin account buying power (~4x) exceeds equity and
+            # produces a nonsensical negative percentage, e.g. -295%).
+            # Sum each position's market value (falling back to
+            # current_price * qty when market_value isn't populated) and
+            # divide by equity for a non-negative "% of equity deployed."
+            deployed_capital = 0.0
+            for p in positions:
+                market_value = self._safe_float(p.get("market_value"))
+                if market_value is None:
+                    current_value = self._safe_float(
+                        p.get("current_price", p.get("market_value"))
+                    )
+                    qty = self._safe_float(p.get("qty"), 0.0) or 0.0
+                    market_value = (current_value or 0.0) * qty
+                deployed_capital += abs(market_value)
             bp_used_pct = (
-                round((1 - buying_power / equity) * 100, 2)
-                if equity
-                else 0.0
+                round((deployed_capital / equity) * 100, 2) if equity else 0.0
             )
 
             wheel_set = (

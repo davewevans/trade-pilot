@@ -48,6 +48,9 @@ export interface Portfolio {
   positions: Position[]
   wheel_states: Record<string, string>
   timestamp: string
+  // When the option snapshot enrichment (delta/theta/vega/gamma) last ran.
+  // null if the snapshot was written without enrichment.
+  greeks_fetched_at?: string | null
 }
 
 export interface DecisionReasoning {

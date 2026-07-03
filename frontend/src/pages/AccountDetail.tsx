@@ -18,6 +18,7 @@ import { Badge } from '../components/shared/Badge'
 import { EmptyState } from '../components/shared/EmptyState'
 import { IVHistoryChart } from '../components/shared/IVHistoryChart'
 import { LoadingSpinner } from '../components/shared/LoadingSpinner'
+import { StalenessBadge } from '../components/shared/StalenessBadge'
 import { StatCard } from '../components/shared/StatCard'
 import { PortfolioGreeksCard } from './Dashboard'
 import type { CircuitBreaker, EquityHistory, NtaEvent, NtaEventsResponse, Position, Trade } from '../types'
@@ -274,6 +275,7 @@ export function AccountDetail() {
   const todayPnlVal = portfolio?.account?.today_pnl
   const todayPnlPct = portfolio?.account?.today_pnl_pct
   const bpUsedPct = portfolio?.account?.buying_power_used_pct
+  const greeksFetchedAt = portfolio?.greeks_fetched_at ?? null
   const todayColor =
     todayPnlVal == null || todayPnlVal === 0 ? 'var(--text-muted)'
       : todayPnlVal > 0 ? 'var(--green)' : 'var(--red)'
@@ -459,7 +461,16 @@ export function AccountDetail() {
         </div>
       </section>
 
-      <PortfolioGreeksCard account={account} />
+      <PortfolioGreeksCard
+        account={account}
+        badge={
+          greeksFetchedAt == null ? (
+            <span className="text-xs" style={{ color: 'var(--text-muted)' }}>not enriched</span>
+          ) : (
+            <StalenessBadge last_updated={greeksFetchedAt} label="enriched" />
+          )
+        }
+      />
 
       <section>
         <h3 className="section-heading">Equity curve (last 90 days)</h3>
