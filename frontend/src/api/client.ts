@@ -380,6 +380,12 @@ export interface FillRealismResponse {
   gate_pct: number
 }
 
+export interface AppConfigResponse {
+  auth_required: boolean
+  authenticated: boolean
+  version: string
+}
+
 export interface HeartbeatResponse {
   ts: string | null
   job: string | null
@@ -408,6 +414,8 @@ export interface MacroBlockStatus {
 
 export const api = {
   health: () => get<HealthStatus>('/api/health'),
+
+  appConfig: () => get<AppConfigResponse>('/api/config'),
 
   heartbeat: () => get<HeartbeatResponse>('/api/heartbeat'),
 

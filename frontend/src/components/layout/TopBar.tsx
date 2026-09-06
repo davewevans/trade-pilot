@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { api } from '../../api/client'
 import type { CircuitBreaker, HaltInfo, HealthStatus } from '../../types'
 import { Badge } from '../shared/Badge'
+import { useCanMutate } from '../../context/AuthContext'
 
 async function resetCircuitBreaker() {
   if (
@@ -247,6 +248,7 @@ function ResumeModal({ haltInfo, onClose, onResumed }: {
 // ── TopBar ───────────────────────────────────────────────────────────────────
 
 export function TopBar() {
+  const canMutate = useCanMutate()
   const [health, setHealth] = useState<HealthStatus | null>(null)
   const [cb, setCb] = useState<CircuitBreaker | null>(null)
   const [haltInfo, setHaltInfo] = useState<HaltInfo | null>(null)
@@ -331,7 +333,7 @@ export function TopBar() {
                   (dry run)
                 </span>
               )}
-              {!dryRun && (effectiveHalted || cb.status === 'RED') && (
+              {canMutate && !dryRun && (effectiveHalted || cb.status === 'RED') && (
                 <button
                   type="button"
                   onClick={resetCircuitBreaker}
@@ -388,7 +390,7 @@ export function TopBar() {
               Daily Bundle
             </button>
           </div>
-          {!dryRun && !effectiveHalted && (
+          {canMutate && !dryRun && !effectiveHalted && (
             <button
               type="button"
               onClick={() => setShowHaltModal(true)}
@@ -447,6 +449,7 @@ export function TopBar() {
               Reason: {haltInfo.reason}
             </span>
           )}
+          {canMutate && (
           <button
             type="button"
             onClick={() => setShowResumeModal(true)}
@@ -465,6 +468,7 @@ export function TopBar() {
           >
             Resume
           </button>
+          )}
         </div>
       )}
 

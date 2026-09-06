@@ -1,9 +1,17 @@
-import { useEffect, useState, type ReactNode, type FormEvent } from 'react'
+import { useCallback, useEffect, useMemo, useState, type ReactNode, type FormEvent } from 'react'
 import { MacroBlockBanner } from '../MacroBlockBanner'
 import { Sidebar } from './Sidebar'
 import { TopBar } from './TopBar'
+import { AuthContext, type AuthState } from '../../context/AuthContext'
+import { api } from '../../api/client'
 
-function SessionExpiredOverlay({ onAuthenticated }: { onAuthenticated: () => void }) {
+function SessionExpiredOverlay({
+  onAuthenticated,
+  publicMode,
+}: {
+  onAuthenticated: () => void
+  publicMode: boolean
+}) {
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
@@ -42,10 +50,12 @@ function SessionExpiredOverlay({ onAuthenticated }: { onAuthenticated: () => voi
         style={{ backgroundColor: 'var(--bg-card)', border: '1px solid var(--border)' }}
       >
         <div className="text-xl font-semibold text-center" style={{ color: 'var(--text-primary)' }}>
-          Session expired
+          {publicMode ? 'Log in' : 'Session expired'}
         </div>
         <p className="text-sm text-center" style={{ color: 'var(--text-secondary)' }}>
-          Enter your password to continue.
+          {publicMode
+            ? 'Enter your password to access admin controls.'
+            : 'Enter your password to continue.'}
         </p>
         <form onSubmit={submit} className="space-y-3">
           <input
@@ -85,6 +95,26 @@ function SessionExpiredOverlay({ onAuthenticated }: { onAuthenticated: () => voi
 
 export function AppShell({ children }: { children: ReactNode }) {
   const [sessionExpired, setSessionExpired] = useState(false)
+  // Defaults match the private dashboard, so a failed /api/config fetch
+  // degrades to exactly the pre-public-mode behaviour.
+  const [authRequired, setAuthRequired] = useState(true)
+  const [authenticated, setAuthenticated] = useState(false)
+
+  const refresh = useCallback(() => {
+    api
+      .appConfig()
+      .then((cfg) => {
+        setAuthRequired(cfg.auth_required)
+        setAuthenticated(cfg.authenticated)
+      })
+      .catch(() => {
+        // Leave the safe defaults in place.
+      })
+  }, [])
+
+  useEffect(() => {
+    refresh()
+  }, [refresh])
 
   useEffect(() => {
     const handler = () => setSessionExpired(true)
@@ -92,9 +122,25 @@ export function AppShell({ children }: { children: ReactNode }) {
     return () => window.removeEventListener('auth:expired', handler)
   }, [])
 
+  const authState: AuthState = useMemo(
+    () => ({ authRequired, authenticated, refresh }),
+    [authRequired, authenticated, refresh],
+  )
+
+  const publicMode = !authRequired && !authenticated
+
   return (
+    <AuthContext.Provider value={authState}>
     <div className="h-full flex flex-col">
-      {sessionExpired && <SessionExpiredOverlay onAuthenticated={() => setSessionExpired(false)} />}
+      {sessionExpired && (
+        <SessionExpiredOverlay
+          publicMode={publicMode}
+          onAuthenticated={() => {
+            setSessionExpired(false)
+            refresh()
+          }}
+        />
+      )}
       <TopBar />
       <MacroBlockBanner />
       <div className="flex flex-1 overflow-hidden">
@@ -102,5 +148,6 @@ export function AppShell({ children }: { children: ReactNode }) {
         <main className="flex-1 overflow-auto p-6">{children}</main>
       </div>
     </div>
+    </AuthContext.Provider>
   )
 }

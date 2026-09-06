@@ -4,6 +4,7 @@ import {
   type SpotCheckDecision,
   type SpotCheckQueueItem,
 } from '../../api/client'
+import { useCanMutate } from '../../context/AuthContext'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -172,6 +173,7 @@ interface SpotCheckQueueProps {
 }
 
 export function SpotCheckQueue({ month }: SpotCheckQueueProps) {
+  const canMutate = useCanMutate()
   const [expanded, setExpanded] = useState(false)
   const [queue, setQueue] = useState<SpotCheckQueueItem[]>([])
   // Track submitted score IDs for optimistic updates and rollback.
@@ -610,7 +612,7 @@ export function SpotCheckQueue({ month }: SpotCheckQueueProps) {
 
           {/* Verdict + navigation buttons */}
           <div className="flex items-center gap-2 flex-wrap">
-            {VERDICT_BUTTONS.map(({ key, label, verdict, color }) => (
+            {canMutate && VERDICT_BUTTONS.map(({ key, label, verdict, color }) => (
               <button
                 key={verdict}
                 onClick={() => void submitVerdict(verdict)}
