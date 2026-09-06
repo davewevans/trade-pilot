@@ -25,6 +25,7 @@ import { InsufficientSampleBanner } from '../components/evaluation/InsufficientS
 import { ReviewStatusBadge } from '../components/evaluation/ReviewStatusBadge'
 import { LoadingSpinner } from '../components/shared/LoadingSpinner'
 import { StatCard } from '../components/shared/StatCard'
+import { useCanMutate } from '../context/AuthContext'
 
 // ── Colour palette for prompt version bars ────────────────────────────────────
 
@@ -241,6 +242,7 @@ function StrategyChart({ strategy, byDimension }: StrategyChartProps) {
 // ── Main component ─────────────────────────────────────────────────────────────
 
 export function EvaluationDetail() {
+  const canMutate = useCanMutate()
   const { month } = useParams<{ month: string }>()
   const navigate = useNavigate()
 
@@ -341,7 +343,7 @@ export function EvaluationDetail() {
             </div>
           )}
         </div>
-        {detail.review_status === 'pending' && (
+        {canMutate && detail.review_status === 'pending' && (
           <button
             onClick={() => setShowReviewDialog(true)}
             className="px-4 py-2 rounded text-sm font-medium shrink-0"

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../api/client'
+import { useCanMutate } from '../context/AuthContext'
 
 const SYMBOL_SECTORS: Record<string, string> = {
   AAPL: 'Technology', MSFT: 'Technology', GOOGL: 'Technology', AMZN: 'Technology',
@@ -27,9 +28,11 @@ const QUICK_ADD_GROUPS: { label: string; symbols: string[] }[] = [
 function SymbolChip({
   symbol,
   onRemove,
+  readOnly = false,
 }: {
   symbol: string
   onRemove: (s: string) => void
+  readOnly?: boolean
 }) {
   const sector = SYMBOL_SECTORS[symbol]
   return (
@@ -45,17 +48,19 @@ function SymbolChip({
       {sector && (
         <span style={{ color: 'var(--text-muted)' }}>· {sector}</span>
       )}
-      <button
-        onClick={() => onRemove(symbol)}
-        className="ml-1 rounded-full w-3.5 h-3.5 flex items-center justify-center text-[10px] leading-none"
-        style={{
-          color: 'var(--text-muted)',
-          backgroundColor: 'transparent',
-        }}
-        aria-label={`Remove ${symbol}`}
-      >
-        ×
-      </button>
+      {!readOnly && (
+        <button
+          onClick={() => onRemove(symbol)}
+          className="ml-1 rounded-full w-3.5 h-3.5 flex items-center justify-center text-[10px] leading-none"
+          style={{
+            color: 'var(--text-muted)',
+            backgroundColor: 'transparent',
+          }}
+          aria-label={`Remove ${symbol}`}
+        >
+          ×
+        </button>
+      )}
     </span>
   )
 }
@@ -66,12 +71,14 @@ function WatchlistSection({
   symbols,
   suggestedGroups,
   onChange,
+  readOnly = false,
 }: {
   title: string
   note: string
   symbols: string[]
   suggestedGroups: { label: string; symbols: string[] }[]
   onChange: (next: string[]) => void
+  readOnly?: boolean
 }) {
   const [input, setInput] = useState('')
   const [inputError, setInputError] = useState('')
@@ -115,10 +122,12 @@ function WatchlistSection({
           </span>
         )}
         {symbols.map((s) => (
-          <SymbolChip key={s} symbol={s} onRemove={remove} />
+          <SymbolChip key={s} symbol={s} onRemove={remove} readOnly={readOnly} />
         ))}
       </div>
 
+      {!readOnly && (
+      <>
       <div className="flex gap-2">
         <input
           type="text"
@@ -186,11 +195,14 @@ function WatchlistSection({
           ))}
         </div>
       </div>
+      </>
+      )}
     </div>
   )
 }
 
 export function Watchlist() {
+  const canMutate = useCanMutate()
   const [wheel, setWheel] = useState<string[]>([])
   const [ironCondor, setIronCondor] = useState<string[]>([])
   const [ironButterfly, setIronButterfly] = useState<string[]>([])
@@ -274,6 +286,7 @@ export function Watchlist() {
           symbols={wheel}
           suggestedGroups={QUICK_ADD_GROUPS}
           onChange={setWheel}
+          readOnly={!canMutate}
         />
         <WatchlistSection
           title="Iron Condor Watchlist"
@@ -281,6 +294,7 @@ export function Watchlist() {
           symbols={ironCondor}
           suggestedGroups={QUICK_ADD_GROUPS}
           onChange={setIronCondor}
+          readOnly={!canMutate}
         />
         <WatchlistSection
           title="Iron Butterfly Watchlist"
@@ -288,6 +302,7 @@ export function Watchlist() {
           symbols={ironButterfly}
           suggestedGroups={QUICK_ADD_GROUPS}
           onChange={setIronButterfly}
+          readOnly={!canMutate}
         />
         <WatchlistSection
           title="Spread Watchlist"
@@ -295,6 +310,7 @@ export function Watchlist() {
           symbols={spreads}
           suggestedGroups={QUICK_ADD_GROUPS}
           onChange={setSpreads}
+          readOnly={!canMutate}
         />
         <WatchlistSection
           title="Calendar Spread Watchlist"
@@ -302,6 +318,7 @@ export function Watchlist() {
           symbols={calendarSpread}
           suggestedGroups={QUICK_ADD_GROUPS}
           onChange={setCalendarSpread}
+          readOnly={!canMutate}
         />
       </div>
 

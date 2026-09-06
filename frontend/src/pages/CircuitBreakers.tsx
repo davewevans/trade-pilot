@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../api/client'
 import { PageAudioPlayer } from '../components/shared/PageAudioPlayer'
+import { useCanMutate } from '../context/AuthContext'
 
 type Threshold = {
   level: string
@@ -145,6 +146,7 @@ function ResetCard({
 }
 
 export function CircuitBreakers() {
+  const canMutate = useCanMutate()
   const [status, setStatus] = useState<string | null>(null)
   const [halted, setHalted] = useState<boolean>(false)
   const [dryRun, setDryRun] = useState<boolean>(false)
@@ -207,7 +209,7 @@ export function CircuitBreakers() {
             Portfolio-level safety rules. The last line of defense before real capital is at risk.
           </p>
         </div>
-        {showReset && (
+        {canMutate && showReset && (
           <button
             type="button"
             onClick={handleReset}

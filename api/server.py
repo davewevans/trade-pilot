@@ -62,8 +62,24 @@ _SIGNING_KEY = hmac.new(
 #   /health, /api/health — Render health probes (and any external monitor)
 _AUTH_EXEMPT_PATHS = frozenset({
     "/auth/login", "/auth/logout", "/health", "/api/health",
-    "/favicon.svg", "/favicon.ico",
+    "/favicon.svg", "/favicon.ico", "/api/config",
 })
+
+
+# ── Public (read-only) dashboard mode ─────────────────────────
+# settings.PUBLIC_DASHBOARD=true serves the dashboard and every read API to
+# anonymous visitors. Mutating methods stay gated: an open POST /api/watchlist
+# or /api/halt lets a crawler break the demo, which costs nothing to prevent.
+# Read at request time (not import) so it can be monkeypatched in tests.
+_SAFE_METHODS = frozenset({"GET", "HEAD"})
+
+
+def _is_public_request(request: Request) -> bool:
+    """True when public mode is on and this is a non-mutating request."""
+    return (
+        settings.PUBLIC_DASHBOARD
+        and request.method in _SAFE_METHODS
+    )
 
 
 def _issue_session() -> tuple[str, float]:
@@ -196,12 +212,21 @@ class AuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
 
-        if path in _AUTH_EXEMPT_PATHS or _is_authenticated(request):
+        if (
+            path in _AUTH_EXEMPT_PATHS
+            or _is_authenticated(request)
+            or _is_public_request(request)
+        ):
             response = await call_next(request)
         elif path.startswith("/api/"):
             response = JSONResponse(
                 status_code=401, content={"error": "unauthorized"},
             )
+        elif settings.PUBLIC_DASHBOARD and _STATIC_READY:
+            # Public mode: anonymous visitors get the SPA, not the login page.
+            # (_STATIC_READY is defined lower in this module; the name resolves
+            # at request time, not import time. Do not move it.)
+            response = await call_next(request)
         else:
             response = _login_page()
 
@@ -684,6 +709,22 @@ def health():
         # Feature flags — read by the frontend on each 30s health poll.
         "strategy_health_enabled": settings.STRATEGY_HEALTH_PAGE_ENABLED,
         "shadow_execution_enabled": settings.SHADOW_EXECUTION_ENABLED,
+    }
+
+
+@app.get("/api/config")
+def api_config(request: Request):
+    """Client bootstrap. Auth-exempt so the SPA can render before login.
+
+    auth_required : False when the dashboard is in public read-only mode.
+    authenticated : whether THIS request carries a valid session. The session
+                    cookie is HttpOnly, so the SPA cannot work this out itself.
+                    Admin controls are hidden unless this is True.
+    """
+    return {
+        "auth_required": not settings.PUBLIC_DASHBOARD,
+        "authenticated": _is_authenticated(request),
+        "version": settings.VERSION,
     }
 
 

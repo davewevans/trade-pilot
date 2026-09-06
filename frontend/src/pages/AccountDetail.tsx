@@ -22,6 +22,7 @@ import { StalenessBadge } from '../components/shared/StalenessBadge'
 import { StatCard } from '../components/shared/StatCard'
 import { PortfolioGreeksCard } from './Dashboard'
 import type { CircuitBreaker, EquityHistory, NtaEvent, NtaEventsResponse, Position, Trade } from '../types'
+import { useCanMutate } from '../context/AuthContext'
 
 
 const fmtMoney = (n: number | null | undefined) =>
@@ -130,6 +131,7 @@ function PositionRow({ p }: { p: Position }) {
 }
 
 export function AccountDetail() {
+  const canMutate = useCanMutate()
   const { account = '' } = useParams()
   const { accounts, availableStrategies, refetch: refetchAccounts } = useAccounts()
   const accountMeta = accounts.find((a) => a.account_id === account)
@@ -317,6 +319,8 @@ export function AccountDetail() {
           )}
         </div>
         <div className="flex flex-col items-end gap-2">
+          {canMutate && (
+          <>
           {/* Activate / Deactivate toggle */}
           <button
             onClick={handleToggleActive}
@@ -371,6 +375,8 @@ export function AccountDetail() {
           )}
           {actionError && (
             <div className="text-xs" style={{ color: 'var(--red)' }}>{actionError}</div>
+          )}
+          </>
           )}
         </div>
       </div>

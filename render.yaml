@@ -30,6 +30,11 @@ services:
         value: 3.14.2
       - key: TZ
         value: UTC         # Render server runs UTC, scheduler adjusts
+      - key: PUBLIC_DASHBOARD
+        # true = dashboard readable without a password (portfolio/demo mode).
+        # Mutating endpoints stay session-gated either way.
+        # Changing this in the Render dashboard redeploys the web service.
+        value: false
 
       # These are set manually in Render dashboard (not in this file):
       # ALPACA_PAPER1_API_KEY

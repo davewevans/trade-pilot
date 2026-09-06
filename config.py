@@ -121,6 +121,13 @@ class Settings:
             os.getenv("OPTION_CHAIN_STRIKE_CLAMP_PCT", "0.25")
         )
 
+        # --- Public dashboard (portfolio mode) ---
+        # When true, unauthenticated GET/HEAD requests to the dashboard and
+        # its read APIs are served without a session. All mutating methods
+        # (POST/PUT/PATCH/DELETE) still require a valid session.
+        # Defaults to FALSE so a missing or typo'd env var fails closed.
+        self.PUBLIC_DASHBOARD: bool = _env_bool("PUBLIC_DASHBOARD", default=False)
+
         # --- Environment / deployment mode ---
         self.RENDER: bool = os.getenv("RENDER", "false").lower() == "true"
 
